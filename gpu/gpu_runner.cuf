@@ -252,7 +252,7 @@ contains
   !>
   subroutine gpu_godunov(sim, ilevel)
     use nvtx
-    use hydro_device, only: hydro_integrator_kernel
+    use hydro_device, only: hydro_integrator_kernel, hydro_integrator_paper_kernel
     use ramses_commons, only: ramses_t
     type(ramses_t), intent(inout)::sim
     integer, intent(in)::ilevel
@@ -274,6 +274,10 @@ contains
     head_idx = (sim%m%head(ilevel) - 1) / nsubgridtondim + 1
     num_subgrids = sim%m%noct(ilevel) / nsubgridtondim
     num_blocks = num_subgrids
+    ! FIXME number of threads per block
+    ! FIXME in a paper kernel is determined by ix-iy size (or tile size, fi sub-tiled)
+    ! FIXME: #threads = ( (2 * nsubgrid + 4) / ntile )^2
+    ! FIXME: nsubgrid = (1, 2, 4, 8) => #threads = (36, 64, 144, 400) for ntile=1 = (64, 64, 160, 416) in warps of 32
     if(nsubgrid == 1)then
        threads_per_block = 64
     else
@@ -281,7 +285,7 @@ contains
     endif
 
     call nvtxStartRange("GPU Godunov", color=0)!green
-    call hydro_integrator_kernel<<<num_blocks, threads_per_block>>>(grid, uold, unew, f, father, nbor, &
+    call hydro_integrator_paper_kernel<<<num_blocks, threads_per_block>>>(grid, uold, unew, f, father, nbor, &
          & head_idx, num_subgrids, ngridmax, ilevel, sim%r%levelmin, sim%r%nlevelmax, &
          & gamma, dt, dx, slope, riemann, constant_gravity)
     call GPU_Error_Check(__FILE__, __LINE__)

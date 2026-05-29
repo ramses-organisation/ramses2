@@ -1347,6 +1347,620 @@ contains
   ! =========================================================================
 
   ! =========================================================================
+  !> @brief Check an array of nvar reals for NaN and print location if found
+  attributes(device) subroutine check_nan(label, arr, ix, iy, iz, ivar_hint)
+    character(len=1), intent(in) :: label
+    real(kind=dp), intent(in) :: arr(1:nvar)
+    integer, value :: ix, iy, iz, ivar_hint
+    integer :: iv
+    do iv = 1, nvar
+      if (arr(iv) /= arr(iv)) then
+        print *, label, " NaN ivar=", iv, " hint=", ivar_hint
+      end if
+    end do
+  end subroutine check_nan
+  ! =========================================================================
+
+  ! =========================================================================
+  !> @brief Load conserved variables for a cell given a subgrid and a 1-based ubsgrid index. E.g. for an oct it runs from 1 to 6
+  attributes(device) function load_conserved(ix, iy, iz, uold, nbor, subgrid_idx) result(Uin)
+
+    real(kind=dp) :: Uin(1:nvar)
+
+    integer(kind=4), intent(in) :: ix, iy, iz
+    real(kind=dp), device :: uold(1:twotondim,1:nvar,*)
+    integer(kind=4), device :: nbor(1:subgridsize,*)
+    integer(kind=4), value :: subgrid_idx
+
+    integer :: jx, jy, jz, nbor_idx, cell_idx, oct_idx, ivar
+
+    jx = (ix - 1)/2 ! oct coordinates (zero based)
+    jy = (iy - 1)/2
+    jz = (iz - 1)/2
+    nbor_idx = 1 + jx + nsubgridp2 * jy + nsubgridp2sq * jz
+    cell_idx = ix - 2*jx + 2*((iy-1) - 2*jy) + 4*((iz-1) - 2*jz)
+    oct_idx = nbor(nbor_idx, subgrid_idx) ! Get idx of oct to load
+
+    ! Load the cell
+    do ivar = 1, nvar
+       Uin(ivar) = uold(cell_idx, ivar, oct_idx)
+    end do
+  end function load_conserved
+
+  ! =========================================================================
+  !> @brief Add to conserved variables for a cell given a subgrid and a 1-based ubsgrid index. E.g. for an oct it runs from 1 to 6
+  attributes(device) subroutine add_conserved(ix, iy, iz, dU, idim, unew, nbor, grid, father, subgrid_idx, ngridmax)
+
+    integer, value, intent(in) :: ix, iy, iz, idim
+    real(kind=dp), intent(in) :: dU(1:nvar)
+
+    real(kind=dp), device :: unew(1:twotondim,1:nvar,*)
+    integer(kind=4), device :: nbor(1:subgridsize,*)
+    type(oct), device :: grid(*)
+    integer, device :: father(*)
+    integer(kind=4), value :: subgrid_idx
+    integer, value :: ngridmax
+
+    integer :: jx, jy, jz, kx, ky, kz, nbor_idx, cell_idx, oct_idx, father_oct_idx, ivar, info, bc
+
+    jx = (ix - 1)/2 ! oct coordinates (zero based)
+    jy = (iy - 1)/2
+    jz = (iz - 1)/2
+    nbor_idx = 1 + jx + nsubgridp2 * jy + nsubgridp2sq * jz
+
+    kx = (ix-1) - 2*jx ! cell coordinates (zero based)
+    ky = (iy-1) - 2*jy
+    kz = (iz-1) - 2*jz
+    cell_idx = 1 + kx + 2*ky + 4*kz
+
+    oct_idx = nbor(nbor_idx, subgrid_idx) ! Get oct to load
+
+    ! If cell is refined do not accumulate flux
+    !if (grid(oct_idx)%refined(cell_idx)) return
+
+    ! Accumulate flux to the cell
+    do ivar = 1, nvar
+       unew(cell_idx, ivar, oct_idx) = unew(cell_idx, ivar, oct_idx) + dU(ivar)
+    end do
+
+    return
+    ! FIXME This part of the code to update coarse cells has not been tested yet.
+
+    ! Skip coarse cell update if flux is interior to the oct
+    ! 1==first physical cell in subgrid, nsubgrid==last physical cell in subgrid
+    bc = 2*nsubgrid + 2 ! index of last physical cell in subgrid
+    if ((idim==1 .and. ix>3)  .or. (idim==2 .and. iy>3)  .or. (idim==3 .and. iz>3) .or. &
+        (idim==4 .and. ix<bc) .or. (idim==5 .and. iy<bc) .or. (idim==6 .and. iz<bc)) return
+
+    ! Calculate index of boundary oct
+    kx = jx + merge(-1, 0, idim==1) + merge(1, 0, idim==4) ! zero based nbor coordinate of boundary cell
+    ky = jy + merge(-1, 0, idim==2) + merge(1, 0, idim==5)
+    kz = jz + merge(-1, 0, idim==3) + merge(1, 0, idim==6)
+    nbor_idx = 1 + kx + nsubgridp2 * ky + nsubgridp2sq * kz
+    oct_idx = nbor(nbor_idx, subgrid_idx) ! Get oct idx of boundary cell containing father oct
+
+    if (oct_idx <= ngridmax) return ! Boundary cell is physical, no coarse cell update needed
+
+    ! Accumulate flux to coarse cell. 0.25 because four cells add to father cell flux
+    father_oct_idx = father(oct_idx)
+    kx = grid(oct_idx)%ckey(1) - 2 * grid(father_oct_idx)%ckey(1) ! zero-based cell idx of father cell
+    ky = grid(oct_idx)%ckey(2) - 2 * grid(father_oct_idx)%ckey(2)
+    kz = grid(oct_idx)%ckey(3) - 2 * grid(father_oct_idx)%ckey(3)
+    cell_idx = 1 + kx + 2*ky + 4*kz
+    do ivar = 1, nvar
+       info = atomicadd(unew(cell_idx, ivar, father_oct_idx), 0.25*dU(ivar))
+    end do
+  end subroutine add_conserved
+
+  ! ---------------------------------------------------------------------------
+  ! Device subroutine: compute slopes qds(ix,iy,ivar,dir) for one (ix,iy) point
+  ! qds stores the gradient dqds, including the 1/dx factor.
+  ! slope_type: 0=zero, 1=minmod, 2=moncen, 3=positivity-preserving 3D unsplit
+  ! q_storage layout: (1:m+4, 1:m+4, nvar, 3) with slots im(=prev), ic(=curr), ip(=next)
+  ! qds layout: (2:m+3, 2:m+3, nvar, 3) with slots for X/Y/Z slopes.
+  ! ---------------------------------------------------------------------------
+  attributes(device) subroutine compute_slopes(q_storage, qds, ix, iy, ic, im, ip, idx, slope_type, mf, nvar)
+    implicit none
+    integer, value :: ix, iy, ic, im, ip, mf, nvar, slope_type
+    real(kind=dp), value :: idx
+    real(kind=dp), intent(in)  :: q_storage(1:mf, 1:mf, nvar, 3)
+    real(kind=dp), intent(out) :: qds(2:mf-1, 2:mf-1, nvar, 3)
+
+    integer  :: ivar
+    real(kind=dp) :: dlft, drgt, dcen, dsgn, slop, dlim, dfx, dfy, dfz, dff
+    real(kind=dp) :: vmin, vmax
+    real(kind=dp) :: dflll,dflml,dflrl,dfmll,dfmml,dfmrl,dfrll,dfrml,dfrrl
+    real(kind=dp) :: dfllm,dflmm,dflrm,dfmlm,dfmmm,dfmrm,dfrlm,dfrmm,dfrrm
+    real(kind=dp) :: dfllr,dflmr,dflrr,dfmlr,dfmmr,dfmrr,dfrlr,dfrmr,dfrrr
+    real(kind=dp), parameter :: half = 0.5_dp, zero = 0.0_dp, one = 1.0_dp
+
+    select case (slope_type)
+
+    case (0)
+      do ivar = 1, nvar
+        qds(ix,iy,ivar,1) = zero
+        qds(ix,iy,ivar,2) = zero
+        qds(ix,iy,ivar,3) = zero
+      end do
+
+    case (1)
+      ! minmod: slope = min(|dlft|, |drgt|) with common sign, else 0
+      do ivar = 1, nvar
+        ! X
+        dlft = q_storage(ix,  iy,  ivar,ic) - q_storage(ix-1,iy,  ivar,ic)
+        drgt = q_storage(ix+1,iy,  ivar,ic) - q_storage(ix,  iy,  ivar,ic)
+        if (dlft*drgt <= zero) then
+          qds(ix,iy,ivar,1) = zero
+        else if (dlft > zero) then
+          qds(ix,iy,ivar,1) = min(dlft, drgt) * idx
+        else
+          qds(ix,iy,ivar,1) = max(dlft, drgt) * idx
+        end if
+        ! Y
+        dlft = q_storage(ix,  iy,  ivar,ic) - q_storage(ix,  iy-1,ivar,ic)
+        drgt = q_storage(ix,  iy+1,ivar,ic) - q_storage(ix,  iy,  ivar,ic)
+        if (dlft*drgt <= zero) then
+          qds(ix,iy,ivar,2) = zero
+        else if (dlft > zero) then
+          qds(ix,iy,ivar,2) = min(dlft, drgt) * idx
+        else
+          qds(ix,iy,ivar,2) = max(dlft, drgt) * idx
+        end if
+        ! Z
+        dlft = q_storage(ix,  iy,  ivar,ic) - q_storage(ix,  iy,  ivar,im)
+        drgt = q_storage(ix,  iy,  ivar,ip) - q_storage(ix,  iy,  ivar,ic)
+        if (dlft*drgt <= zero) then
+          qds(ix,iy,ivar,3) = zero
+        else if (dlft > zero) then
+          qds(ix,iy,ivar,3) = min(dlft, drgt) * idx
+        else
+          qds(ix,iy,ivar,3) = max(dlft, drgt) * idx
+        end if
+      end do
+
+    case (2)
+      ! moncen: slope = sign(dcen)*min(|dcen|, 2|dlft|, 2|drgt|), 0 if sign change
+      do ivar = 1, nvar
+        ! X
+        dlft = 2.0_dp*(q_storage(ix,  iy,  ivar,ic) - q_storage(ix-1,iy,  ivar,ic))
+        drgt = 2.0_dp*(q_storage(ix+1,iy,  ivar,ic) - q_storage(ix,  iy,  ivar,ic))
+        dcen = half*(dlft + drgt) * half
+        dsgn = sign(one, dcen)
+        slop = min(abs(dlft), abs(drgt))
+        dlim = merge(zero, slop, (dlft*drgt <= zero))
+        qds(ix,iy,ivar,1) = dsgn * min(dlim, abs(dcen)) * idx
+        ! Y
+        dlft = 2.0_dp*(q_storage(ix,  iy,  ivar,ic) - q_storage(ix,  iy-1,ivar,ic))
+        drgt = 2.0_dp*(q_storage(ix,  iy+1,ivar,ic) - q_storage(ix,  iy,  ivar,ic))
+        dcen = half*(dlft + drgt) * half
+        dsgn = sign(one, dcen)
+        slop = min(abs(dlft), abs(drgt))
+        dlim = merge(zero, slop, (dlft*drgt <= zero))
+        qds(ix,iy,ivar,2) = dsgn * min(dlim, abs(dcen)) * idx
+        ! Z
+        dlft = 2.0_dp*(q_storage(ix,  iy,  ivar,ic) - q_storage(ix,  iy,  ivar,im))
+        drgt = 2.0_dp*(q_storage(ix,  iy,  ivar,ip) - q_storage(ix,  iy,  ivar,ic))
+        dcen = half*(dlft + drgt) * half
+        dsgn = sign(one, dcen)
+        slop = min(abs(dlft), abs(drgt))
+        dlim = merge(zero, slop, (dlft*drgt <= zero))
+        qds(ix,iy,ivar,3) = dsgn * min(dlim, abs(dcen)) * idx
+      end do
+
+    case (3)
+      ! positivity-preserving 3D unsplit: uses all 27 neighbours
+      do ivar = 1, nvar
+        dflll = q_storage(ix-1,iy-1,ivar,im) - q_storage(ix,iy,ivar,ic)
+        dflml = q_storage(ix-1,iy,  ivar,im) - q_storage(ix,iy,ivar,ic)
+        dflrl = q_storage(ix-1,iy+1,ivar,im) - q_storage(ix,iy,ivar,ic)
+        dfmll = q_storage(ix,  iy-1,ivar,im) - q_storage(ix,iy,ivar,ic)
+        dfmml = q_storage(ix,  iy,  ivar,im) - q_storage(ix,iy,ivar,ic)
+        dfmrl = q_storage(ix,  iy+1,ivar,im) - q_storage(ix,iy,ivar,ic)
+        dfrll = q_storage(ix+1,iy-1,ivar,im) - q_storage(ix,iy,ivar,ic)
+        dfrml = q_storage(ix+1,iy,  ivar,im) - q_storage(ix,iy,ivar,ic)
+        dfrrl = q_storage(ix+1,iy+1,ivar,im) - q_storage(ix,iy,ivar,ic)
+
+        dfllm = q_storage(ix-1,iy-1,ivar,ic) - q_storage(ix,iy,ivar,ic)
+        dflmm = q_storage(ix-1,iy,  ivar,ic) - q_storage(ix,iy,ivar,ic)
+        dflrm = q_storage(ix-1,iy+1,ivar,ic) - q_storage(ix,iy,ivar,ic)
+        dfmlm = q_storage(ix,  iy-1,ivar,ic) - q_storage(ix,iy,ivar,ic)
+        dfmmm = zero
+        dfmrm = q_storage(ix,  iy+1,ivar,ic) - q_storage(ix,iy,ivar,ic)
+        dfrlm = q_storage(ix+1,iy-1,ivar,ic) - q_storage(ix,iy,ivar,ic)
+        dfrmm = q_storage(ix+1,iy,  ivar,ic) - q_storage(ix,iy,ivar,ic)
+        dfrrm = q_storage(ix+1,iy+1,ivar,ic) - q_storage(ix,iy,ivar,ic)
+
+        dfllr = q_storage(ix-1,iy-1,ivar,ip) - q_storage(ix,iy,ivar,ic)
+        dflmr = q_storage(ix-1,iy,  ivar,ip) - q_storage(ix,iy,ivar,ic)
+        dflrr = q_storage(ix-1,iy+1,ivar,ip) - q_storage(ix,iy,ivar,ic)
+        dfmlr = q_storage(ix,  iy-1,ivar,ip) - q_storage(ix,iy,ivar,ic)
+        dfmmr = q_storage(ix,  iy,  ivar,ip) - q_storage(ix,iy,ivar,ic)
+        dfmrr = q_storage(ix,  iy+1,ivar,ip) - q_storage(ix,iy,ivar,ic)
+        dfrlr = q_storage(ix+1,iy-1,ivar,ip) - q_storage(ix,iy,ivar,ic)
+        dfrmr = q_storage(ix+1,iy,  ivar,ip) - q_storage(ix,iy,ivar,ic)
+        dfrrr = q_storage(ix+1,iy+1,ivar,ip) - q_storage(ix,iy,ivar,ic)
+
+        vmin = min(dflll,dflml,dflrl,dfmll,dfmml,dfmrl,dfrll,dfrml,dfrrl, &
+                   dfllm,dflmm,dflrm,dfmlm,dfmmm,dfmrm,dfrlm,dfrmm,dfrrm, &
+                   dfllr,dflmr,dflrr,dfmlr,dfmmr,dfmrr,dfrlr,dfrmr,dfrrr)
+        vmax = max(dflll,dflml,dflrl,dfmll,dfmml,dfmrl,dfrll,dfrml,dfrrl, &
+                   dfllm,dflmm,dflrm,dfmlm,dfmmm,dfmrm,dfrlm,dfrmm,dfrrm, &
+                   dfllr,dflmr,dflrr,dfmlr,dfmmr,dfmrr,dfrlr,dfrmr,dfrrr)
+
+        dfx = half*(q_storage(ix+1,iy,  ivar,ic) - q_storage(ix-1,iy,  ivar,ic))
+        dfy = half*(q_storage(ix,  iy+1,ivar,ic) - q_storage(ix,  iy-1,ivar,ic))
+        dfz = half*(q_storage(ix,  iy,  ivar,ip) - q_storage(ix,  iy,  ivar,im))
+        dff = half*(abs(dfx) + abs(dfy) + abs(dfz))
+
+        if (dff > zero) then
+          slop = min(one, min(abs(vmin), abs(vmax)) / dff)
+        else
+          slop = one
+        end if
+
+        qds(ix,iy,ivar,1) = slop * dfx * idx
+        qds(ix,iy,ivar,2) = slop * dfy * idx
+        qds(ix,iy,ivar,3) = slop * dfz * idx
+      end do
+
+    end select
+  end subroutine compute_slopes
+
+   ! =========================================================================
+   ! > @brief Paoper hydro kernel solves HD in planes to minimise usage of shared memory without recomputing anything.
+  attributes(global) subroutine hydro_integrator_paper_kernel(grid, uold, unew, f, father, nbor, &
+       & head_idx, num_subgrids, ngridmax, ilevel, levelmin, levelmax, &
+       & gamma, dt, dx, slope, riemann, constant_gravity)
+    type(oct), device :: grid(*)
+    integer, device :: father(*)
+    integer, device :: nbor(1:subgridsize,*)
+    real(kind=8), device :: constant_gravity(1:3)
+    real(kind=dp), device :: f(1:twotondim,1:ndim,*)
+    real(kind=dp), device :: uold(1:twotondim,1:nvar,*)
+    real(kind=dp), device :: unew(1:twotondim,1:nvar,*)
+    integer(kind=4), intent(in), value :: head_idx
+    integer(kind=4), intent(in), value :: num_subgrids
+    integer, intent(in), value :: ngridmax
+    integer, intent(in), value :: ilevel, levelmin, levelmax
+    real(kind=dp), intent(in), value :: gamma
+    real(kind=dp), intent(in), value :: dt
+    real(kind=dp), intent(in), value :: dx
+    integer, intent(in), value :: slope
+    integer, intent(in), value :: riemann
+
+    ! Local variables
+    integer :: thread_idx, block_idx, subgrid_idx
+    integer, dimension(3), parameter :: mult = (/ 1, nsubgridp2, nsubgridp2sq /)
+    integer, parameter :: i_rho = 1, i_px = 2, i_py = 3, i_pz = 4, i_ene = 5
+
+    ! ifwd gives the index mapping for transformation of variables
+    integer, parameter :: ifwd(nvar,3) = reshape( (/ i_rho, i_px, i_py, i_pz, i_ene, &
+                                                     i_rho, i_py, i_pz, i_px, i_ene, &
+                                                     i_rho, i_pz, i_px, i_py, i_ene /), (/ nvar,3 /) )
+   
+    ! Size of local stencil without ghost cells
+    integer, parameter :: m = 2 * nsubgrid
+    integer, parameter :: nb = 2 ! number of ghost cells == 1 oct
+    integer, parameter :: mf = m + 2*nb ! size of local stencil incl ghost cells
+    integer, parameter :: mf2 = mf**2   ! 2D size of local stencil incl ghost cells
+
+    ! Local device arrays (shared memory)
+    real(dp), shared :: q_storage(1:m+4,1:m+4,nvar,3)
+    real(dp), shared :: qds(2:m+3,2:m+3,nvar,3)
+    real(dp), shared :: qdt(2:m+3,2:m+3,nvar)
+    real(dp), shared :: qL(2:m+3,2:m+3,nvar)
+    real(dp), shared :: qR(2:m+3,2:m+3,nvar)
+
+    ! Total memory usage: ((m+4)**2*3 + (m+2)**2*7) * nvar * (4: single, 8: double) bytes
+    ! m = 2*nsubgrid
+    ! m= 2:  4 kB (FP32)   9 kB (FP64)
+    ! m= 4:  9 kB (FP32)  17 kB (FP64)
+    ! m= 8: 22 kB (FP32)  44 kB (FP64)
+    ! m=16: 68 kB (FP32) 135 kB (FP64)
+   
+    ! Thread-private variables
+    integer(kind=4) :: ix, iy, iz, ivar, iv, dir, im, ic, ip, j_px, j_py, j_pz, ub_x, ub_y
+    real(dp), value :: Uin(nvar), dU(nvar), igam, invD, Ekin, div_v, hdx, dtdx, idx
+    real(dp) :: c_max, SL, SR, iSRL, SRL, pxL, pxR, pyL, pyR, pzL, pzR, eneL, eneR
+    real(dp) :: fluxL_rho, fluxR_rho, fluxL_px, fluxR_px, fluxL_py, fluxR_py, fluxL_pz, fluxR_pz, fluxL_ene, fluxR_ene
+    real(dp) :: rhoL, rhoR, uL, uR, vL, vR, wL, wR, pL, pR, d_minus, d_plus, d_center, slp
+
+    thread_idx = threadIdx%x - 1       ! Thread index in x dimension (0 to blockDim%x-1)
+    block_idx = blockIdx%x - 1         ! Block index in x dimension (0 to num_subgrids-1)
+    subgrid_idx = head_idx + block_idx ! Get subgrid index for this block
+
+    ! Get thread and block indices
+    iy = thread_idx / mf + 1
+    ix = 1 + thread_idx - (iy - 1) * mf
+    subgrid_idx = head_idx + block_idx ! Get subgrid index
+
+    ! FIXME: if nsubgrid is large (=>4) and this is an MHD kernel
+    ! FIXME: to minimise shared memory load we may want to tile the ix-iy plane as well
+    ! FIXME: and let different blocks work on different tiles. This keeps a long z-direciton
+    ! FIXME: but minimise shared memory usage 
+      
+    ! Initialize constants
+    igam = 1.0 / (gamma - 1.0)
+    dtdx = dt / dx
+    hdx = 0.5_dp*dx
+    idx = 1.0_dp / dx
+
+    ! Main iz loop over subgrid
+    do iz = 0, m+3
+      ! 1) update slot position
+      im = mod(iz+1,3)+1
+      ic = mod(iz+2,3)+1
+      ip = mod(iz+3,3)+1
+
+      associate(flux => q_storage(:,:, :,im))  ! Reuse q_storage for fluxes to save shared memory
+         
+      ! 2) compute primitive variables at cell centers for iz+1 (qp)
+      if (ix <= m+4 .and. iy <= m+4) then
+        Uin = load_conserved(ix, iy, iz+1, uold, nbor, subgrid_idx) ! load conserved variables for iz+1 into registers
+        invD = 1.0_dp / Uin(i_rho)
+        q_storage(ix,iy,i_rho,ip) = Uin(i_rho)
+        q_storage(ix,iy,i_px,ip)  = Uin(i_px) * invD
+        q_storage(ix,iy,i_py,ip)  = Uin(i_py) * invD
+        q_storage(ix,iy,i_pz,ip)  = Uin(i_pz) * invD
+        Ekin = 0.5_dp * ( Uin(i_px) * q_storage(ix,iy,i_px,ip) + &
+                          Uin(i_py) * q_storage(ix,iy,i_py,ip) + &
+                          Uin(i_pz) * q_storage(ix,iy,i_pz,ip) )
+        q_storage(ix,iy,i_ene,ip) = (gamma - 1.0_dp)*(Uin(i_ene) - Ekin)
+      end if
+         
+      if (iz <= 1) cycle ! no slopes or fluxes to compute yet
+      call syncthreads()
+         
+      ! 3) compute slopes qds at cell centers for index iz
+      if (ix >= 2 .and. ix <= m+3 .and. iy >= 2 .and. iy <= m+3) then
+        do ivar = 1, nvar
+          ! X direction
+          d_minus = q_storage(ix,iy,ivar,ic) - q_storage(ix-1,iy,ivar,ic)
+          d_plus = q_storage(ix+1,iy,ivar,ic) - q_storage(ix,iy,ivar,ic)
+          d_center = 0.5_dp * (d_plus + d_minus)
+          slp = sign(1.0_dp, d_center) * min(abs(d_center), min(abs(2.0_dp * d_minus), abs(2.0_dp * d_plus))) * idx
+          qds(ix,iy,ivar,1) = merge(slp, 0.0_dp, (d_center * d_minus > 0.0_dp .and. d_center * d_plus > 0.0_dp))
+
+          ! Y direction
+          d_minus = q_storage(ix,iy,ivar,ic) - q_storage(ix,iy-1,ivar,ic)
+          d_plus  = q_storage(ix,iy+1,ivar,ic) - q_storage(ix,iy,ivar,ic)
+          d_center = 0.5_dp * (d_plus + d_minus)
+          slp = sign(1.0_dp, d_center) * min(abs(d_center), min(abs(2.0_dp * d_minus), abs(2.0_dp * d_plus))) * idx
+          qds(ix,iy,ivar,2) = merge(slp, 0.0_dp, (d_center * d_minus > 0.0_dp .and. d_center * d_plus > 0.0_dp))
+
+          ! Z direction
+          d_minus = q_storage(ix,iy,ivar,ic) - q_storage(ix,iy,ivar,im)
+          d_plus  = q_storage(ix,iy,ivar,ip) - q_storage(ix,iy,ivar,ic)
+          d_center = 0.5_dp * (d_plus + d_minus)
+          slp = sign(1.0_dp, d_center) * min(abs(d_center), min(abs(2.0_dp * d_minus), abs(2.0_dp * d_plus))) * idx
+          qds(ix,iy,ivar,3) = merge(slp, 0.0_dp, (d_center * d_minus > 0.0_dp .and. d_center * d_plus > 0.0_dp))
+        end do
+        ! FIXME, other slopes ideally inlined, and at the very least cleaned up to lessen register pressure and branches
+        ! FIXME see how this is done in the code above
+        !call compute_slopes(q_storage, qds, ix, iy, ic, im, ip, idx, slope, mf, nvar)
+      end if
+      !call syncthreads()
+         
+      ! 4) compute time prediction qdt at cell centers for index iz
+      ! FIXME: we need to add external forces and/or constant gravity source terms here as well
+      if (ix >= 2 .and. ix <= m+3 .and. iy >= 2 .and. iy <= m+3) then
+        ! div_v = dv_x/dx + dv_y/dy + dv_z/dz
+        div_v = qds(ix,iy,i_px,1) + qds(ix,iy,i_py,2) + qds(ix,iy,i_pz,3)
+        ! drhodt = - v.grad(rho) - rho div(v)
+        qdt(ix,iy,i_rho) = q_storage(ix,iy,i_rho,ic) - 0.5_dp*dt*( &
+           q_storage(ix,iy,i_px,ic)*qds(ix,iy,i_rho,1) + q_storage(ix,iy,i_py,ic)*qds(ix,iy,i_rho,2) + &
+           q_storage(ix,iy,i_pz,ic)*qds(ix,iy,i_rho,3) + q_storage(ix,iy,i_rho,ic)*div_v )
+        ! dP/dt = -v*grad(P) - gamma*P*div(v)
+        qdt(ix,iy,i_ene) = q_storage(ix,iy,i_ene,ic) - 0.5_dp*dt*( &
+           q_storage(ix,iy,i_px,ic)*qds(ix,iy,i_ene,1) + q_storage(ix,iy,i_py,ic)*qds(ix,iy,i_ene,2) + &
+           q_storage(ix,iy,i_pz,ic)*qds(ix,iy,i_ene,3) + gamma*q_storage(ix,iy,i_ene,ic)*div_v )
+        ! dv_i/dt = - v.grad(v_i) - 1/rho grad(P)
+        invD = 1.0_dp / q_storage(ix,iy,i_rho,ic)
+        qdt(ix,iy,i_px) = q_storage(ix,iy,i_px,ic) - 0.5_dp*dt*( &
+           q_storage(ix,iy,i_px,ic)*qds(ix,iy,i_px,1) + q_storage(ix,iy,i_py,ic)*qds(ix,iy,i_px,2) + &
+           q_storage(ix,iy,i_pz,ic)*qds(ix,iy,i_px,3) + invD*qds(ix,iy,i_ene,1) )
+        qdt(ix,iy,i_py) = q_storage(ix,iy,i_py,ic) - 0.5_dp*dt*( &
+           q_storage(ix,iy,i_px,ic)*qds(ix,iy,i_py,1) + q_storage(ix,iy,i_py,ic)*qds(ix,iy,i_py,2) + &
+           q_storage(ix,iy,i_pz,ic)*qds(ix,iy,i_py,3) + invD*qds(ix,iy,i_ene,2) )
+        qdt(ix,iy,i_pz) = q_storage(ix,iy,i_pz,ic) - 0.5_dp*dt*( &
+           q_storage(ix,iy,i_px,ic)*qds(ix,iy,i_pz,1) + q_storage(ix,iy,i_py,ic)*qds(ix,iy,i_pz,2) + &
+           q_storage(ix,iy,i_pz,ic)*qds(ix,iy,i_pz,3) + invD*qds(ix,iy,i_ene,3) )
+      end if
+         
+      ! 5) Z-direction flux and update
+      if (iz > 2) then
+        !call syncthreads()
+        ! Compute qR for z-direction
+        if (ix >= 3 .and. ix <= m+2 .and. iy >= 3 .and. iy <= m+2) then
+          do ivar = 1, nvar
+            qR(ix,iy,ivar) = qdt(ix,iy,ifwd(ivar,3)) - hdx * qds(ix,iy,ifwd(ivar,3),3)
+          end do
+        end if
+        !call syncthreads()
+        
+        ! Compute flux for z-direction
+        j_px = i_pz; j_py = i_px; j_pz = i_py
+        ub_x = m+2; ub_y = m+2            
+        if (ix >= 3 .and. ix <= ub_x .and. iy >= 3 .and. iy <= ub_y) then
+          rhoL = qL(ix,iy,i_rho); rhoR = qR(ix,iy,i_rho)
+          uL   = qL(ix,iy,i_px ); uR   = qR(ix,iy,i_px )
+          vL   = qL(ix,iy,i_py ); vR   = qR(ix,iy,i_py )
+          wL   = qL(ix,iy,i_pz ); wR   = qR(ix,iy,i_pz )
+          pL   = qL(ix,iy,i_ene); pR   = qR(ix,iy,i_ene)
+          
+          pxL = rhoL*uL; pyL = rhoL*vL; pzL = rhoL*wL
+          pxR = rhoR*uR; pyR = rhoR*vR; pzR = rhoR*wR
+          fluxL_rho = pxL;            fluxR_rho = pxR
+          fluxL_px  = pxL*uL + pL;    fluxR_px  = pxR*uR + pR
+          fluxL_py  = pyL*uL;         fluxR_py  = pyR*uR
+          fluxL_pz  = pzL*uL;         fluxR_pz  = pzR*uR
+          eneL = 0.5_dp*(pxL*uL + pyL*vL + pzL*wL) + igam*pL
+          eneR = 0.5_dp*(pxR*uR + pyR*vR + pzR*wR) + igam*pR
+          fluxL_ene = (eneL + pL)*uL; fluxR_ene = (eneR + pR)*uR
+          c_max = sqrt(max(gamma*pL/rhoL, gamma*pR/rhoR))
+          SL = min(min(uL, uR) - c_max, 0.0_dp)
+          SR = max(max(uL, uR) + c_max, 0.0_dp)
+          iSRL = 1.0_dp / (SR - SL)
+          SRL = SR*SL
+          flux(ix,iy,i_rho) = (SR*fluxL_rho - SL*fluxR_rho + SRL*(rhoR - rhoL))*iSRL
+          flux(ix,iy,j_px ) = (SR*fluxL_px  - SL*fluxR_px  + SRL*(pxR - pxL))*iSRL
+          flux(ix,iy,j_py ) = (SR*fluxL_py  - SL*fluxR_py  + SRL*(pyR - pyL))*iSRL
+          flux(ix,iy,j_pz ) = (SR*fluxL_pz  - SL*fluxR_pz  + SRL*(pzR - pzL))*iSRL
+          flux(ix,iy,i_ene) = (SR*fluxL_ene - SL*fluxR_ene + SRL*(eneR - eneL))*iSRL
+        end if
+        !call syncthreads()
+        
+        ! Update Uout from z-direction flux
+        if (ix >= 3 .and. ix <= m+2 .and. iy >= 3 .and. iy <= m+2) then
+           if (iz == 3) then
+              do ivar = 1, nvar
+                 dU(ivar) = dtdx*flux(ix,iy,ivar)
+              end do
+              call add_conserved(ix,iy,iz,dU,3,unew,nbor,grid,father,subgrid_idx,ngridmax)
+           else if (iz == m+3) then
+              do ivar = 1, nvar
+                 dU(ivar) = - dtdx*flux(ix,iy,ivar)
+              end do
+              call add_conserved(ix,iy,iz-1,dU,6,unew,nbor,grid,father,subgrid_idx,ngridmax)
+           else ! 3 < iz <= m+2
+              do ivar = 1, nvar
+                 dU(ivar) = - dtdx*flux(ix,iy,ivar)
+              end do
+              call add_conserved(ix,iy,iz-1,dU,6,unew,nbor,grid,father,subgrid_idx,ngridmax)
+              do ivar = 1, nvar
+                 dU(ivar) = dtdx*flux(ix,iy,ivar)
+              end do
+              call add_conserved(ix,iy,iz,dU,3,unew,nbor,grid,father,subgrid_idx,ngridmax)
+           end if
+        end if
+         end if
+         call syncthreads()
+         
+         ! X-direction and Y-direction (iz >= 3 .and. iz <= m+2)
+         if (iz >= 3 .and. iz <= m+2) then
+            ! Compute qL and qR for x-direction
+            if (ix >= 3 .and. ix <= m+3 .and. iy >= 3 .and. iy <= m+2) then
+               do ivar = 1, nvar
+                  qL(ix,iy,ivar) = qdt(ix-1,iy,ivar) + hdx * qds(ix-1,iy,ivar,1)
+                  qR(ix,iy,ivar) = qdt(ix  ,iy,ivar) - hdx * qds(ix  ,iy,ivar,1)
+               end do
+            end if
+            !call syncthreads()
+            
+            ! Compute flux for x-direction
+            j_px = i_px; j_py = i_py; j_pz = i_pz
+            ub_x = m+3; ub_y = m+2
+            if (ix >= 3 .and. ix <= ub_x .and. iy >= 3 .and. iy <= ub_y) then
+               rhoL = qL(ix,iy,i_rho); rhoR = qR(ix,iy,i_rho)
+               uL   = qL(ix,iy,i_px ); uR   = qR(ix,iy,i_px )
+               vL   = qL(ix,iy,i_py ); vR   = qR(ix,iy,i_py )
+               wL   = qL(ix,iy,i_pz ); wR   = qR(ix,iy,i_pz )
+               pL   = qL(ix,iy,i_ene); pR   = qR(ix,iy,i_ene)
+               pxL = rhoL*uL; pyL = rhoL*vL; pzL = rhoL*wL
+               pxR = rhoR*uR; pyR = rhoR*vR; pzR = rhoR*wR
+               eneL = 0.5_dp*(pxL*uL + pyL*vL + pzL*wL) + igam*pL
+               eneR = 0.5_dp*(pxR*uR + pyR*vR + pzR*wR) + igam*pR
+               fluxL_rho = pxL;            fluxR_rho = pxR
+               fluxL_px  = pxL*uL + pL;    fluxR_px  = pxR*uR + pR
+               fluxL_py  = pyL*uL;         fluxR_py  = pyR*uR
+               fluxL_pz  = pzL*uL;         fluxR_pz  = pzR*uR
+               fluxL_ene = (eneL + pL)*uL; fluxR_ene = (eneR + pR)*uR
+               c_max = sqrt(max(gamma*pL/rhoL, gamma*pR/rhoR))
+               SL = min(min(uL, uR) - c_max, 0.0_dp)
+               SR = max(max(uL, uR) + c_max, 0.0_dp)
+               iSRL = 1.0_dp / (SR - SL)
+               SRL = SR*SL
+               flux(ix,iy,i_rho) = (SR*fluxL_rho - SL*fluxR_rho + SRL*(rhoR - rhoL))*iSRL
+               flux(ix,iy,j_px ) = (SR*fluxL_px  - SL*fluxR_px  + SRL*(pxR - pxL))*iSRL
+               flux(ix,iy,j_py ) = (SR*fluxL_py  - SL*fluxR_py  + SRL*(pyR - pyL))*iSRL
+               flux(ix,iy,j_pz ) = (SR*fluxL_pz  - SL*fluxR_pz  + SRL*(pzR - pzL))*iSRL
+               flux(ix,iy,i_ene) = (SR*fluxL_ene - SL*fluxR_ene + SRL*(eneR - eneL))*iSRL
+            end if
+            call syncthreads()
+            
+            ! Update Uout from x-direction flux
+            if (ix >= 3 .and. ix <= m+2 .and. iy >= 3 .and. iy <= m+2) then
+               do ivar = 1, nvar
+                  dU(ivar) = dtdx*flux(ix,iy,ivar)
+               end do
+               call add_conserved(ix,iy,iz,dU,1,unew,nbor,grid,father,subgrid_idx,ngridmax)
+               do ivar = 1, nvar
+                  dU(ivar) = - dtdx*flux(ix+1,iy,ivar)
+               end do
+               call add_conserved(ix,iy,iz,dU,4,unew,nbor,grid,father,subgrid_idx,ngridmax)
+            end if
+            call syncthreads()
+            
+            ! Compute qL and qR for y-direction
+            if (ix >= 3 .and. ix <= m+2 .and. iy >= 3 .and. iy <= m+3) then
+               do ivar = 1, nvar
+                  qL(ix,iy,ivar) = qdt(ix,iy-1,ifwd(ivar,2)) + hdx * qds(ix,iy-1,ifwd(ivar,2),2)
+                  qR(ix,iy,ivar) = qdt(ix,iy  ,ifwd(ivar,2)) - hdx * qds(ix,iy  ,ifwd(ivar,2),2)
+               end do
+            end if
+            !call syncthreads()
+            
+            ! Compute flux for y-direction
+            j_px = i_py; j_py = i_pz; j_pz = i_px
+            ub_x = m+2; ub_y = m+3
+            if (ix >= 3 .and. ix <= ub_x .and. iy >= 3 .and. iy <= ub_y) then
+               rhoL = qL(ix,iy,i_rho); rhoR = qR(ix,iy,i_rho)
+               uL   = qL(ix,iy,i_px ); uR   = qR(ix,iy,i_px )
+               vL   = qL(ix,iy,i_py ); vR   = qR(ix,iy,i_py )
+               wL   = qL(ix,iy,i_pz ); wR   = qR(ix,iy,i_pz )
+               pL   = qL(ix,iy,i_ene); pR   = qR(ix,iy,i_ene)
+               
+               pxL = rhoL*uL; pyL = rhoL*vL; pzL = rhoL*wL
+               pxR = rhoR*uR; pyR = rhoR*vR; pzR = rhoR*wR
+               eneL = 0.5_dp*(pxL*uL + pyL*vL + pzL*wL) + igam*pL
+               eneR = 0.5_dp*(pxR*uR + pyR*vR + pzR*wR) + igam*pR
+               fluxL_rho = pxL;            fluxR_rho = pxR
+               fluxL_px  = pxL*uL + pL;    fluxR_px  = pxR*uR + pR
+               fluxL_py  = pyL*uL;         fluxR_py  = pyR*uR
+               fluxL_pz  = pzL*uL;         fluxR_pz  = pzR*uR
+               fluxL_ene = (eneL + pL)*uL; fluxR_ene = (eneR + pR)*uR
+               c_max = sqrt(max(gamma*pL/rhoL, gamma*pR/rhoR))
+               SL = min(min(uL, uR) - c_max, 0.0_dp)
+               SR = max(max(uL, uR) + c_max, 0.0_dp)
+               iSRL = 1.0_dp / (SR - SL)
+               SRL = SR*SL
+               flux(ix,iy,i_rho) = (SR*fluxL_rho - SL*fluxR_rho + SRL*(rhoR - rhoL))*iSRL
+               flux(ix,iy,j_px ) = (SR*fluxL_px  - SL*fluxR_px  + SRL*(pxR - pxL))*iSRL
+               flux(ix,iy,j_py ) = (SR*fluxL_py  - SL*fluxR_py  + SRL*(pyR - pyL))*iSRL
+               flux(ix,iy,j_pz ) = (SR*fluxL_pz  - SL*fluxR_pz  + SRL*(pzR - pzL))*iSRL
+               flux(ix,iy,i_ene) = (SR*fluxL_ene - SL*fluxR_ene + SRL*(eneR - eneL))*iSRL
+            end if
+            call syncthreads()
+            
+            ! Update Uout from y-direction flux
+            if (ix >= 3 .and. ix <= m+2 .and. iy >= 3 .and. iy <= m+2) then
+               do ivar = 1, nvar
+                  dU(ivar) = dtdx*flux(ix,iy,ivar)
+               end do
+               call add_conserved(ix,iy,iz,dU,2,unew,nbor,grid,father,subgrid_idx,ngridmax)
+               do ivar = 1, nvar
+                  dU(ivar) = - dtdx*flux(ix,iy+1,ivar)
+               end do
+               call add_conserved(ix,iy,iz,dU,5,unew,nbor,grid,father,subgrid_idx,ngridmax)
+            end if
+            call syncthreads()
+         end if
+         
+         ! Compute left face for z-direction for next iteration
+         if (iz >= 2 .and. iz <= m+2) then
+            if (ix >= 3 .and. ix <= m+3 .and. iy >= 3 .and. iy <= m+3) then
+               do ivar = 1, nvar
+                  qL(ix,iy,ivar) = qdt(ix,iy,ifwd(ivar,3)) + hdx * qds(ix,iy,ifwd(ivar,3),3)
+               end do
+            end if
+            !call syncthreads()
+         end if
+         end associate
+      end do ! iz loop
+      
+  end subroutine hydro_integrator_paper_kernel
+
+  ! =========================================================================
   attributes(global) subroutine hydro_integrator_kernel(grid, uold, unew, f, father, nbor, &
        & head_idx, num_subgrids, ngridmax, ilevel, levelmin, levelmax, &
        & gamma, dt, dx, slope, riemann, constant_gravity)
