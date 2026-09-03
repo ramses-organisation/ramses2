@@ -132,6 +132,7 @@ endif
 ifneq ($(UNITS),)
    DEFINES += -DUNITS=$(UNITS)
 endif
+DEFINES := $(strip $(DEFINES))
 #############################################################################
 # GNU compiler (gfortran)
 ifeq ($(COMPILER),GNU)
