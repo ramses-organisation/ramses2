@@ -162,11 +162,11 @@ subroutine input_hydro_vecpot(r,g,m,ilevel)
            call vecpotentialinit(r,g,xrr,azrr,3,ngrid)
            do i=1,ngrid
               ! bx = d Az / dy
-              m%bold(ind,1,igrid+i-1)=(azlr(i)-azll(i))/dx
-              m%bold(ind,4,igrid+i-1)=(azrr(i)-azrl(i))/dx
+              m%bold(ind,1,igrid+i-1)=r%A_ave+(azlr(i)-azll(i))/dx
+              m%bold(ind,4,igrid+i-1)=r%A_ave+(azrr(i)-azrl(i))/dx
               ! by = - d Az / dx
-              m%bold(ind,2,igrid+i-1)=-(azrl(i)-azll(i))/dx
-              m%bold(ind,5,igrid+i-1)=-(azrr(i)-azlr(i))/dx
+              m%bold(ind,2,igrid+i-1)=r%B_ave-(azrl(i)-azll(i))/dx
+              m%bold(ind,5,igrid+i-1)=r%B_ave-(azrr(i)-azlr(i))/dx
            end do
         end do
      end do ! End loop over cells

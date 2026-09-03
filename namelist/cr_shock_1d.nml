@@ -1,0 +1,83 @@
+1D cosmic ray shock with streaming, as shown in the middle panel of Fig 4 in Rosdahl+25 (Cosmic Rays in RAMSES)
+make DO_CR=1 NDIM=1 MPI=1
+
+&RUN_PARAMS
+hydro=.true.
+nremap=10
+ncontrol=1
+nsubcycle=10*2
+cr=.true.
+/
+
+&AMR_PARAMS
+levelmin=9
+levelmax=9
+ngridmax=10000
+nexpand=1
+/
+
+&BOUNDARY_PARAMS
+box_size=10d0
+bound_levelmin=9
+box_xmin=1
+box_xmax=-1
+nbound=2
+periodic=.false.
+bound_dir=1,1
+bound_type=3,3
+bound_shift=1,-1
+bound_xmin=0,-1
+bound_xmax=1,0
+d_bound = 1,1
+u_bound=0,0
+v_bound=0,0
+w_bound=0,0
+p_bound=1,1
+prad_bound(:,1) =1., 0.3333333333333
+cr_fx_bound(:,1) = 3., 1.
+/
+
+&CR_PARAMS
+cr_advect=.true.
+cr_streaming_diffusion=.true.
+cr_streaming_heating=.true.
+cr_c_fraction=3.3356409297285193e-9  ! light-speed=100
+cr_nsubcycle=1
+cr_reduced_flux_correction=.true.
+cr_v_alfven=0.75
+/
+
+&CR_GROUPS
+cr_d=0.003333333333
+cr_d_perp_factors=1d-6
+/
+
+&INIT_PARAMS
+nregion=2
+region_type(1)='square'
+region_type(2)='square'
+x_center=2.5,7.5
+length_x=5.0,5.0
+d_region=1.0,1.0
+u_region=0.0,0.0
+p_region=1.0,1.0
+prad_region=1.0,0.333333333333333
+A_ave=1d-13
+cr_nregion=2
+cr_region_type(1)='square'
+cr_region_type(2)='square'
+cr_reg_x_center=2.5,7.5
+cr_reg_length_x=5.0, 5.0
+cr_fx_region(:) = 3., 1.
+/
+
+&OUTPUT_PARAMS
+tout=2.0
+/
+
+&HYDRO_PARAMS
+gamma=1.666667
+courant_factor=0.8
+slope_type=2
+riemann='hlld'
+/

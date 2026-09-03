@@ -1,0 +1,79 @@
+2d cosmic ray diffusion in a looped magnetic field, as shown in Fig 3 of Rosdahl+25 (Cosmic Rays in RAMSES).
+make DO_CR=1 NDIM=2 MPI=1 INIT=CR_LOOP
+
+&RUN_PARAMS
+hydro=.true.
+nremap=10
+ncontrol=1
+nsubcycle=10*2
+static_gas=.true.
+cr=.true.
+/
+
+&AMR_PARAMS
+levelmin=7
+levelmax=7
+ngridmax=100000
+nexpand=1
+/
+
+&BOUNDARY_PARAMS
+bound_levelmin=7
+box_size=2.0
+box_xmin=1
+box_ymin=1
+box_xmax=-1
+box_ymax=-1
+nbound=4
+periodic=.false.,.false.
+bound_dir=1,1,2,2
+bound_type=2,2,2,2
+bound_shift=1,-1,1,-1
+bound_xmin= 0,-1, 0, 0
+bound_ymin= 1, 1, 0,-1
+bound_xmax= 1, 0, 0, 0
+bound_ymax=-1,-1, 1, 0
+/
+
+&CR_PARAMS
+cr_advect=.true.
+cr_streaming_diffusion=.false.
+cr_streaming_heating=.false.
+cr_c_fraction=3.3356409297285193e-9  ! light-speed=100
+cr_nsubcycle=10
+cr_reduced_flux_correction=.true.
+cr_courant_factor=0.8
+cr_test_setup='circular_diffusion'
+/
+
+&CR_GROUPS
+cr_d=0.33333333
+cr_d_perp_factors=1d-12
+/
+
+&INIT_PARAMS
+nregion=1
+region_type(1)='square'
+x_center=0.5
+y_center=0.5
+length_x=100.0
+length_y=100.0
+d_region=1.
+u_region=0.0
+v_region=0.0
+w_region=0.0
+p_region=2
+B_region=0.0
+C_region=0.0
+/
+
+&OUTPUT_PARAMS
+tout=0.26
+/
+
+&HYDRO_PARAMS
+gamma=1.66667
+courant_factor=0.8
+slope_type=2
+riemann='hlld'
+/
