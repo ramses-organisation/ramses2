@@ -535,7 +535,7 @@ module metal_interface
         ilevel, levelmin, levelmax, &
         gamma, smallr, smallc2, dt, dx, slope, &
 #ifdef MHD
-        slope_mag, switch_llf_dmin, switch_llf_pmin, induction, etamag, &
+        slope_mag, riemann, riemann2d, switch_llf_dmin, switch_llf_pmin, induction, etamag, &
 #else
         riemann, &
 #endif
@@ -546,7 +546,7 @@ module metal_interface
       integer(c_int), value :: ilevel, levelmin, levelmax
       real(c_float),  value :: gamma, smallr, smallc2, dt, dx
 #ifdef MHD
-      integer(c_int), value :: slope, slope_mag, induction
+      integer(c_int), value :: slope, slope_mag, riemann, riemann2d, induction
       real(c_float), value :: switch_llf_dmin, switch_llf_pmin, etamag
 #else
       integer(c_int), value :: slope, riemann

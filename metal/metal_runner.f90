@@ -267,7 +267,7 @@ subroutine metal_godunov(sim, ilevel)
   use ramses_commons, only: ramses_t
 #ifdef MHD
   use amr_parameters, only: ndim
-  use hydro_parameters, only: solver_uct_hlld
+  use hydro_parameters, only: solver_llf, solver_hlld, solver_uct_hlld, solver2d_llf, solver2d_hlld
 #endif
   implicit none
   type(ramses_t), intent(inout) :: sim
@@ -289,7 +289,12 @@ subroutine metal_godunov(sim, ilevel)
 #ifdef MHD
   nsubgrid_l = mtl_nsubgrid()
   nsubgridtondim_l = nsubgrid_l**ndim
-  if (sim%r%riemann /= solver_uct_hlld) error stop 'Metal MHD requires riemann=uct-hlld'
+  if (sim%r%riemann == solver_hlld .or. sim%r%riemann == solver_llf) then
+     if (sim%r%riemann2d /= solver2d_hlld .and. sim%r%riemann2d /= solver2d_llf) &
+          error stop 'Metal MHD requires riemann2d=hlld or llf'
+  else if (sim%r%riemann /= solver_uct_hlld) then
+     error stop 'Metal MHD requires riemann=hlld, llf, or uct-hlld'
+  end if
   if (mod(sim%m%head(ilevel)-1, nsubgridtondim_l) /= 0) error stop 'Metal MHD oct head is not nsubgrid aligned'
   if (mod(sim%m%noct(ilevel), nsubgridtondim_l) /= 0) error stop 'Metal MHD oct count is not divisible by nsubgrid'
   head_idx = int((sim%m%head(ilevel)-1)/nsubgridtondim_l+1, c_int)
@@ -316,6 +321,8 @@ subroutine metal_godunov(sim, ilevel)
        int(sim%r%slope_type,   c_int), &
 #ifdef MHD
        int(sim%r%slope_mag_type, c_int), &
+       int(sim%r%riemann,      c_int), &
+       int(sim%r%riemann2d,    c_int), &
        real(sim%r%switch_llf_dmin, c_float), &
        real(sim%r%switch_llf_pmin, c_float), &
        induction, real(sim%r%etamag, c_float), &
