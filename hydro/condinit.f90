@@ -438,7 +438,9 @@ subroutine condinit(r,g,x,q,dx,nn)
      xcenter=r%box_size(1)*0.5d0
      do i=1,nn
         xx=x(i,1)-xcenter
+#if NDIM>1
         yy=x(i,2)-xcenter
+#endif
         rr=sqrt(xx**2+yy**2)
         theta=atan2(yy,xx)
         if(rr>0.25d0*r%box_size(1) .and. rr<0.35d0*r%box_size(1) .and. theta>ttmin .and. &
