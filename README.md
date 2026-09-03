@@ -13,7 +13,7 @@ You can download the code by cloning the git repository using
 $ git clone git@github.com:ramses-organisation/ramses2.git
 ```
 
-If you want to contribute to ramses2, you can fork this repository. To bring changes back into the `develop` branch of ramses2, simply issue a pull request.
+If you want to contribute to ramses2, you can fork this repository. To bring changes back into the `develop` branch, simply issue a pull request.
 
 To compile and execute the standard test cases, please follow these steps.
 
