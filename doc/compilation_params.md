@@ -17,7 +17,7 @@ You can compile the code by setting these parameters to your preffered value usi
 | `NENER = 0`      | `integer`  | Number of non-thermal energies used in the hydro solver. |
 | `NMETAL = 0`     | `integer`  | Number of metal species advected by the hydro solver. |
 | `NION = 0`       | `integer`  | Number of atomic ionized species advected by the hydro solver. |
-| `NRTGRP = 0`     | `integer`  | Number of radiative transfer groups transported by the RT solver. |
+| `NRTGRP = 1`     | `integer`  | Number of radiative transfer groups transported by the RT solver. |
 | `NCRGRP = 1`     | `integer`  | Number of cosmic ray energy groups transported by the CR solver. |
 | `INIT = `        | `string`  | This sets the adopted initial condition for your simulation. This parameter can be an empty string (default) wich uses the default initial condition generator in the code, as explained in the corresponding namelist block documentation. Possible values are `COEUR`, `INSTA`, `DOUBLEMACH`, `OT`, `PONO` and more. These initial conditions are set in the file `hydro/condinit.f90`. You can add your own here and share them with the community later via a pull request. |
 | `UNITS = `       | `string`  | This sets the adopted unit system to convert variables from code units to cgs units. This parameter can be an empty string (default) wich uses the default unit system that can be set via the namelist, as explained in the corresponding namelist block documentation. You can also use predefined unit systems. Possible values are `COEUR`, `COSMO`, `MERGER` and more. These different unit systems are set in the file `amr/units.f90`. You can add your own here and share them with the community later via a pull request. |
