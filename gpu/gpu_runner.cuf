@@ -208,6 +208,11 @@ contains
     real(kind=8), device, pointer :: C_mass(:), C_ekin(:), C_eint(:), C_emag(:), C_dt(:)
     real(kind=8), device, pointer :: dummy(:)
 
+    ! Split-timer diagnostics (host wall-clock, guarded by cudaDeviceSynchronize)
+    integer(kind=8) :: t0, t1, t2, t3, t4, tick_rate
+    real(kind=8)    :: dt_step1, dt_reduce, dt_d2h, dt_total
+    integer         :: istat
+
     courant_factor = sim%r%courant_factor
     gamma = sim%r%gamma
     smallr = sim%r%smallr
@@ -266,6 +271,10 @@ contains
 
     call nvtxStartRange("GPU cmpdt_2", color=0)!green
 
+    ! Baseline sync so t0 measures only the work that follows.
+    istat = cudaDeviceSynchronize()
+    call system_clock(t0, tick_rate)
+
     ! -- Step 1: per-cell work + fused block reduce; write A --
     call cmpdt_kernel_2<<<num_blocks, num_threads>>>(grid, uold, bold, f, &
         & constant_gravity, head_idx, num_octs, &
@@ -275,6 +284,9 @@ contains
         & , fturb &
 #endif
         & )
+
+    istat = cudaDeviceSynchronize()
+    call system_clock(t1)
 
     ! -- Step 2: hierarchical reduce, up to three passes (mirrors gpu_scan) --
     if (n0 <= block_size_r) then
@@ -306,16 +318,31 @@ contains
        stop
     end if
 
+    istat = cudaDeviceSynchronize()
+    call system_clock(t2)
+
     call nvtxEndRange()
 
-    ! move results to host
+    ! move results to host  (implicit sync)
     h_data(:) = d_data(:)
+    call system_clock(t3)
 
     mass = h_data(1)
     ekin = h_data(2)
     eint = h_data(3)
     emag = h_data(4)
     dt = h_data(5)
+
+    dt_step1  = real(t1 - t0, kind=8) / real(tick_rate, kind=8)
+    dt_reduce = real(t2 - t1, kind=8) / real(tick_rate, kind=8)
+    dt_d2h    = real(t3 - t2, kind=8) / real(tick_rate, kind=8)
+    dt_total  = real(t3 - t0, kind=8) / real(tick_rate, kind=8)
+    write(*,'(A,I3,4(A,ES10.3))') &
+         ' [gpu_cmpdt_2] ilev=', ilevel, &
+         '  step1=', dt_step1, &
+         '  reduce=', dt_reduce, &
+         '  d2h=', dt_d2h, &
+         '  total=', dt_total
 
     call GPU_Error_Check(__FILE__, __LINE__)
 
