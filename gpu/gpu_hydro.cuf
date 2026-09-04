@@ -4419,6 +4419,223 @@ contains
   ! =========================================================================
 
   ! =========================================================================
+  !> @brief
+  !> Two-step variant of cmpdt_kernel: computes per-cell dt and extensive
+  !> quantities, then writes ONE per-block partial into 5 arrays instead
+  !> of doing 5 global atomics. Final reduction is done by
+  !> cmpdt_reduce_kernel. Uses the fused block_reduce_sum4_min1 to cut
+  !> per-block reduction cost.
+  attributes(global) subroutine cmpdt_kernel_2(grid, uold, bold, f, constant_gravity, &
+      & head_idx, num_octs, part_mass, part_ekin, part_eint, part_emag, part_dt, &
+      & dx, gamma, smallr, smallc2, courant_factor, induction &
+#ifdef TURB
+      & , fturb &
+#endif
+      & )
+    type(oct), device :: grid(*)
+    real(kind=8), device :: constant_gravity(3)
+    real(kind=dp), device :: uold(1:twotondim,1:nvar,*)
+    real(kind=dp), device :: bold(1:twotondim,1:6,*)
+    real(kind=dp), device :: f(1:twotondim,1:ndim,*)
+#ifdef TURB
+    real(kind=dp), device :: fturb(1:twotondim,1:3,*)
+#endif
+    integer(kind=4), intent(in), value :: head_idx
+    integer(kind=4), intent(in), value :: num_octs
+    real(kind=8), device :: part_mass(*)
+    real(kind=8), device :: part_ekin(*)
+    real(kind=8), device :: part_eint(*)
+    real(kind=8), device :: part_emag(*)
+    real(kind=8), device :: part_dt(*)
+    real(kind=dp), value :: dx, gamma, smallr, smallc2, courant_factor
+    logical, value :: induction
+
+    type(primitive_t) :: primitive
+    type(conserved_t) :: conserved
+    integer :: tid, bid ! The index of the thread and the block
+    integer :: cell_idx ! The index of the cell
+    integer :: oct_idx ! The index of the oct
+    real(kind=8) :: vol_loc, mass_loc, ekin_loc, eint_loc, emag_loc, dt_loc
+    real(kind=8) :: sound_speed, grav, ctot
+    real(kind=8) :: a2, b2sq, c2v, pp, rinv
+#ifdef MHD
+    real(kind=dp) :: smallc
+#endif
+
+#ifdef MHD
+    smallc = sqrt(smallc2)
+#endif
+
+    ! Thread and block id
+    tid = threadIdx%x - 1
+    bid = blockIdx%x - 1
+
+    ! Compute oct idx
+    oct_idx = ( tid + bid * blockDim%x ) / twotondim
+
+    ! If not in block
+    if (oct_idx >= num_octs) then
+
+       dt_loc   = huge(0d0)
+       mass_loc = 0d0
+       ekin_loc = 0d0
+       eint_loc = 0d0
+       emag_loc = 0d0
+
+    else
+
+       oct_idx = head_idx + oct_idx
+
+       ! Compute cell idx
+       cell_idx = mod(tid, twotondim) + 1
+
+       ! If refined
+       if(grid(oct_idx)%refined(cell_idx))then
+
+          dt_loc   = huge(0d0)
+          mass_loc = 0d0
+          ekin_loc = 0d0
+          eint_loc = 0d0
+          emag_loc = 0d0
+
+       else
+
+          ! Load the cell
+          conserved%density    = uold(cell_idx, 1, oct_idx)
+          conserved%momentum_x = uold(cell_idx, 2, oct_idx)
+          conserved%momentum_y = uold(cell_idx, 3, oct_idx)
+          conserved%momentum_z = uold(cell_idx, 4, oct_idx)
+          conserved%energy     = uold(cell_idx, 5, oct_idx)
+
+          vol_loc = dx*dx*dx
+          mass_loc = conserved%density*vol_loc
+          ekin_loc = conserved%energy*vol_loc
+
+#ifdef MHD
+          conserved%Bx = 0.5_dp*(bold(cell_idx,1,oct_idx)+bold(cell_idx,4,oct_idx))
+          conserved%By = 0.5_dp*(bold(cell_idx,2,oct_idx)+bold(cell_idx,5,oct_idx))
+          conserved%Bz = 0.5_dp*(bold(cell_idx,3,oct_idx)+bold(cell_idx,6,oct_idx))
+          primitive = conserved_2_primitive(conserved, gamma, smallr, smallc2)
+          pp = max(primitive%pressure, primitive%density*smallc2/gamma)
+          b2sq = compute_bsquared(primitive%Bx, primitive%By, primitive%Bz)
+          emag_loc = 0.5d0*b2sq*vol_loc
+          eint_loc = pp/(gamma-1d0)*vol_loc
+          rinv = 1.0d0 / primitive%density
+          a2 = gamma*pp*rinv
+          if (induction) then
+             ctot = abs(primitive%velocity_x)+abs(primitive%velocity_y)+abs(primitive%velocity_z) + 3d0*smallc
+          else
+             c2v = 0.5d0*(b2sq*rinv + a2)
+             ctot = abs(primitive%velocity_x) + sqrt(c2v + sqrt(c2v**2 - a2*primitive%Bx**2*rinv)) &
+                  & + abs(primitive%velocity_y) + sqrt(c2v + sqrt(c2v**2 - a2*primitive%By**2*rinv)) &
+                  & + abs(primitive%velocity_z) + sqrt(c2v + sqrt(c2v**2 - a2*primitive%Bz**2*rinv))
+          endif
+#else
+          ! Convert to primitive variables
+          primitive = conserved_2_primitive(conserved, gamma, smallr, smallc2)
+
+          ! Compute extensive quantities
+          vol_loc = dx*dx*dx
+          mass_loc = primitive%density*vol_loc
+          ekin_loc = conserved%energy*vol_loc
+          eint_loc = primitive%pressure/(gamma-1d0)*vol_loc
+          emag_loc = 0_dp
+
+          ! Compute time step
+          sound_speed = sqrt(gamma*primitive%pressure/primitive%density)
+          ctot = (abs(primitive%velocity_x)+abs(primitive%velocity_y)+abs(primitive%velocity_z)+3d0*sound_speed)
+#endif
+#ifdef GRAV
+          grav = abs(f(cell_idx, 1, oct_idx)) + abs(f(cell_idx, 2, oct_idx)) + abs(f(cell_idx, 3, oct_idx))
+#else
+          grav = abs(constant_gravity(1)) + abs(constant_gravity(2)) + abs(constant_gravity(3))
+#endif
+#ifdef TURB
+          grav = grav + abs(fturb(cell_idx,1,oct_idx)) + abs(fturb(cell_idx,2,oct_idx)) + abs(fturb(cell_idx,3,oct_idx))
+#endif
+          grav = grav*dx/ctot**2
+          grav = MAX(grav,0.0001d0)
+          dt_loc = dx / ctot*(sqrt(1d0+2d0*courant_factor*grav)-1d0)/grav
+
+       end if
+
+    endif
+
+    ! Fused block-wide reduction (4 sums + 1 min) in one pair of syncthreads.
+    call block_reduce_sum4_min1(mass_loc, ekin_loc, eint_loc, emag_loc, dt_loc)
+
+    ! One writer per block: no atomics.
+    if (tid == 0) then
+       part_mass(bid + 1) = mass_loc
+       part_ekin(bid + 1) = ekin_loc
+       part_eint(bid + 1) = eint_loc
+       part_emag(bid + 1) = emag_loc
+       part_dt  (bid + 1) = dt_loc
+    endif
+
+  end subroutine cmpdt_kernel_2
+  ! =========================================================================
+
+  ! =========================================================================
+  !> @brief
+  !> One pass of the hierarchical cmpdt reducer. Each block reads up to
+  !> blockDim%x consecutive inputs, does one block_reduce_sum4_min1, and
+  !> thread 0 writes ONE output per block. Called recursively (mirrors
+  !> block_scan+relaunches in gpu_scan) until a single output remains,
+  !> which is written to data_out(1:5).
+  attributes(global) subroutine cmpdt_reduce_kernel( &
+       in_mass, in_ekin, in_eint, in_emag, in_dt, n_in, &
+       out_mass, out_ekin, out_eint, out_emag, out_dt, &
+       data_out, do_final)
+    real(kind=8), device :: in_mass(*), in_ekin(*), in_eint(*), in_emag(*), in_dt(*)
+    real(kind=8), device :: out_mass(*), out_ekin(*), out_eint(*), out_emag(*), out_dt(*)
+    real(kind=8), device :: data_out(*)
+    integer(kind=4), value :: n_in
+    logical, value :: do_final
+
+    real(kind=8) :: s1, s2, s3, s4, m1
+    integer :: tid, bid, gid
+
+    tid = threadIdx%x
+    bid = blockIdx%x
+    gid = tid + (bid - 1) * blockDim%x
+
+    if (gid <= n_in) then
+       s1 = in_mass(gid)
+       s2 = in_ekin(gid)
+       s3 = in_eint(gid)
+       s4 = in_emag(gid)
+       m1 = in_dt(gid)
+    else
+       s1 = 0d0
+       s2 = 0d0
+       s3 = 0d0
+       s4 = 0d0
+       m1 = huge(0d0)
+    end if
+
+    call block_reduce_sum4_min1(s1, s2, s3, s4, m1)
+
+    if (tid == 1) then
+       if (do_final) then
+          data_out(1) = s1
+          data_out(2) = s2
+          data_out(3) = s3
+          data_out(4) = s4
+          data_out(5) = m1
+       else
+          out_mass(bid) = s1
+          out_ekin(bid) = s2
+          out_eint(bid) = s3
+          out_emag(bid) = s4
+          out_dt  (bid) = m1
+       end if
+    end if
+
+  end subroutine cmpdt_reduce_kernel
+  ! =========================================================================
+
+  ! =========================================================================
   attributes(global) subroutine gather_send_buffer(uold, uold_send, idx_send, num_send)
     real(kind=dp), device :: uold(1:twotondim,1:nvar,*)
     real(kind=dp), device :: uold_send(*)

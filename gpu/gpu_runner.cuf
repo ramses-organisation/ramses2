@@ -174,6 +174,154 @@ contains
   end subroutine gpu_cmpdt
 
   !> @brief
+  !> Two-step atomics-free variant of gpu_cmpdt. Step 1 (cmpdt_kernel_2)
+  !> writes 5 per-block partials into slices of the pre-allocated
+  !> prefix_sum buffer (reinterpreted as real(kind=8)). Step 2 is a
+  !> hierarchical reduce mirroring gpu_scan: cmpdt_reduce_kernel is
+  !> relaunched up to 3 times, each block doing one
+  !> block_reduce_sum4_min1 (recursive __shfl_down warp tree). No new
+  !> allocations, no atomics.
+  !>
+  !> Note: this routine clobbers prefix_sum; every existing scan user
+  !> writes prefix_sum before reading it, so no restore is needed.
+  subroutine gpu_cmpdt_2(sim, ilevel, mass, ekin, eint, emag, dt)
+    use, intrinsic :: iso_c_binding, only: c_f_pointer
+    use nvtx
+    use hydro_device, only: cmpdt_kernel_2, cmpdt_reduce_kernel
+    use ramses_commons, only: ramses_t
+    type(ramses_t), intent(inout) :: sim
+    integer(kind=4), intent(in) :: ilevel
+    real(kind=8), intent(inout) :: mass, ekin, eint, emag, dt
+
+    integer(kind=4) :: head_idx, num_octs
+    integer :: num_threads, num_blocks
+    integer :: block_size_r, n0, g0, g1
+    integer(kind=8) :: cap_doubles, need_doubles, base_B, base_C
+    real(kind=dp) :: gamma, smallr, smallc2, dx, courant_factor
+    real(kind=8), device, dimension(5) :: d_data ! mass, ekin, eint, emag, dt
+    real(kind=8), dimension(5) :: h_data
+
+    ! prefix_sum reinterpreted as a contiguous real(kind=8) scratch buffer
+    real(kind=8), device, pointer :: scratch(:)
+    real(kind=8), device, pointer :: A_mass(:), A_ekin(:), A_eint(:), A_emag(:), A_dt(:)
+    real(kind=8), device, pointer :: B_mass(:), B_ekin(:), B_eint(:), B_emag(:), B_dt(:)
+    real(kind=8), device, pointer :: C_mass(:), C_ekin(:), C_eint(:), C_emag(:), C_dt(:)
+    real(kind=8), device, pointer :: dummy(:)
+
+    courant_factor = sim%r%courant_factor
+    gamma = sim%r%gamma
+    smallr = sim%r%smallr
+    smallc2 = sim%r%smallc**2
+    dx = sim%r%boxlen/2**ilevel
+    dt = courant_factor*dx/sim%r%smallc
+
+    head_idx = sim%m%head(ilevel)
+    num_octs = sim%m%noct(ilevel)
+    num_threads = 256
+    num_blocks = (num_octs * twotondim + num_threads - 1 ) / num_threads
+
+    ! -- Alias prefix_sum as a real(kind=8) scratch buffer --
+    if (.not. allocated(prefix_sum)) then
+       write(*,*) 'gpu_cmpdt_2: prefix_sum not allocated'; stop
+    end if
+    cap_doubles = (int(size(prefix_sum), kind=8) * 4_8) / 8_8
+    call c_f_pointer(c_devloc(prefix_sum(1)), scratch, [cap_doubles])
+    call c_f_pointer(c_devloc(prefix_sum(1)), dummy,   [1_8])
+
+    ! -- Sizing of the three-level reduction tree --
+    block_size_r = 256
+    n0 = num_blocks
+    g0 = (n0 + block_size_r - 1) / block_size_r
+    g1 = (g0 + block_size_r - 1) / block_size_r
+
+    need_doubles = 5_8 * int(n0, kind=8)
+    if (n0 > block_size_r)                need_doubles = need_doubles + 5_8 * int(g0, kind=8)
+    if (g0 > block_size_r)                need_doubles = need_doubles + 5_8 * int(g1, kind=8)
+    if (need_doubles > cap_doubles) then
+       write(*,*) 'gpu_cmpdt_2: prefix_sum too small for scratch', need_doubles, cap_doubles; stop
+    end if
+
+    ! -- Region A (step-1 output): 5 x n0 doubles --
+    A_mass => scratch(0_8*n0 + 1_8 : 1_8*n0)
+    A_ekin => scratch(1_8*n0 + 1_8 : 2_8*n0)
+    A_eint => scratch(2_8*n0 + 1_8 : 3_8*n0)
+    A_emag => scratch(3_8*n0 + 1_8 : 4_8*n0)
+    A_dt   => scratch(4_8*n0 + 1_8 : 5_8*n0)
+
+    ! -- Region B (pass-1 output): 5 x g0 doubles, right after A --
+    base_B = 5_8 * int(n0, kind=8)
+    B_mass => scratch(base_B + 0_8*g0 + 1_8 : base_B + 1_8*g0)
+    B_ekin => scratch(base_B + 1_8*g0 + 1_8 : base_B + 2_8*g0)
+    B_eint => scratch(base_B + 2_8*g0 + 1_8 : base_B + 3_8*g0)
+    B_emag => scratch(base_B + 3_8*g0 + 1_8 : base_B + 4_8*g0)
+    B_dt   => scratch(base_B + 4_8*g0 + 1_8 : base_B + 5_8*g0)
+
+    ! -- Region C (pass-2 output): 5 x g1 doubles, right after B --
+    base_C = base_B + 5_8 * int(g0, kind=8)
+    C_mass => scratch(base_C + 0_8*g1 + 1_8 : base_C + 1_8*g1)
+    C_ekin => scratch(base_C + 1_8*g1 + 1_8 : base_C + 2_8*g1)
+    C_eint => scratch(base_C + 2_8*g1 + 1_8 : base_C + 3_8*g1)
+    C_emag => scratch(base_C + 3_8*g1 + 1_8 : base_C + 4_8*g1)
+    C_dt   => scratch(base_C + 4_8*g1 + 1_8 : base_C + 5_8*g1)
+
+    call nvtxStartRange("GPU cmpdt_2", color=0)!green
+
+    ! -- Step 1: per-cell work + fused block reduce; write A --
+    call cmpdt_kernel_2<<<num_blocks, num_threads>>>(grid, uold, bold, f, &
+        & constant_gravity, head_idx, num_octs, &
+        & A_mass, A_ekin, A_eint, A_emag, A_dt, &
+        & dx, gamma, smallr, smallc2, courant_factor, sim%r%induction &
+#ifdef TURB
+        & , fturb &
+#endif
+        & )
+
+    ! -- Step 2: hierarchical reduce, up to three passes (mirrors gpu_scan) --
+    if (n0 <= block_size_r) then
+       ! One pass: A -> data_out
+       call cmpdt_reduce_kernel<<<1, block_size_r>>>( &
+            A_mass, A_ekin, A_eint, A_emag, A_dt, n0, &
+            dummy, dummy, dummy, dummy, dummy, d_data, .true.)
+    else if (g0 <= block_size_r) then
+       ! Two passes: A -> B (g0 outputs), then B -> data_out
+       call cmpdt_reduce_kernel<<<g0, block_size_r>>>( &
+            A_mass, A_ekin, A_eint, A_emag, A_dt, n0, &
+            B_mass, B_ekin, B_eint, B_emag, B_dt, dummy, .false.)
+       call cmpdt_reduce_kernel<<<1, block_size_r>>>( &
+            B_mass, B_ekin, B_eint, B_emag, B_dt, g0, &
+            dummy, dummy, dummy, dummy, dummy, d_data, .true.)
+    else if (g0 <= block_size_r*block_size_r) then
+       ! Three passes: A -> B, B -> C (g1 outputs), C -> data_out
+       call cmpdt_reduce_kernel<<<g0, block_size_r>>>( &
+            A_mass, A_ekin, A_eint, A_emag, A_dt, n0, &
+            B_mass, B_ekin, B_eint, B_emag, B_dt, dummy, .false.)
+       call cmpdt_reduce_kernel<<<g1, block_size_r>>>( &
+            B_mass, B_ekin, B_eint, B_emag, B_dt, g0, &
+            C_mass, C_ekin, C_eint, C_emag, C_dt, dummy, .false.)
+       call cmpdt_reduce_kernel<<<1, block_size_r>>>( &
+            C_mass, C_ekin, C_eint, C_emag, C_dt, g1, &
+            dummy, dummy, dummy, dummy, dummy, d_data, .true.)
+    else
+       write(*,*) 'gpu_cmpdt_2: too many partials for 3-level reducer', n0
+       stop
+    end if
+
+    call nvtxEndRange()
+
+    ! move results to host
+    h_data(:) = d_data(:)
+
+    mass = h_data(1)
+    ekin = h_data(2)
+    eint = h_data(3)
+    emag = h_data(4)
+    dt = h_data(5)
+
+    call GPU_Error_Check(__FILE__, __LINE__)
+
+  end subroutine gpu_cmpdt_2
+
+  !> @brief
   !> Set uold equal to unew on a GPU
   !>
   !> @detail
