@@ -48,6 +48,8 @@ static id<MTLBuffer>               s_unew         = nil;
 static id<MTLBuffer>               s_bold         = nil;
 static id<MTLBuffer>               s_bnew         = nil;
 static id<MTLBuffer>               s_uct_velocity = nil;
+static id<MTLBuffer>               s_uct_face_product = nil;
+static bool                        s_uct_face_reuse_disabled = false;
 static id<MTLBuffer>               s_grid         = nil;
 static id<MTLBuffer>               s_nbor         = nil;
 static id<MTLBuffer>               s_hash_key     = nil;
@@ -86,6 +88,8 @@ static id<MTLComputePipelineState> s_pso_sync_hydro = nil;
 static id<MTLComputePipelineState> s_pso_grav_hydro = nil;
 static id<MTLComputePipelineState> s_pso_godunov      = nil;
 static id<MTLComputePipelineState> s_pso_uct_velocity = nil;
+static id<MTLComputePipelineState> s_pso_uct_face_product = nil;
+static id<MTLComputePipelineState> s_pso_uct_reuse = nil;
 static id<MTLComputePipelineState> s_pso_build_nbor   = nil;
 static id<MTLComputePipelineState> s_pso_scan_block        = nil;
 static id<MTLComputePipelineState> s_pso_scan_fixup        = nil;
@@ -204,6 +208,7 @@ static int s_ncachemax_mg = 0;
 static int s_hash_size_mg = 0;
 
 static int s_nvar = 5;   /* set in mtl_alloc_amr; used in mtl_blit_unew_to_uold */
+static int s_twotondim = 8;
 
 /* PSOs for particle kernels (part.metal) */
 static id<MTLComputePipelineState> s_pso_kick_drift_part      = nil;
@@ -298,6 +303,8 @@ extern "C" void mtl_init(void)
     s_pso_godunov      = make_pso(@"hydro_integrator_kernel");
 #ifdef MHD
     s_pso_uct_velocity = make_pso(@"uct_velocity_kernel");
+    s_pso_uct_face_product = make_pso(@"mhd_uct_face_product_kernel");
+    s_pso_uct_reuse = make_pso(@"hydro_integrator_uct_reuse_kernel");
 #endif
     s_pso_sync_hydro   = make_pso(@"sync_hydro_kernel");
     s_pso_grav_hydro   = make_pso(@"grav_hydro_kernel");
@@ -423,6 +430,7 @@ extern "C" void mtl_alloc_amr(int ngridmax, int ncachemax,
                                int nvar, int twotondim, int hash_size)
 {
     s_nvar = nvar;
+    s_twotondim = twotondim;
     s_ngridmax = ngridmax;
     s_hash_size = hash_size;
     int ntotal = ngridmax + ncachemax;
@@ -444,7 +452,6 @@ extern "C" void mtl_alloc_amr(int ngridmax, int ncachemax,
     NSUInteger b_bytes = (NSUInteger)ntotal * 6 * twotondim * sizeof(float);
     s_bold = [s_device newBufferWithLength:b_bytes options:MTLResourceStorageModeShared];
     s_bnew = [s_device newBufferWithLength:b_bytes options:MTLResourceStorageModeShared];
-    s_uct_velocity = [s_device newBufferWithLength:(NSUInteger)ngridmax * 3 * twotondim * 2 * sizeof(float) options:MTLResourceStorageModePrivate];
 #endif
     s_grid     = [s_device newBufferWithLength:grid_bytes
                                        options:MTLResourceStorageModeShared];
@@ -722,6 +729,17 @@ extern "C" void mtl_cmpdt(int head_idx, int num_octs,
     *dt   = result[4];
 }
 
+#ifdef MHD
+static bool mtl_uct_face_reuse_enabled(int ilevel, int levelmin, int levelmax)
+{
+    // Relative product indexing is valid only when this dispatch covers the complete periodic level.
+    if (!s_periodic_dev) return false;
+    int *periodic = (int *)s_periodic_dev.contents;
+    return ilevel == levelmin && ilevel == levelmax &&
+           periodic[0] != 0 && periodic[1] != 0 && periodic[2] != 0;
+}
+#endif
+
 /* -----------------------------------------------------------------------
  * mtl_godunov — dispatch the hydro or MHD integrator.
  * One threadgroup handles each subgrid.
@@ -731,7 +749,8 @@ extern "C" void mtl_godunov(int head_idx, int num_subgrids, int ngridmax,
                              float gamma, float smallr, float smallc2,
                              float dt, float dx, int slope,
 #ifdef MHD
-                             int slope_mag, float switch_llf_dmin, float switch_llf_pmin,
+                             int slope_mag, int riemann, int riemann2d,
+                             float switch_llf_dmin, float switch_llf_pmin,
                              int induction, float etamag,
 #else
                              int riemann,
@@ -750,29 +769,91 @@ extern "C" void mtl_godunov(int head_idx, int num_subgrids, int ngridmax,
     id<MTLCommandBuffer> cmd = [s_queue commandBuffer];
     id<MTLComputeCommandEncoder> enc;
 #ifdef MHD
-    enc = [cmd computeCommandEncoder];
-    [enc setComputePipelineState:s_pso_uct_velocity];
-    [enc setBuffer:s_grid         offset:0 atIndex:0];
-    [enc setBuffer:s_uold         offset:0 atIndex:1];
-    [enc setBuffer:s_bold         offset:0 atIndex:2];
-    [enc setBuffer:s_nbor         offset:0 atIndex:3];
-    [enc setBytes:&head_idx       length:sizeof(int)       atIndex:4];
-    [enc setBytes:&num_subgrids   length:sizeof(int)       atIndex:5];
-    [enc setBytes:&gamma          length:sizeof(float)     atIndex:6];
-    [enc setBytes:&smallr         length:sizeof(float)     atIndex:7];
-    [enc setBytes:&smallc2        length:sizeof(float)     atIndex:8];
-    [enc setBytes:&dt             length:sizeof(float)     atIndex:9];
-    [enc setBytes:&dx             length:sizeof(float)     atIndex:10];
-    [enc setBytes:&slope          length:sizeof(int)       atIndex:11];
-    [enc setBytes:&slope_mag      length:sizeof(int)       atIndex:12];
-    [enc setBytes:&switch_llf_dmin length:sizeof(float)    atIndex:13];
-    [enc setBytes:&switch_llf_pmin length:sizeof(float)    atIndex:14];
-    [enc setBytes:&induction      length:sizeof(int)       atIndex:15];
-    [enc setBytes:cg              length:3 * sizeof(float) atIndex:16];
-    [enc setBuffer:s_f_grav       offset:0                 atIndex:17];
-    [enc setBuffer:s_uct_velocity offset:0                 atIndex:18];
-    [enc dispatchThreadgroups:grid_size threadsPerThreadgroup:tg_size];
-    [enc endEncoding];
+    bool use_uct_face_reuse = !s_uct_face_reuse_disabled && riemann == MR_SOLVER_UCT_HLLD &&
+                              mtl_uct_face_reuse_enabled(ilevel, levelmin, levelmax);
+    if (riemann == MR_SOLVER_UCT_HLLD) {
+        if (use_uct_face_reuse) {
+            NSUInteger product_bytes = (NSUInteger)num_subgrids * MR_UCT_PRODUCT_FIELDS *
+                                       MR_UCT_PRODUCT_FACES * sizeof(float);
+            if (product_bytes > s_device.maxBufferLength) {
+                fprintf(stderr, "[metal] UCT face-product buffer exceeds maxBufferLength (%llu bytes); using legacy path\n",
+                        (unsigned long long)product_bytes);
+                s_uct_face_reuse_disabled = true;
+                use_uct_face_reuse = false;
+            }
+            if (use_uct_face_reuse && (!s_uct_face_product || s_uct_face_product.length < product_bytes)) {
+                s_uct_face_product = nil;
+                s_uct_face_product = [s_device newBufferWithLength:product_bytes
+                                                           options:MTLResourceStorageModePrivate];
+                if (!s_uct_face_product) {
+                    fprintf(stderr, "[metal] cannot allocate UCT face-product buffer (%llu bytes); using legacy path\n",
+                            (unsigned long long)product_bytes);
+                    s_uct_face_reuse_disabled = true;
+                    use_uct_face_reuse = false;
+                }
+            }
+        }
+        if (!use_uct_face_reuse) {
+            NSUInteger velocity_bytes = (NSUInteger)ngridmax * 3 * s_twotondim * 2 * sizeof(float);
+            if (velocity_bytes > s_device.maxBufferLength) {
+                fprintf(stderr, "[metal] UCT velocity buffer exceeds maxBufferLength (%llu bytes)\n",
+                        (unsigned long long)velocity_bytes);
+                exit(1);
+            }
+            if (!s_uct_velocity || s_uct_velocity.length < velocity_bytes) {
+                s_uct_velocity = [s_device newBufferWithLength:velocity_bytes
+                                                       options:MTLResourceStorageModePrivate];
+                if (!s_uct_velocity) {
+                    fprintf(stderr, "[metal] cannot allocate UCT velocity buffer (%llu bytes)\n",
+                            (unsigned long long)velocity_bytes);
+                    exit(1);
+                }
+            }
+        }
+        enc = [cmd computeCommandEncoder];
+        [enc setComputePipelineState:use_uct_face_reuse ? s_pso_uct_face_product : s_pso_uct_velocity];
+        [enc setBuffer:s_grid         offset:0 atIndex:0];
+        [enc setBuffer:s_uold         offset:0 atIndex:1];
+        [enc setBuffer:s_bold         offset:0 atIndex:2];
+        [enc setBuffer:s_nbor         offset:0 atIndex:3];
+        [enc setBytes:&head_idx       length:sizeof(int)       atIndex:4];
+        [enc setBytes:&num_subgrids   length:sizeof(int)       atIndex:5];
+        [enc setBytes:&gamma          length:sizeof(float)     atIndex:6];
+        [enc setBytes:&smallr         length:sizeof(float)     atIndex:7];
+        [enc setBytes:&smallc2        length:sizeof(float)     atIndex:8];
+        [enc setBytes:&dt             length:sizeof(float)     atIndex:9];
+        [enc setBytes:&dx             length:sizeof(float)     atIndex:10];
+        [enc setBytes:&slope          length:sizeof(int)       atIndex:11];
+        [enc setBytes:&slope_mag      length:sizeof(int)       atIndex:12];
+        [enc setBytes:&switch_llf_dmin length:sizeof(float)    atIndex:13];
+        [enc setBytes:&switch_llf_pmin length:sizeof(float)    atIndex:14];
+        [enc setBytes:&induction      length:sizeof(int)       atIndex:15];
+        [enc setBytes:cg              length:3 * sizeof(float) atIndex:16];
+        [enc setBuffer:s_f_grav       offset:0                 atIndex:17];
+        [enc setBuffer:use_uct_face_reuse ? s_uct_face_product : s_uct_velocity offset:0 atIndex:18];
+        [enc dispatchThreadgroups:grid_size threadsPerThreadgroup:tg_size];
+        [enc endEncoding];
+        if (use_uct_face_reuse) {
+            enc = [cmd computeCommandEncoder];
+            [enc setComputePipelineState:s_pso_uct_reuse];
+            [enc setBuffer:s_unew             offset:0 atIndex:0];
+            [enc setBuffer:s_bold             offset:0 atIndex:1];
+            [enc setBuffer:s_bnew             offset:0 atIndex:2];
+            [enc setBuffer:s_nbor             offset:0 atIndex:3];
+            [enc setBytes:&head_idx           length:sizeof(int)   atIndex:4];
+            [enc setBytes:&num_subgrids       length:sizeof(int)   atIndex:5];
+            [enc setBytes:&dt                 length:sizeof(float) atIndex:6];
+            [enc setBytes:&dx                 length:sizeof(float) atIndex:7];
+            [enc setBytes:&slope_mag          length:sizeof(int)   atIndex:8];
+            [enc setBytes:&etamag             length:sizeof(float) atIndex:9];
+            [enc setBuffer:s_uct_face_product offset:0             atIndex:10];
+            [enc dispatchThreadgroups:grid_size threadsPerThreadgroup:tg_size];
+            [enc endEncoding];
+            [cmd commit];
+            [cmd waitUntilCompleted];
+            return;
+        }
+    }
 #endif
     enc = [cmd computeCommandEncoder];
     [enc setComputePipelineState:s_pso_godunov];
@@ -797,13 +878,15 @@ extern "C" void mtl_godunov(int head_idx, int num_subgrids, int ngridmax,
     [enc setBytes:&dx           length:sizeof(float)     atIndex:17];
     [enc setBytes:&slope        length:sizeof(int)       atIndex:18];
     [enc setBytes:&slope_mag    length:sizeof(int)       atIndex:19];
-    [enc setBytes:&switch_llf_dmin length:sizeof(float)  atIndex:20];
-    [enc setBytes:&switch_llf_pmin length:sizeof(float)  atIndex:21];
-    [enc setBytes:&induction    length:sizeof(int)       atIndex:22];
-    [enc setBytes:&etamag       length:sizeof(float)     atIndex:23];
-    [enc setBytes:cg            length:3 * sizeof(float) atIndex:24];
-    [enc setBuffer:s_f_grav     offset:0                 atIndex:25];
-    [enc setBuffer:s_uct_velocity offset:0               atIndex:26];
+    [enc setBytes:&riemann      length:sizeof(int)       atIndex:20];
+    [enc setBytes:&riemann2d    length:sizeof(int)       atIndex:21];
+    [enc setBytes:&switch_llf_dmin length:sizeof(float)  atIndex:22];
+    [enc setBytes:&switch_llf_pmin length:sizeof(float)  atIndex:23];
+    [enc setBytes:&induction    length:sizeof(int)       atIndex:24];
+    [enc setBytes:&etamag       length:sizeof(float)     atIndex:25];
+    [enc setBytes:cg            length:3 * sizeof(float) atIndex:26];
+    [enc setBuffer:s_f_grav     offset:0                 atIndex:27];
+    [enc setBuffer:s_uct_velocity ? s_uct_velocity : s_uold offset:0 atIndex:28];
 #else
     [enc setBuffer:s_nbor  offset:0 atIndex:3];
     [enc setBytes:&head_idx     length:sizeof(int)       atIndex:4];
