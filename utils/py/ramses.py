@@ -5,6 +5,7 @@ from scipy.io import FortranFile
 from astropy.io import ascii
 import os
 import re
+import glob
 
 import time
 
@@ -14,7 +15,7 @@ class Cool:
     """
     def __init__(self,n1,n2):
         """
-        This function initialize the cooling table.
+        This function initialize the cooling table. 
         Args:
             n1: number of points for the gas density axis
             n2: number of points for the gas temperature axis
@@ -39,7 +40,7 @@ def clean_spec(dat,n1,n2):
     return dat
 
 def rd_cool(filename):
-    """This function reads a RAMSES cooling table file (unformatted Fortran binary)
+    """This function reads a RAMSES cooling table file (unformatted Fortran binary) 
     and store it in a cooling object.
 
     Args:
@@ -131,7 +132,7 @@ def test_cool(filename):
                 axis[id,it].set_xlabel("log time [Myr]")
             if it==n_t-1 and id==n_d-1:
                 axis[id,it].legend(loc="lower right")
-            axis[id,it].set_title('log nH = ' + str(np.log10(nh[id])) +
+            axis[id,it].set_title('log nH = ' + str(np.log10(nh[id])) + 
                                   ' log T = ' + str(np.log10(data[id,it,ix,0,0])), y=0.9, va="top")
             i=i+1
 
@@ -140,7 +141,7 @@ class Map:
     """
     def __init__(self,nx,ny):
         """This function initalize a map object.
-
+        
         Args:
             nx: number of pixels in the x direction
             ny: number of pixels in the y direction
@@ -170,7 +171,7 @@ def rd_map(filename):
         t, dx, dy, dz = f.read_reals('f8')
         nx, ny = f.read_ints('i')
         dat = f.read_reals('f4')
-
+    
     dat = np.array(dat)
     dat = dat.reshape(ny, nx)
     m = Map(nx,ny)
@@ -178,7 +179,7 @@ def rd_map(filename):
     m.time = t
     m.nx = nx
     m.ny = ny
-
+    
     return m
 
 class Histo:
@@ -209,7 +210,7 @@ def rd_histo(filename):
         import ramses as ram
         h = ram.rd_histo("histo.dat")
         plt.imshow(h.data,origin="lower")
-
+    
     Authors: Romain Teyssier (Princeton University, October 2022)
     """
     with FortranFile(filename, 'r') as f:
@@ -255,10 +256,10 @@ class Part:
         if(peak):
             self.halo_id = np.zeros([nnp],dtype=np.int32)
             self.peak_id = np.zeros([nnp],dtype=np.int32)
-
+            
 def rd_part(nout,**kwargs):
-    """This function reads a RAMSES particle file (unformatted Fortran binary)
-    as produced by the RAMSES code in the snapshot directory output_00*
+    """This function reads a RAMSES particle file (unformatted Fortran binary) 
+    as produced by the RAMSES code in the snapshot directory output_00* 
     and store it in a variable containing all the particle information (Part object).
 
     Args:
@@ -288,10 +289,10 @@ def rd_part(nout,**kwargs):
         import ramses as ram
         p = ram.rd_part(12,center=[0.5,0.5,0.5],radius=0.1)
         print(np.max(p.pos[0]))
-
+    
     Authors: Romain Teyssier (Princeton University, October 2022)
     """
-
+    
     prefix = kwargs.get("prefix","part")
     backup = kwargs.get("backup",False)
     center = kwargs.get("center")
@@ -346,7 +347,7 @@ def rd_part(nout,**kwargs):
     p.ndim = ndim
 
     ipart = 0
-    for	icpu in	cpulist:
+    for icpu in cpulist:
         car2 = str(icpu).zfill(5)
         if(backup):
             filename = path+"/backup_"+car1+prefix2+car2
@@ -355,8 +356,8 @@ def rd_part(nout,**kwargs):
 
         npart2 = np.fromfile(filename,dtype=np.int32,count=1,offset=4)[0]
 
-        offset = np.int64(8) #prevent overflow
-
+        offset = np.int64(8) # prevent overflow
+        
         # read particle positions
         for idim in range(0,ndim):
             if(backup):
@@ -491,7 +492,7 @@ def rd_part(nout,**kwargs):
         ipart = ipart + npart2
 
     if(peak):
-        prefix2="/peak_part."
+        prefix2="/peak_part."        
         if(star):
             prefix2="/peak_star."
         if(sink):
@@ -503,7 +504,7 @@ def rd_part(nout,**kwargs):
             car2 = str(icpu).zfill(5)
             filename = path+"/output_"+car1+prefix2+car2
             npart2 = np.fromfile(filename,dtype=np.int32,count=1,offset=4)[0]
-            offset = 8
+            offset = np.int64(8)
 
             # read particle halo id
             hid = np.fromfile(filename,dtype=np.int32,count=npart2,offset=offset)
@@ -548,8 +549,8 @@ def rd_part(nout,**kwargs):
         if(tree):
             p.birth_date = p.birth_date[r < radius]
             p.merging_date = p.merging_date[r < radius]
-            p.merging_id = p.merging_age[r < radius]
-            p.tracking_id = p.tracking_age[r < radius]
+            p.merging_id = p.merging_id[r < radius]
+            p.tracking_id = p.tracking_id[r < radius]
         if(peak):
             p.peak_id = p.peak_id[r < radius]
             p.halo_id = p.halo_id[r < radius]
@@ -558,229 +559,6 @@ def rd_part(nout,**kwargs):
             print(txt)
 
     return p
-
-class LightconeReader:
-
-    @staticmethod
-    def rd_metadata(path, verbose=False):
-        """
-        Read the lightcone shell metadata from the .txt file
-
-        Returns:
-            Dictionary with keys: 'npart', 'aexp_old', 'aexp'
-        """
-        if verbose:
-            print(f"Reading metadata from {path}")
-        with open(path, 'r') as file:
-            npart = int(file.readline().strip())
-            aexp_old = float(file.readline().strip())
-            aexp = float(file.readline().strip())
-
-        if verbose:
-            print(f"Found {npart} particles")
-
-        return {'npart': npart, 'aexp_old': aexp_old, 'aexp': aexp}
-
-    @staticmethod
-    def rd_part(path, nproperties=7, verbose=False):
-        """
-        Read the lightcone shell from the output directory.
-        nproperties: number of non-idp properties per particle (default 7 for x,y,z,vx,vy,vz,mass)
-
-        Returns:
-            idp: numpy array of particle IDs (int32) with shape (npart,)
-            properties: numpy array of properties (float32) with shape (nproperties, npart)
-                       where rows are x, y, z, vx, vy, vz, mass (depending on nproperties)
-        """
-        # Construct metadata file path by adding .txt extension
-        if verbose:
-            print(f"Reading lightcone data from {path}")
-        txt_path = path + ".txt"
-        metadata = LightconeReader.rd_metadata(txt_path, verbose=verbose)
-
-        npart = metadata['npart']
-
-        # Read the raw data
-        with open(path, 'rb') as f:
-            # Read particle IDs first (8 bytes each)
-            # idp_data = np.frombuffer(f.read(0 * npart), dtype=np.int32) # use this version when processing old output without idp
-            idp_data = np.frombuffer(f.read(4 * npart), dtype=np.int32)
-
-            # Read the remaining properties (positions, velocities, masses) (4 bytes each)
-            real_data = np.frombuffer(f.read(4 * nproperties * npart), dtype=np.float32)
-            real_data = real_data.reshape(nproperties, npart)
-
-        return idp_data, real_data
-
-    @staticmethod
-    def rd_cell(path, nproperties=8, verbose=False):
-        """
-        Read the lightcone shell from the output directory.
-        nproperties: number of properties per cell (default 9 for x,y,z,rho,phi,accelx,accely,accelz,dphidt)
-
-        Returns:
-            properties: numpy array of properties (float32) with shape (nproperties, ncell)
-                       where rows are x, y, z, rho, phi, accelx, accely, accelz, dphidt (depending on nproperties)
-        """
-        # Construct metadata file path by adding .txt extension
-        if verbose:
-            print(f"Reading lightcone data from {path}")
-        txt_path = path + ".txt"
-        metadata = LightconeReader.rd_metadata(txt_path, verbose=verbose)
-
-        ncell = metadata['npart']
-
-        # Read the raw data
-        with open(path, 'rb') as f:
-
-            # Read the remaining properties (positions, velocities, masses) (4 bytes each)
-            real_data = np.frombuffer(f.read(4 * nproperties * ncell), dtype=np.float32)
-            real_data = real_data.reshape(nproperties, ncell)
-
-        return real_data
-
-    @staticmethod
-    def rd_positions_as_healpix(path, nside, verbose=False):
-        """
-        Read the lightcone shell from the output directory and convert it to a Healpix map.
-        nside: Healpix resolution parameter
-        """
-        import healpy as hp
-
-        # Read only the position data (properties x, y, z)
-        idp, properties = LightconeReader.rd_part(path, nproperties=3, verbose=verbose)
-        x, y, z = properties[0], properties[1], properties[2]  # x, y, z are the first 3 properties
-
-        # Convert Cartesian coordinates to spherical coordinates
-        # x is the depth (cone axis), y and z are the transverse coordinates
-        r = np.sqrt(x**2 + y**2 + z**2)
-        theta = np.pi/2 - np.arcsin(z / r)  # polar angle from x-axis
-        phi = np.arcsin(y / r)    # azimuthal angle in y-z plane
-
-        # Create HEALPix map
-        npix = hp.nside2npix(nside)
-        healpix_map = np.zeros(npix)
-
-        # Convert spherical coordinates to HEALPix pixel indices
-        pix_indices = hp.ang2pix(nside, theta, phi)
-
-        # Count particles in each pixel
-        unique_pix, counts = np.unique(pix_indices, return_counts=True)
-        healpix_map[unique_pix] = counts
-
-        return healpix_map
-
-    @staticmethod
-    def get_shells(path, verbose=False):
-        """
-        Get all lightcone shell information from the lightcone directory.
-        Looks for files named 'part_xxxxx' and 'tree_xxxxx' and returns shell information.
-
-        Args:
-            path: Path to the lightcone directory
-            verbose: Print debug information
-
-        Returns:
-            List of dictionaries with shell information, sorted by nstep in descending order
-            (largest nout corresponds to shell closest to observer)
-
-            Each dictionary contains:
-            - 'nstep': shell number (int)
-            - 'part_file': path to part binary file (str, or None if doesn't exist)
-            - 'part_metadata': path to part .txt file (str, or None if doesn't exist)
-            - 'part_size': size of part binary file in bytes (int, or None if doesn't exist)
-            - 'tree_file': path to tree binary file (str, or None if doesn't exist)
-            - 'tree_metadata': path to tree .txt file (str, or None if doesn't exist)
-            - 'tree_size': size of tree binary file in bytes (int, or None if doesn't exist)
-            - 'grav_file': path to grav binary file (str, or None if doesn't exist)
-            - 'grav_metadata': path to grav .txt file (str, or None if doesn't exist)
-            - 'grav_size': size of grav binary file in bytes (int, or None if doesn't exist)
-        """
-        # Check if path exists
-        if not os.path.exists(path):
-            if verbose:
-                print(f"Path {path} does not exist")
-            return []
-
-        # Define patterns for each file type
-        patterns = {
-            'part_file': re.compile(r'^part_(\d{5})$'),
-            'part_metadata': re.compile(r'^part_(\d{5})\.txt$'),
-            'tree_file': re.compile(r'^tree_(\d{5})$'),
-            'tree_metadata': re.compile(r'^tree_(\d{5})\.txt$'),
-            'grav_file': re.compile(r'^grav_(\d{5})$'),
-            'grav_metadata': re.compile(r'^grav_(\d{5})\.txt$')
-        }
-
-        shells = {}  # Dictionary to collect shell information by nstep
-
-        try:
-            # Loop over all files in the directory
-            for filename in os.listdir(path):
-                filepath = os.path.join(path, filename)
-                if not os.path.isfile(filepath):
-                    continue
-
-                # Check each pattern
-                for file_type, pattern in patterns.items():
-                    match = pattern.match(filename)
-                    if match:
-                        nstep = int(match.group(1))
-
-                        # Initialize shell entry if needed
-                        if nstep not in shells:
-                            shells[nstep] = {'nstep': nstep}
-
-                        # Store file path
-                        shells[nstep][file_type] = filepath
-
-                        # Store file size for binary files
-                        if file_type in ['part_file', 'tree_file']:
-                            try:
-                                shells[nstep][file_type.replace('_file', '_size')] = os.path.getsize(filepath)
-                                if verbose:
-                                    print(f"Found {file_type} shell {nstep}: {os.path.getsize(filepath)/1024**2:.2f} MB")
-                            except OSError:
-                                if verbose:
-                                    print(f"Warning: Could not get size for {file_type} shell {nstep}")
-                        break
-
-        except OSError as e:
-            if verbose:
-                print(f"Error reading directory {path}: {e}")
-            return []
-
-        # Convert to list and sort by nstep in descending order
-        shell_list = list(shells.values())
-        shell_list.sort(key=lambda x: x['nstep'], reverse=True)
-
-        # Fill in None values for missing fields
-        for shell in shell_list:
-            for field in ['part_file', 'part_metadata', 'part_size', 'tree_file', 'tree_metadata', 'tree_size']:
-                if field not in shell:
-                    shell[field] = None
-
-        # Print statistics only in verbose mode
-        if verbose and shell_list:
-            part_shells = [s for s in shell_list if s['part_file'] is not None]
-            tree_shells = [s for s in shell_list if s['tree_file'] is not None]
-            grav_shells = [s for s in shell_list if s['grav_file'] is not None]
-
-            print(f"Found {len(shell_list)} total shells ({len(part_shells)} part, {len(tree_shells)} tree)")
-
-            if part_shells:
-                total_part_size = sum(s['part_size'] for s in part_shells if s['part_size'] is not None)
-                print(f"Part files total size: {total_part_size/1024**3:.2f} GB")
-
-            if tree_shells:
-                total_tree_size = sum(s['tree_size'] for s in tree_shells if s['tree_size'] is not None)
-                print(f"Tree files total size: {total_tree_size/1024**3:.2f} GB")
-
-            if grav_shells:
-                total_grav_size = sum(s['grav_size'] for s in grav_shells if s['grav_size'] is not None)
-                print(f"Grav files total size: {total_grav_size/1024**3:.2f} GB")
-
-        return shell_list
 
 class Level:
     def __init__(self,nndim):
@@ -820,11 +598,11 @@ def rd_amr(nout,**kwargs):
     amr=[]
     for ilevel in range(0,nlevelmax):
         amr.append(Level(ndim))
-
+        
     amr[0].boxlen = i.boxlen
-
+    
     numbl = np.zeros([nlevelmax,ncpu],dtype=np.int32)
-
+    
     # Reading and computing total AMR grids count
     for icpu in cpulist:
 
@@ -871,15 +649,15 @@ def rd_amr(nout,**kwargs):
             # Store grid Cartesian index
             for idim in range(0,ndim):
                 amr[ilevel].xg[idim,iskip[ilevel]:iskip[ilevel]+ncache] = transfer[idim]
-
+                
             # Store cell refinement map
             refined_int = transfer[ndim]
             for ind in range(0,2**ndim):
                 amr[ilevel].refined[ind,iskip[ilevel]:iskip[ilevel]+ncache] = (refined_int >> ind) & 1
-
+            
             offset = offset + ncache*nvar*4
             iskip[ilevel] = iskip[ilevel] + ncache
-
+            
     return amr
 
 class Hydro:
@@ -921,7 +699,7 @@ def rd_hydro(nout,**kwargs):
         filename = path+"/output_"+car1+"/"+prefix+".00001"
 
     nvar = np.fromfile(filename,dtype=np.int32,count=1,offset=4)[0]
-
+    
     txt = "Found nvar="+str(nvar)
     print(txt)
     print("Reading "+prefix+" data...")
@@ -930,9 +708,9 @@ def rd_hydro(nout,**kwargs):
     for ilevel in range(0,nlevelmax):
         hydro.append(Hydro(ndim,nvar))
         hydro[ilevel].level = ilevel
-
+        
     numbl = np.zeros([nlevelmax,ncpu],dtype=np.int32)
-
+    
     # Reading and computing total AMR grids count
     for icpu in cpulist:
 
@@ -955,7 +733,7 @@ def rd_hydro(nout,**kwargs):
 
     iskip = np.zeros(nlevelmax, dtype=int)
     nvartot = nvar*2**ndim
-
+    
     # Reading and storing data
     for icpu in cpulist:
 
@@ -966,7 +744,7 @@ def rd_hydro(nout,**kwargs):
             filename = path+"/output_"+car1+"/"+prefix+"."+car2
 
         offset = 16 + 4*(nlevelmax+1-levelmin)
-
+        
         for ilevel in range(levelmin-1,nlevelmax):
             ncache = numbl[ilevel,icpu-1]
 
@@ -975,7 +753,7 @@ def rd_hydro(nout,**kwargs):
             else:
                 transfer = np.fromfile(filename,dtype=np.float32,count=nvartot*ncache,offset=offset)
 
-            transfer = np.reshape(transfer,(ncache,nvar,2**ndim))
+            transfer = np.reshape(transfer,(ncache,nvar,2**ndim))            
             transfer = np.transpose(transfer,(1,2,0))
 
             # Store cell hydro variables
@@ -1010,9 +788,9 @@ def mk_image(x,y,dx,var):
     nlev = int(np.log(dxmax/dxmin)/np.log(2))+1
 
     print("Making image of size: ",nx,ny)
-
+    
     image = np.zeros((nx,ny))
-
+    
     for lev in range(0,nlev):
 
         dxloc = dxmax/2**lev
@@ -1066,9 +844,9 @@ def mk_cube(x,y,z,dx,var):
     nlev = int(np.log(dxmax/dxmin)/np.log(2))+1
 
     print("Making cube of size: ",nx,ny,nz)
-
+    
     cube = np.zeros((nx,ny,nz))
-
+    
     for lev in range(0,nlev):
 
         dxloc = dxmax/2**lev
@@ -1191,8 +969,8 @@ class Cell:
         self.level = np.empty(shape=(0),dtype=np.int8)
 
 def rd_cell(nout,**kwargs):
-    """This function reads RAMSES AMR and hydro files (unformatted Fortran binary)
-    as produced by the RAMSES code in the snapshot directory output_00*
+    """This function reads RAMSES AMR and hydro files (unformatted Fortran binary) 
+    as produced by the RAMSES code in the snapshot directory output_00* 
     and store it in a variable containing all the hydro leaf cells information (Cell object).
 
     Args:
@@ -1221,7 +999,7 @@ def rd_cell(nout,**kwargs):
 
     Authors: Romain Teyssier (Princeton University, October 2022)
     """
-
+    
     path = kwargs.get("path","./")
     center = kwargs.get("center")
     radius = kwargs.get("radius")
@@ -1234,7 +1012,7 @@ def rd_cell(nout,**kwargs):
     ndim = a[0].ndim
     nvar = h[0].nvar
     boxlen = a[0].boxlen
-
+    
     offset = np.zeros([ndim,2**ndim])
     if (ndim == 1):
         offset[0,:]=[-0.5,0.5]
@@ -1311,9 +1089,9 @@ def rd_cell(nout,**kwargs):
         c.x = c.x[ind]
         c.dx = c.dx[ind]
         c.level = c.level[ind]
-        for  ivar in range(0,nvar):
+        for ivar in range(0,nvar):
             c.u[ivar]=c.u[ivar,ind]
-
+        
     return c
 
 def save_cell(c,filename):
@@ -1376,7 +1154,7 @@ def rd_log(filename,**kwargs):
         import ramses as ram
         r = ram.rd_log("run.log")
         plt.plot(r["x"],r["d"]))
-
+    
     Authors: Romain Teyssier (Princeton University, October 2022)
     """
     cmd="grep -n Output "+filename+" > /tmp/out.txt"
@@ -1411,11 +1189,12 @@ def rd_log(filename,**kwargs):
 class Info:
     def __init__(self,nncpu):
         self.bound_key = np.zeros(shape=(nncpu+1),dtype=np.double)
-
+        
 def rd_info(nout,**kwargs):
-
+    
     backup = kwargs.get("backup",False)
     path = kwargs.get("path","./")
+    units = kwargs.get("units",False)
 
     car1 = str(nout).zfill(5)
     if(backup):
@@ -1432,26 +1211,77 @@ def rd_info(nout,**kwargs):
 
     i = Info(ncpu)
 
+    i.path=path
+    i.nout=nout
     i.ncpu=ncpu
     i.ndim=int(info[2][1])
     i.levelmin=int(info[3][1])
     i.nlevelmax=int(info[4][1])
+    #
     i.boxlen=info[7][1]
     i.time=info[8][1]
     i.texp=info[9][1]
     i.aexp=info[10][1]
+    i.redshift= 0.0 if (1.0/i.aexp)-1.0 < 0 else (1.0/i.aexp)-1.0 
+    #
     i.H0=info[11][1]
+    i.h= i.H0 / 100.0 
+    #
     i.omega_m=info[12][1]
     i.omega_l=info[13][1]
     i.omega_k=info[14][1]
     i.omega_b=info[15][1]
     i.gamma=info[16][1]
+    #
     i.unit_l=info[17][1]
     i.unit_d=info[18][1]
     i.unit_t=info[19][1]
+    i.unit_v = i.unit_l / i.unit_t
+    i.unit_m = i.unit_d * i.unit_l**3
+
+    i.G = 3 / (8 * np.pi) * i.omega_m * i.aexp # gravitational constant in code units
+    i.rho_m = 1.0
+
+    if units:
+        import astropy.units as u
+        import astropy.constants as const
+
+        # convert to physical units
+        i.unit_l *= u.cm
+        i.unit_d *= u.g / u.cm**3
+        i.unit_t *= u.s
+        i.unit_v *= u.cm / u.s
+        i.unit_m *= u.g 
+        
+        i.H0     *= u.km / u.s / u.Mpc
+        i.boxlen *= i.unit_l
+        i.time   *= i.unit_t 
+        i.texp   *= i.unit_t
+
+        i.c = const.c.to(u.cm / u.s).value / i.unit_v.value # speed of light in code units
+
 
     # Get the temperature conversion
     i.unit_T2 = ((i.unit_l / i.unit_t)**2) * 1.6605390e-24 / 1.3806490e-16
+
+    # Read all particle-type header files (*_header.txt) in the output
+    # directory and store the total number of particles of each type as an
+    # info attribute named "n"+prefix (e.g. part_header.txt -> i.npart,
+    # tree_header.txt -> i.ntree, peak_part_header.txt -> i.npeak_part).
+    # Non particle-type headers (e.g. grav_header.txt) are skipped.
+    outdir = os.path.dirname(filename)
+    i.nheader = {}
+    for header_file in sorted(glob.glob(os.path.join(outdir,"*_header.txt"))):
+        prefix = os.path.basename(header_file)[:-len("_header.txt")]
+        with open(header_file) as f:
+            lines = [line.strip() for line in f]
+        # only particle-type headers report a total particle count
+        if "Total number of particles" not in lines:
+            continue
+        idx = lines.index("Total number of particles")
+        nparticles = int(lines[idx+1])
+        setattr(i,"n"+prefix,nparticles)
+        i.nheader[prefix] = nparticles
 
     rd_rt_info = kwargs.get("rt",False)
     if rd_rt_info:
@@ -1487,7 +1317,7 @@ def rd_info(nout,**kwargs):
     return i
 
 def hilbert3d(x,y,z,bit_length):
-
+    
     state_diagram = [ 1, 2, 3, 2, 4, 5, 3, 5,
                       0, 1, 3, 2, 7, 6, 4, 5,
                       2, 6, 0, 7, 8, 8, 0, 7,
@@ -1522,19 +1352,19 @@ def hilbert3d(x,y,z,bit_length):
     y_bit_mask = np.zeros(bit_length  ,dtype="bool")
     z_bit_mask = np.zeros(bit_length  ,dtype="bool")
     i_bit_mask = np.zeros(3*bit_length,dtype=bool)
-
+    
     for ip in  range(0,n):
-
+        
         for i in range(0,bit_length):
             x_bit_mask[i] = x[ip] & (1 << i)
             y_bit_mask[i] = y[ip] & (1 << i)
             z_bit_mask[i] = z[ip] & (1 << i)
-
+            
         for i in range(0,bit_length):
             i_bit_mask[3*i+2] = x_bit_mask[i]
             i_bit_mask[3*i+1] = y_bit_mask[i]
             i_bit_mask[3*i  ] = z_bit_mask[i]
-
+            
         cstate = 0
         for i in range(bit_length-1,-1,-1):
             b2 = 0
@@ -1553,46 +1383,46 @@ def hilbert3d(x,y,z,bit_length):
             i_bit_mask[3*i+1] = hdigit & (1 << 1)
             i_bit_mask[3*i  ] = hdigit & (1 << 0)
             cstate = nstate
-
+            
         order[ip]= 0
         for i in range(0,3*bit_length):
             b0 = 0
             if (i_bit_mask[i]):
                 b0 = 1
             order[ip] = order[ip] + float(b0)*2.**i
-
+                
     return order
 
 def hilbert2d(x,y,bit_length):
-
-    state_diagram = [ 1, 0, 2, 0,
-                      0, 1, 3, 2,
-                      0, 3, 1, 1,
-                      0, 3, 1, 2,
-                      2, 2, 0, 3,
-                      2, 1, 3, 0,
-                      3, 1, 3, 2,
+    
+    state_diagram = [ 1, 0, 2, 0, 
+                      0, 1, 3, 2, 
+                      0, 3, 1, 1, 
+                      0, 3, 1, 2, 
+                      2, 2, 0, 3, 
+                      2, 1, 3, 0, 
+                      3, 1, 3, 2, 
                       2, 3, 1, 0 ]
-
-    state_diagram = np.array(state_diagram)
+    
+    state_diagram = np.array(state_diagram)    
     state_diagram = state_diagram.reshape((4,2,4), order='F')
-
+    
     n = len(x)
     order = np.zeros(n,dtype="double")
     x_bit_mask = np.zeros(bit_length  ,dtype="bool")
     y_bit_mask = np.zeros(bit_length  ,dtype="bool")
     i_bit_mask = np.zeros(2*bit_length,dtype=bool)
-
+    
     for ip in  range(0,n):
-
+        
         for i in range(0,bit_length):
             x_bit_mask[i] = bool(x[ip] & (1 << i))
             y_bit_mask[i] = bool(y[ip] & (1 << i))
-
+            
         for i in range(0,bit_length):
             i_bit_mask[2*i+1] = x_bit_mask[i]
             i_bit_mask[2*i  ] = y_bit_mask[i]
-
+            
         cstate = 0
         for i in range(bit_length-1,-1,-1):
             b1 = 0
@@ -1607,14 +1437,14 @@ def hilbert2d(x,y,bit_length):
             i_bit_mask[2*i+1] = hdigit & (1 << 1)
             i_bit_mask[2*i  ] = hdigit & (1 << 0)
             cstate = nstate
-
+            
         order[ip]= 0
         for i in range(0,2*bit_length):
             b0 = 0
             if (i_bit_mask[i]):
                 b0 = 1
             order[ip] = order[ip] + float(b0)*2.**i
-
+                
     return order
 
 def get_cpu_list(info,**kwargs):
@@ -1623,7 +1453,7 @@ def get_cpu_list(info,**kwargs):
     radius = kwargs.get("radius")
     center = np.array(center)
     radius = float(radius)
-
+    
     for ilevel in range(0,info.nlevelmax):
         dx = 1/2**ilevel
         if (dx < 2*radius/info.boxlen):
@@ -1650,7 +1480,7 @@ def get_cpu_list(info,**kwargs):
     else:
         ndom = 1
         order_min = np.array([0.])
-
+        
     bounding_min = order_min*dkey
     bounding_max = (order_min+1)*dkey
 
@@ -1677,7 +1507,7 @@ def get_cpu_list(info,**kwargs):
     return cpu_list
 
 def visu(x,y,dx,v,**kwargs):
-    '''The simple visualization function visu() make a 2D scatter plot from RAMSES AMR data.
+    '''The simple visualization function visu() make a 2D scatter plot from RAMSES AMR data. 
 
     Args:
 
@@ -1689,7 +1519,7 @@ def visu(x,y,dx,v,**kwargs):
     Optional args:
 
         vmin: minimum value for the input array v to use in the color range
-        vmax: maximum value for the input array v to use in the color range
+        vmax: maximum value for the input array v to use in the color range 
         log: when set, use the log of the input array v in the color range
         colorbar: when True, draw a colorbar (default: True)
         log_floor: lower bound applied to |v| before log10 (default 0)
@@ -1701,7 +1531,7 @@ def visu(x,y,dx,v,**kwargs):
 
     Example:
 
-        Example for a 2D or 3D RAMSES dataset using variable c from the object Cell.
+        Example for a 2D or 3D RAMSES dataset using variable c from the object Cell. 
         import ramses as ram
         c=ram.rd_cell(2)
         ram.visu(c.x[0],c.x[1],c.dx,c.u[0],sort=c.u[0],log=1,vmin=-3,vmax=1)
@@ -1713,7 +1543,7 @@ def visu(x,y,dx,v,**kwargs):
     xmax=np.max(x+dx/2)
     ymin=np.min(y-dx/2)
     ymax=np.max(y+dx/2)
-
+    
     log = kwargs.get("log",None)
     vmin = kwargs.get("vmin",None)
     vmax = kwargs.get("vmax",None)
@@ -1722,7 +1552,7 @@ def visu(x,y,dx,v,**kwargs):
     grid = kwargs.get("grid",None)
     log_floor = kwargs.get("log_floor",0)
     show_colorbar = kwargs.get("colorbar",True)
-
+    
     if( not (log is None)):
         # Standard log scaling: log data; transform limits consistently
         v = np.log10(np.maximum(np.abs(v), float(log_floor)))
@@ -1740,13 +1570,13 @@ def visu(x,y,dx,v,**kwargs):
 
     olddpi = plt.rcParams['figure.dpi']
     plt.rcParams['figure.dpi'] = 58
-    px = 1/plt.rcParams['figure.dpi']
+    px = 1/plt.rcParams['figure.dpi'] 
     fig, ax = plt.subplots(figsize=(1000*px,1000*px))
     ax.set_xlim([xmin,xmax])
     ax.set_ylim([ymin,ymax])
     plt.subplots_adjust(left=0.1, right=0.9, top=0.9, bottom=0.1)
     plt.scatter(x,y,s=0.0001)
-    rescale=np.maximum(xmax-xmin,ymax-ymin)
+    rescale=np.maximum(xmax-xmin,ymax-ymin)        
     ax.set_aspect("equal")
     edgec = None
     linew = None
@@ -1760,17 +1590,17 @@ def visu(x,y,dx,v,**kwargs):
     plt.rcParams['figure.dpi'] = olddpi
 
 def mk_movie(**kwargs):
-    '''The function mk_movie() takes 2D data files containing maps and converts them into a sequence of images,
+    '''The function mk_movie() takes 2D data files containing maps and converts them into a sequence of images, 
     before combining them into a movie. It requires a standard set of python packages and the Linux packages
     ffmpeg and convert (ImageMagick).
-
+    
     Args:
-
+    
         start: starting index of the sequence of numpy array you wish to turn into image frames.
 
-        stop: number of arrays you wish to be turned into plots.
-            This will be the variable "snum" for the end product.
-            For now, if you wish to test out the function,
+        stop: number of arrays you wish to be turned into plots. 
+            This will be the variable "snum" for the end product. 
+            For now, if you wish to test out the function, 
             you can try out other smaller values to adjust the image for your preferences.
 
         path: path leading to the directory where your files are stored, Default: "."
@@ -1804,7 +1634,7 @@ def mk_movie(**kwargs):
     Exemple:
 
         import ramses as ram
-        info = ram.mk_movie(start=100,stop=2000,path="../movie1",prefix="dens_",fill=5,suffix=".map",cmap="Reds",
+        info = ram.mk_movie(start=100,stop=2000,path="../movie1",prefix="dens_",fill=5,suffix=".map",cmap="Reds", 
                 cbar="YES", cbunit="log Density [H/cc]", tunit="Gyr",
                 fname="img", mvname="movie", vmin=-1, vmax=6)
 
@@ -1831,20 +1661,20 @@ def mk_movie(**kwargs):
     bunit = kwargs.get("bunit","[code units]")
     fname = kwargs.get("fname","frame")
     mvname = kwargs.get("mvname","movie")
-
+    
     cmd="curl https://tigress-web.princeton.edu/~rt3504/DAT/logo_essai.jpg --output logo_essai.jpg"
     os.system(cmd)
     concom = "convert logo_essai.jpg -resize 280x200 logo_essai.png"
     os.system(concom)
 
-    for snapshot in range(start, stop + 1):
+    for snapshot in range(start, stop + 1): 
         ar = path + "/" + str(prefix) + str(snapshot).zfill(fill) + str(suffix)
         print(ar) #prints file that function is working on.
 
         map =rd_map(ar)
         time = map.time
         array = map.data
-
+        
         if (not (cbar is None)):
             px = 1/plt.rcParams['figure.dpi']
             fig, ax = plt.subplots(figsize=(1000*px,1000*px))
@@ -1852,8 +1682,8 @@ def mk_movie(**kwargs):
             print(np.min(array),np.max(array))
             shw = ax.imshow(array, cmap = cmap, vmin=vmin, vmax=vmax, origin="lower", extent=[0,bsize,0,bsize])
             bar = plt.colorbar(shw,shrink=0.8)
-            bar.set_label(cbunit, fontsize=18)
-            bar.ax.tick_params(labelsize=18)
+            bar.set_label(cbunit, fontsize=18) 
+            bar.ax.tick_params(labelsize=18) 
             plt.ylabel(bunit,fontsize=18)
 
         else:
@@ -1873,157 +1703,172 @@ def mk_movie(**kwargs):
         com = "convert logo_essai.png -bordercolor white -border 0.1 " + newname + " +swap -geometry +100+850 -composite " + newname
         os.system(com)
     print("Input files converted into frames: done")
-    moviecom = "ffmpeg -y -r 30 -f image2 -s 1000x1000 -start_number " +str(start)+" -i " + str(fname) + "%05d.png" + " -vcodec libx264 -crf 25  -pix_fmt yuv420p " + str(mvname) + ".mp4"
+    moviecom = "ffmpeg -y -r 30 -f image2 -s 1000x1000 -start_number " +str(start)+" -i " + str(fname) + "%05d.png" + " -vcodec libx264 -crf 25  -pix_fmt yuv420p " + str(mvname) + ".mp4" 
     os.system(moviecom)
     ok = "Movie: done"
     print(ok)
-    return ok
+    return ok 
 
 class ClumpCat:
-   """
-   This is the class for RAMSES clump catalog.
-   """
-   def __init__(self):
-       """
-       This function initialize the clump catalog.
-       """
-       self.index = np.empty(shape=(0),dtype=int)
-       self.parent= np.empty(shape=(0),dtype=int)
-       self.halo = np.empty(shape=(0),dtype=int)
-       self.ncell = np.empty(shape=(0),dtype=int)
-       self.npart = np.empty(shape=(0),dtype=int)
-       self.x = np.empty(shape=(0))
-       self.y = np.empty(shape=(0))
-       self.z = np.empty(shape=(0))
-       self.u = np.empty(shape=(0))
-       self.v = np.empty(shape=(0))
-       self.w = np.empty(shape=(0))
-       self.mpatch = np.empty(shape=(0))
-       self.mass = np.empty(shape=(0))
-       self.dmax = np.empty(shape=(0))
-       self.dmin = np.empty(shape=(0))
-       self.dsad = np.empty(shape=(0))
-       self.dave = np.empty(shape=(0))
-       self.r200 = np.empty(shape=(0))
-       self.rmax = np.empty(shape=(0))
-       self.c200 = np.empty(shape=(0))
+    """
+    This is the class for RAMSES clump catalog.
+    """
+    def __init__(self):
+        """
+        This function initialize the clump catalog.
+        """
+        self.index = np.empty(shape=(0),dtype=int)
+        self.parent= np.empty(shape=(0),dtype=int)
+        self.halo = np.empty(shape=(0),dtype=int)
+        self.ncell = np.empty(shape=(0),dtype=int)
+        self.npart = np.empty(shape=(0),dtype=int)
+        self.x = np.empty(shape=(0))
+        self.y = np.empty(shape=(0))
+        self.z = np.empty(shape=(0))
+        self.u = np.empty(shape=(0))
+        self.v = np.empty(shape=(0))
+        self.w = np.empty(shape=(0))
+        self.mpatch = np.empty(shape=(0))
+        self.mass = np.empty(shape=(0))
+        self.dmax = np.empty(shape=(0))
+        self.dmin = np.empty(shape=(0))
+        self.dsad = np.empty(shape=(0))
+        self.dave = np.empty(shape=(0))
+        self.r200c = np.empty(shape=(0))
+        self.rmax = np.empty(shape=(0))
+        self.c200c = np.empty(shape=(0))
 
 def rd_clump(nout,**kwargs):
-   """
-   This function reads and compiles data for position, mass,
-   density, index, etc from the clump catalog.
+    """
+    This function reads and compiles data for position, mass,
+    density, index, etc from the clump catalog.
 
-   Args:
-       nout: output file number
+    Args:
+        nout: output file number
 
-   Returns:
-       A RAMSES clump catalog with all clump properties
+    Returns:
+        A RAMSES clump catalog with all clump properties
 
-   Authors: Josiah Taylor (Princeton University)
-   """
-   backup = kwargs.get("backup",False)
-   center = kwargs.get("center")
-   radius = kwargs.get("radius")
-   path = kwargs.get("path","./")
-   silent = kwargs.get("silent",False)
+    Authors: Josiah Taylor (Princeton University)
+    """
+    backup = kwargs.get("backup",False)
+    center = kwargs.get("center")
+    radius = kwargs.get("radius")
+    path = kwargs.get("path","./")
+    silent = kwargs.get("silent",False)
 
-   car1 = str(nout).zfill(5)
-   i = rd_info(nout,path=path,backup=backup)
-   ncpu = i.ncpu
-   ndim = i.ndim
-   boxlen = i.boxlen
+    car1 = str(nout).zfill(5)
+    info = rd_info(nout,path=path,backup=backup)
+    ncpu = info.ncpu
+    ndim = info.ndim
+    boxlen = info.boxlen
 
-   output = str(nout).zfill(5)
-   cat = ClumpCat()
-   for i in range(0, ncpu):
-       name = str(i+1).zfill(5)
-       file_name = path+"/output_%s/clump.%s" % (output,name)
-       read_cat = ascii.read(file_name)
-       index = read_cat['index']
-       parent = read_cat['parent']
-       halo = read_cat['halo']
-       ncell = read_cat['ncell']
-       npart = read_cat['npart']
-       x = read_cat['pos_x']
-       y = read_cat['pos_y']
-       z = read_cat['pos_z']
-       u = read_cat['vel_x']
-       v = read_cat['vel_y']
-       w = read_cat['vel_z']
-       dmin = read_cat['rho_min']
-       dmax = read_cat['rho_max']
-       dsad = read_cat['rho_sad']
-       dave = read_cat['rho_ave']
-       mpatch = read_cat['mpatch']
-       mass = read_cat['mass']
-       r200 = read_cat['r200']
-       rmax = read_cat['rmax']
-       c200 = read_cat['c200']
-       cat.index = np.append(cat.index,index)
-       cat.parent = np.append(cat.parent,parent)
-       cat.halo = np.append(cat.halo,halo)
-       cat.ncell = np.append(cat.ncell,ncell)
-       cat.npart = np.append(cat.npart,npart)
-       cat.x = np.append(cat.x,x)
-       cat.y = np.append(cat.y,y)
-       cat.z = np.append(cat.z,z)
-       cat.u = np.append(cat.u,u)
-       cat.v = np.append(cat.v,v)
-       cat.w = np.append(cat.w,w)
-       cat.mpatch = np.append(cat.mpatch,mpatch)
-       cat.mass = np.append(cat.mass,mass)
-       cat.dmax = np.append(cat.dmax,dmax)
-       cat.dmin = np.append(cat.dmin,dmin)
-       cat.dsad = np.append(cat.dsad,dsad)
-       cat.dave = np.append(cat.dave,dave)
-       cat.r200 = np.append(cat.r200,r200)
-       cat.rmax = np.append(cat.rmax,rmax)
-       cat.c200 = np.append(cat.c200,c200)
+    output = str(nout).zfill(5)
+    cat = ClumpCat()
+    for i in range(0, ncpu):
+        name = str(i+1).zfill(5)
+        file_name = path+"/output_%s/clump.%s" % (output,name)
+        read_cat = ascii.read(file_name)
+        index = read_cat['index']
+        parent = read_cat['parent']
+        halo = read_cat['halo']
+        ncell = read_cat['ncell']
+        npart = read_cat['npart']
+        x = read_cat['pos_x']
+        y = read_cat['pos_y']
+        z = read_cat['pos_z']
+        u = read_cat['vel_x']
+        v = read_cat['vel_y']
+        w = read_cat['vel_z']
+        dmin = read_cat['rho_min']
+        dmax = read_cat['rho_max']
+        dsad = read_cat['rho_sad']
+        dave = read_cat['rho_ave']
+        mpatch = read_cat['mpatch']
+        mass = read_cat['mass']
+        r200c = read_cat['r200'] #my current version uses 200c as the definition
+        rmax = read_cat['rmax']
+        c200c = read_cat['c200'] #my current version uses 200c as the definition
 
-   # Filtering clumps
-   if ( not (center is None)  and not (radius is None) ):
+        cat.index = np.append(cat.index,index)
+        cat.parent = np.append(cat.parent,parent)
+        cat.halo = np.append(cat.halo,halo)
+        cat.ncell = np.append(cat.ncell,ncell)
+        cat.npart = np.append(cat.npart,npart)
+        cat.x = np.append(cat.x,x)
+        cat.y = np.append(cat.y,y)
+        cat.z = np.append(cat.z,z)
+        cat.u = np.append(cat.u,u)
+        cat.v = np.append(cat.v,v)
+        cat.w = np.append(cat.w,w)
+        cat.mpatch = np.append(cat.mpatch,mpatch)
+        cat.mass = np.append(cat.mass,mass)
+        cat.dmax = np.append(cat.dmax,dmax)
+        cat.dmin = np.append(cat.dmin,dmin)
+        cat.dsad = np.append(cat.dsad,dsad)
+        cat.dave = np.append(cat.dave,dave)
+        cat.r200c = np.append(cat.r200c,r200c)
+        cat.rmax = np.append(cat.rmax,rmax)
+        cat.c200c = np.append(cat.c200c,c200c)
 
-       # Periodic boundaries
-       xx = cat.x-center[0]
-       xx[xx>boxlen/2]=xx[xx>boxlen/2]-boxlen
-       xx[xx<-boxlen/2]=xx[xx<-boxlen/2]+boxlen
-       cat.x = xx+center[0]
-       xx = cat.y-center[1]
-       xx[xx>boxlen/2]=xx[xx>boxlen/2]-boxlen
-       xx[xx<-boxlen/2]=xx[xx<-boxlen/2]+boxlen
-       cat.y = xx+center[1]
-       xx = cat.z-center[2]
-       xx[xx>boxlen/2]=xx[xx>boxlen/2]-boxlen
-       xx[xx<-boxlen/2]=xx[xx<-boxlen/2]+boxlen
-       cat.z = xx+center[2]
+    # - - - - - - - -
+    # derived fields
+    # - - - - - - - -
 
-       r = np.sqrt((cat.x-center[0])**2+(cat.y-center[1])**2+(cat.z-center[2])**2)
-       cat.index = cat.index[r < radius]
-       cat.parent = cat.parent[r < radius]
-       cat.halo = cat.halo[r < radius]
-       cat.ncell = cat.ncell[r < radius]
-       cat.npart = cat.npart[r < radius]
-       cat.x = cat.x[r < radius]
-       cat.y = cat.y[r < radius]
-       cat.z = cat.z[r < radius]
-       cat.u = cat.u[r < radius]
-       cat.v = cat.v[r < radius]
-       cat.w = cat.w[r < radius]
-       cat.mpatch = cat.mpatch[r < radius]
-       cat.mass = cat.mass[r < radius]
-       cat.dmax = cat.dmax[r < radius]
-       cat.dmin = cat.dmin[r < radius]
-       cat.dsad = cat.dsad[r < radius]
-       cat.dave = cat.dave[r < radius]
-       cat.r200 = cat.r200[r < radius]
-       cat.rmax = cat.rmax[r < radius]
-       cat.c200 = cat.c200[r < radius]
+    # m200c
+    omega_mz = info.omega_m * info.aexp**(-3) / (info.omega_m * info.aexp**(-3) + info.omega_l)
+    d200c = 200 / omega_mz  # 200 times the critical density
 
-   if silent==False:
-       txt = "Found "+str(len(cat.index))+" clumps"
-       print(txt)
+    cat.m200c = (4 * np.pi / 3) * cat.r200c**3 * d200c # (x rho_m = 1.0 in code units)
+    cat.v200c = np.sqrt(info.G * cat.m200c / cat.r200c) # in code units
 
-   return cat
+    # rs
+    cat.rs = cat.r200c / cat.c200c
+
+    # quantities at rmax
+    xmax = cat.rmax / cat.rs
+
+    # mass and circular velocity at rmax
+    cat.mmax = (4 * np.pi / 3) * cat.rs**3 * (d200c * cat.c200c**3 / _f(cat.c200c)) * _f(xmax) # x rho_m = 1.0 in code units
+    #cat.vmax = np.sqrt(info.G * cat.mmax / cat.rmax) # in code units
+    c0 = 2.1626
+    cat.vmax = cat.v200c * np.sqrt((cat.c200c/_f(cat.c200c))/(c0/_f(c0)))
+
+    # tidal radius
+    cat.rtidal = (cat.mpatch / (4 * np.pi * cat.dsad / 3))**(1/3)
+
+    # most massive central clump in the halo 
+    cat.is_central = cat.index == cat.parent 
+    cat.is_most_dense = cat.index == cat.halo
+    cat.is_satellite = cat.index != cat.parent
+
+    # Filtering clumps
+    if ( not (center is None)  and not (radius is None) ):
+
+        # Periodic boundaries
+        xx = cat.x-center[0]
+        xx[xx>boxlen/2]=xx[xx>boxlen/2]-boxlen
+        xx[xx<-boxlen/2]=xx[xx<-boxlen/2]+boxlen
+        cat.x = xx+center[0]
+        xx = cat.y-center[1]
+        xx[xx>boxlen/2]=xx[xx>boxlen/2]-boxlen
+        xx[xx<-boxlen/2]=xx[xx<-boxlen/2]+boxlen
+        cat.y = xx+center[1]
+        xx = cat.z-center[2]
+        xx[xx>boxlen/2]=xx[xx>boxlen/2]-boxlen
+        xx[xx<-boxlen/2]=xx[xx<-boxlen/2]+boxlen
+        cat.z = xx+center[2]
+
+        r = np.sqrt((cat.x-center[0])**2+(cat.y-center[1])**2+(cat.z-center[2])**2)
+
+        for attr, value in cat.__dict__.items():
+            if isinstance(value, np.ndarray) and len(value) == len(r):
+                setattr(cat, attr, value[r < radius])
+
+    if silent==False:
+        txt = "Found "+str(len(cat.index))+" clumps"
+        print(txt)
+    return cat
 
 def plot_tree(nout,pid,**kwargs):
 
@@ -2075,7 +1920,7 @@ def rd_grafic(filein):
     Authors: Romain Teyssier (Princeton University, October 2022)
     """
     with FortranFile(filein, 'r') as f:
-        recl = ["i4", "i4", "i4", "f4", "f4", "f4", "f4", "f4", "f4", "f4", "f4"]
+        recl = ["i4", "i4", "i4", "f4", "f4", "f4", "f4", "f4", "f4", "f4", "f4"] 
         n1, n2, n3, dx, x1, x2, x3, a, omega_m, omega_l, h0 = f.read_record(*recl)
         n1=int(n1[0])
         n2=int(n2[0])
@@ -2134,3 +1979,23 @@ def wr_grafic(dat,header1,header2,fileout):
         for k in range(n3):
             plane = dat[:, :, k]
             f.write_record(plane.T)
+
+
+
+# HELPER FUNCTIONS 
+
+def _f(x):
+    """
+    NFW profile helper function.
+
+    Parameters
+    ----------
+    x : float or array-like
+        Dimensionless radius (r/rs)
+
+    Returns
+    -------
+    float or array-like
+        Value of ln(1+x) - x/(1+x)
+    """
+    return np.log(1 + x) - x / (1 + x)
