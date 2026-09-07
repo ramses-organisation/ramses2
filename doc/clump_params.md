@@ -17,4 +17,3 @@ The namelist block `&CLUMP_PARAMS` is used to specify parameters controlling the
 | `saddle_threshold` | `real`       | -1                  | Set the saddle point density in code units above which peaks are merged into haloes.         |
 | `mass_threshold`   | `real`       | 0                   | Set the mass threshold in code units below which small clumps are discarded.                 |
 | `purity_threshold` | `real`       | -1                  | Set the required fraction of mass in high-res particles (for zooms). Usually set to 0.98.    |
-| `fraction_threshold` | `real`     | 0.1                 | Set the fraction of mass of a halo-patch for a sub-halo to be a central (main) halo.         |

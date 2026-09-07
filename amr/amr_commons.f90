@@ -394,7 +394,7 @@ module amr_commons
      real(kind=8)::saddle_threshold=-1
      real(kind=8)::mass_threshold=0
      real(kind=8)::purity_threshold=-1
-     real(kind=8)::fraction_threshold=0.1d0
+     real(kind=8)::fraction_threshold=2d0
 
      ! Lightcone parameters
      logical::lightcone = .false.   ! Lightcone activated

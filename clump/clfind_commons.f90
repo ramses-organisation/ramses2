@@ -9,7 +9,7 @@ module clfind_commons
        real(kind=8)::mass_threshold=0
        real(kind=8)::purity_threshold=-1
        real(kind=8)::bound_threshold=2
-       real(kind=8)::fraction_threshold=0.1d0
+       real(kind=8)::fraction_threshold=2d0
 
        integer :: ntest=0 ! Actual number of test particles in current processor
        integer(kind=8) :: ntest_tot=0 ! Total number of test particles across all processors
