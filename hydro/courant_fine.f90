@@ -39,8 +39,8 @@ recursive subroutine r_courant_fine(pst,ilevel,input_size,output,output_size)
      output%dt=MIN(output%dt,next_output%dt)
   else
 #ifdef _CUDA
-     call gpu_cmpdt_2(pst%s,ilevel,output%mass,output%ekin,output%eint,output%emag,output%dt)
 !     call gpu_cmpdt(pst%s,ilevel,output%mass,output%ekin,output%eint,output%emag,output%dt)
+     call gpu_cmpdt_2(pst%s,ilevel,output%mass,output%ekin,output%eint,output%emag,output%dt)
 #elif defined(_METAL)
      call metal_cmpdt(pst%s,ilevel,output%mass,output%ekin,output%eint,output%emag,output%dt)
 #else
