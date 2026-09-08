@@ -129,6 +129,70 @@ end function block_reduce_sum
 
 ! =========================================================================
 !> @brief
+!> Performs a reduction sum within a warp.
+!>
+!> @param[in] mass : The variable to sum over the warp
+attributes(device) subroutine warp_reduce_dp_sum(mass)
+  real(kind=dp) :: mass
+
+  integer :: offset
+
+  offset = warpsize/2
+  do
+     if (offset.le.0) exit
+     mass = mass + __shfl_down(mass,offset)
+     offset = offset / 2
+  enddo
+
+end subroutine warp_reduce_dp_sum
+! =========================================================================
+
+! =========================================================================
+!> @brief
+!> Performs a reduction sum within a block.
+!>
+!> @param[in] mass : The variable to sum over the block
+attributes(device) function block_reduce_dp_sum(mass)
+  implicit none
+  real(kind=dp) :: mass
+  real(kind=dp) :: block_reduce_dp_sum
+
+  real(kind=dp), shared :: svalues(32)
+  integer :: tid, lane, wid
+
+  tid = threadIdx%x
+  lane = mod(tid - 1,warpsize) + 1
+  wid = (tid - 1)/warpsize + 1
+
+  ! each warp performs its own reduction
+  call warp_reduce_dp_sum(mass)
+
+  ! write reduced value to shared memory
+  if (lane.eq.1) svalues(wid) = mass
+
+  ! wait for all partial reductions
+  call syncthreads()
+
+  ! read from shared memory only if that warp existed
+  if (tid .le. ((blockdim%x) / warpsize)) then
+     mass = svalues(lane)
+  else
+     mass = 0_dp
+  endif
+
+  ! wait for all partial reads
+  call syncthreads()
+
+  ! final reduce within first warp
+  if (wid.eq.1) call warp_reduce_dp_sum(mass)
+
+  block_reduce_dp_sum = mass
+  return
+end function block_reduce_dp_sum
+! =========================================================================
+
+! =========================================================================
+!> @brief
 !> @brief
 !> Performs a reduction min within a warp.
 !>
@@ -197,6 +261,70 @@ end function block_reduce_min
 !> Performs a reduction min within a warp.
 !>
 !> @param[in] mass : The variable to min over the warp
+attributes(device) subroutine warp_reduce_dp_min(dt)
+  real(kind=dp) :: dt
+
+  integer :: offset
+
+  offset = warpsize/2
+  do
+     if (offset.le.0) exit
+     dt = min(dt,__shfl_down(dt,offset))
+     offset = offset / 2
+  enddo
+
+end subroutine warp_reduce_dp_min
+! =========================================================================
+
+! ==========================================================================
+!> @brief
+!> Performs a reduction min within a block.
+!>
+!> @param[in] mass : The variable to min over the block
+attributes(device) function block_reduce_dp_min(dt)
+  implicit none
+  real(kind=dp) :: block_reduce_dp_min
+  real(kind=dp) :: dt
+
+  real(kind=dp), shared :: svalues(32)
+  integer :: tid, lane, wid
+
+  tid = threadIdx%x
+  lane = mod(tid-1,warpsize)+1
+  wid = (tid-1)/warpsize+1
+
+  ! each warp performs its own reduction
+  call warp_reduce_dp_min(dt)
+
+  ! write reduced value to shared memory
+  if (lane.eq.1) svalues(wid) = dt
+
+  ! wait for all partial reductions
+  call syncthreads()
+
+  ! read from shared memory only if that warp existed
+  if (tid .le. ((blockdim%x) / warpsize)) then
+     dt = svalues(lane)
+  else
+     dt = huge(0_dp)
+  endif
+
+  ! wait for all partial reads
+  call syncthreads()
+
+  ! final reduce within first warp
+  if (wid.eq.1) call warp_reduce_dp_min(dt)
+  block_reduce_dp_min = dt
+
+end function block_reduce_dp_min
+! =========================================================================
+
+! =========================================================================
+!> @brief
+!> @brief
+!> Performs a reduction min within a warp.
+!>
+!> @param[in] mass : The variable to min over the warp
 attributes(device) subroutine warp_reduce_max(dt)
   real(kind=8) :: dt
 
@@ -219,9 +347,9 @@ end subroutine warp_reduce_max
 !> shared-memory / register cost of chaining 5 separate block_reduce calls.
 attributes(device) subroutine block_reduce_sum4_min1(s1, s2, s3, s4, m1)
   implicit none
-  real(kind=8) :: s1, s2, s3, s4, m1
+  real(kind=dp) :: s1, s2, s3, s4, m1
 
-  real(kind=8), shared :: sh(5, 32)
+  real(kind=dp), shared :: sh(5, 32)
   integer :: tid, lane, wid
 
   tid = threadIdx%x
@@ -229,11 +357,11 @@ attributes(device) subroutine block_reduce_sum4_min1(s1, s2, s3, s4, m1)
   wid  = (tid - 1) / warpsize + 1
 
   ! warp-level reductions (independent, no barrier needed)
-  call warp_reduce_sum(s1)
-  call warp_reduce_sum(s2)
-  call warp_reduce_sum(s3)
-  call warp_reduce_sum(s4)
-  call warp_reduce_min(m1)
+  call warp_reduce_dp_sum(s1)
+  call warp_reduce_dp_sum(s2)
+  call warp_reduce_dp_sum(s3)
+  call warp_reduce_dp_sum(s4)
+  call warp_reduce_dp_min(m1)
 
   ! one lane per warp writes all five partials
   if (lane == 1) then
@@ -253,21 +381,21 @@ attributes(device) subroutine block_reduce_sum4_min1(s1, s2, s3, s4, m1)
      s4 = sh(4, lane)
      m1 = sh(5, lane)
   else
-     s1 = 0d0
-     s2 = 0d0
-     s3 = 0d0
-     s4 = 0d0
-     m1 = huge(0d0)
+     s1 = 0_dp
+     s2 = 0_dp
+     s3 = 0_dp
+     s4 = 0_dp
+     m1 = huge(0_dp)
   endif
   call syncthreads()
 
   ! final reduce within first warp
   if (wid == 1) then
-     call warp_reduce_sum(s1)
-     call warp_reduce_sum(s2)
-     call warp_reduce_sum(s3)
-     call warp_reduce_sum(s4)
-     call warp_reduce_min(m1)
+     call warp_reduce_dp_sum(s1)
+     call warp_reduce_dp_sum(s2)
+     call warp_reduce_dp_sum(s3)
+     call warp_reduce_dp_sum(s4)
+     call warp_reduce_dp_min(m1)
   endif
 
 end subroutine block_reduce_sum4_min1

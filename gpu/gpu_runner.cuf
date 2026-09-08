@@ -11,7 +11,7 @@ module gpu_runner
   !> Various parameters on the device
   logical, device, dimension(1:3) :: periodic
   real(kind=8), device, dimension(1:3) :: box_size
-  real(kind=8), device, dimension(1:3) :: constant_gravity
+  real(kind=dp), device, dimension(1:3) :: constant_gravity
   integer(kind=4), device, allocatable, dimension(:) :: ckey_max
   integer(kind=8), device, allocatable, dimension(:) :: key_off
   integer(kind=4), device, allocatable, dimension(:,:) :: box_ckey_min, box_ckey_max
@@ -202,16 +202,12 @@ contains
     real(kind=8), dimension(5) :: h_data
 
     ! prefix_sum reinterpreted as a contiguous real(kind=8) scratch buffer
-    real(kind=8), device, pointer :: scratch(:)
-    real(kind=8), device, pointer :: A_mass(:), A_ekin(:), A_eint(:), A_emag(:), A_dt(:)
-    real(kind=8), device, pointer :: B_mass(:), B_ekin(:), B_eint(:), B_emag(:), B_dt(:)
-    real(kind=8), device, pointer :: C_mass(:), C_ekin(:), C_eint(:), C_emag(:), C_dt(:)
-    real(kind=8), device, pointer :: dummy(:)
-
-    ! Split-timer diagnostics (host wall-clock, guarded by cudaDeviceSynchronize)
-    integer(kind=8) :: t0, t1, t2, t3, t4, tick_rate
-    real(kind=8)    :: dt_step1, dt_reduce, dt_d2h, dt_total
-    integer         :: istat
+    real(kind=dp), device, pointer :: scratch(:)
+    real(kind=dp), device, pointer :: A_mass(:), A_ekin(:), A_eint(:), A_emag(:), A_dt(:)
+    real(kind=dp), device, pointer :: B_mass(:), B_ekin(:), B_eint(:), B_emag(:), B_dt(:)
+    real(kind=dp), device, pointer :: C_mass(:), C_ekin(:), C_eint(:), C_emag(:), C_dt(:)
+    real(kind=dp), device, pointer :: dummy(:)
+    real(kind=8), device, pointer :: d_dummy(:)
 
     courant_factor = sim%r%courant_factor
     gamma = sim%r%gamma
@@ -271,10 +267,6 @@ contains
 
     call nvtxStartRange("GPU cmpdt_2", color=0)!green
 
-    ! Baseline sync so t0 measures only the work that follows.
-    istat = cudaDeviceSynchronize()
-    call system_clock(t0, tick_rate)
-
     ! -- Step 1: per-cell work + fused block reduce; write A --
     call cmpdt_kernel_2<<<num_blocks, num_threads>>>(grid, uold, bold, f, &
         & constant_gravity, head_idx, num_octs, &
@@ -284,9 +276,6 @@ contains
         & , fturb &
 #endif
         & )
-
-    istat = cudaDeviceSynchronize()
-    call system_clock(t1)
 
     ! -- Step 2: hierarchical reduce, up to three passes (mirrors gpu_scan) --
     if (n0 <= block_size_r) then
@@ -298,7 +287,7 @@ contains
        ! Two passes: A -> B (g0 outputs), then B -> data_out
        call cmpdt_reduce_kernel<<<g0, block_size_r>>>( &
             A_mass, A_ekin, A_eint, A_emag, A_dt, n0, &
-            B_mass, B_ekin, B_eint, B_emag, B_dt, dummy, .false.)
+            B_mass, B_ekin, B_eint, B_emag, B_dt, d_dummy, .false.)
        call cmpdt_reduce_kernel<<<1, block_size_r>>>( &
             B_mass, B_ekin, B_eint, B_emag, B_dt, g0, &
             dummy, dummy, dummy, dummy, dummy, d_data, .true.)
@@ -306,10 +295,10 @@ contains
        ! Three passes: A -> B, B -> C (g1 outputs), C -> data_out
        call cmpdt_reduce_kernel<<<g0, block_size_r>>>( &
             A_mass, A_ekin, A_eint, A_emag, A_dt, n0, &
-            B_mass, B_ekin, B_eint, B_emag, B_dt, dummy, .false.)
+            B_mass, B_ekin, B_eint, B_emag, B_dt, d_dummy, .false.)
        call cmpdt_reduce_kernel<<<g1, block_size_r>>>( &
             B_mass, B_ekin, B_eint, B_emag, B_dt, g0, &
-            C_mass, C_ekin, C_eint, C_emag, C_dt, dummy, .false.)
+            C_mass, C_ekin, C_eint, C_emag, C_dt, d_dummy, .false.)
        call cmpdt_reduce_kernel<<<1, block_size_r>>>( &
             C_mass, C_ekin, C_eint, C_emag, C_dt, g1, &
             dummy, dummy, dummy, dummy, dummy, d_data, .true.)
@@ -318,31 +307,16 @@ contains
        stop
     end if
 
-    istat = cudaDeviceSynchronize()
-    call system_clock(t2)
-
     call nvtxEndRange()
 
     ! move results to host  (implicit sync)
     h_data(:) = d_data(:)
-    call system_clock(t3)
 
     mass = h_data(1)
     ekin = h_data(2)
     eint = h_data(3)
     emag = h_data(4)
     dt = h_data(5)
-
-    dt_step1  = real(t1 - t0, kind=8) / real(tick_rate, kind=8)
-    dt_reduce = real(t2 - t1, kind=8) / real(tick_rate, kind=8)
-    dt_d2h    = real(t3 - t2, kind=8) / real(tick_rate, kind=8)
-    dt_total  = real(t3 - t0, kind=8) / real(tick_rate, kind=8)
-    write(*,'(A,I3,4(A,ES10.3))') &
-         ' [gpu_cmpdt_2] ilev=', ilevel, &
-         '  step1=', dt_step1, &
-         '  reduce=', dt_reduce, &
-         '  d2h=', dt_d2h, &
-         '  total=', dt_total
 
     call GPU_Error_Check(__FILE__, __LINE__)
 
