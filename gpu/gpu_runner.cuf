@@ -174,7 +174,7 @@ contains
   end subroutine gpu_cmpdt
 
   !> @brief
-  !> Two-step atomics-free variant of gpu_cmpdt. 
+  !> Two-step atomics-free variant of gpu_cmpdt.
   !>
   !> @detail
   !> @param[in] sim : The simulation object
