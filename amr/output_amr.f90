@@ -400,7 +400,7 @@ end subroutine output_params
 !#########################################################################
 !#########################################################################
 !#########################################################################
-subroutine input_params(mdl,r,g,filename,ncpu_file,levelmin_file,nlevelmax_file)
+subroutine input_params(mdl,r,g,filename,nfile_file,ncpu_file,levelmin_file,nlevelmax_file)
   use mdl_module
   use amr_parameters, only: ndim, nhilbert, flen
   use amr_commons, only: run_t, global_t
@@ -409,14 +409,14 @@ subroutine input_params(mdl,r,g,filename,ncpu_file,levelmin_file,nlevelmax_file)
   type(run_t)::r
   type(global_t)::g
   character(LEN=flen)::filename
-  integer::ncpu_file,levelmin_file,nlevelmax_file,i
+  integer::nfile_file,ncpu_file,levelmin_file,nlevelmax_file,i
   !-----------------------------------
   ! Read run parameters from file.
   ! Note that ncpu, levelmin and nlevelmax
   ! are allowed to vary at restart.
   !-----------------------------------
   integer::ilun
-  integer::ndim_file,nfile_file,noutput_file
+  integer::ndim_file,noutput_file
   integer::noutput_min,nlevelmax_min
   real(kind=8)::mass_sph_file,gamma_file
   real(kind=8),allocatable,dimension(:)::tout,aout,dtold,dtnew

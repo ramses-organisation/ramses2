@@ -468,7 +468,7 @@ subroutine init_params(mdl,r,g)
 
   character(len=5)::nchar
   character(len=80)::file_params
-  integer::ncpu_file,levelmin_file,nlevelmax_file
+  integer::nfile_file,ncpu_file,levelmin_file,nlevelmax_file
   logical::file_exist
 
   ! Initial time step for each level
@@ -481,7 +481,7 @@ subroutine init_params(mdl,r,g)
      file_params='backup_'//TRIM(nchar)//'/params.bin'
      inquire(file=file_params, exist=file_exist)
      if(file_exist)then
-        call input_params(mdl,r,g,file_params,ncpu_file,levelmin_file,nlevelmax_file)
+        call input_params(mdl,r,g,file_params,nfile_file,ncpu_file,levelmin_file,nlevelmax_file)
         if(g%myid==1)write(*,'(" Restarting from backup number ",I8)')r%nrestart
         if(g%myid==1)write(*,'(" Restart file has ",I8," files")')ncpu_file
      else
@@ -494,9 +494,9 @@ subroutine init_params(mdl,r,g)
         file_params=TRIM(r%initfile(r%levelmin))//'/params.bin'
         inquire(file=file_params, exist=file_exist)
         if(file_exist)then
-           call input_params(mdl,r,g,file_params,ncpu_file,levelmin_file,nlevelmax_file)
+           call input_params(mdl,r,g,file_params,nfile_file,ncpu_file,levelmin_file,nlevelmax_file)
            if(g%myid==1)write(*,'(" Starting from ramses output folder ",(A))')r%initfile(r%levelmin)
-           if(g%myid==1)write(*,'(" Output folder has ",I8," files")')ncpu_file
+           if(g%myid==1)write(*,'(" Output folder has ",I8," files")')nfile_file
         else
            if(g%myid==1)write(*,'(" Could not read folder ",(A))')r%initfile(r%levelmin)
            stop

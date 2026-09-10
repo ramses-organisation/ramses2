@@ -28,7 +28,7 @@ subroutine m_init_refine_ramses(pst)
   integer::i,ilevel,icpu,ilun,ipos,dummy(1)
   integer::levelmin_file,nlevelmax_file
   integer::levelmin_max,nlevelmax_min,noct_tmp
-  integer::ncpu_file,input_size,output_size
+  integer::ncpu_file_dummy,ncpu_file,input_size,output_size
   integer,dimension(:),allocatable::noct_file,noct_skip
   integer,dimension(:),allocatable::input_array,output_array
 
@@ -41,7 +41,7 @@ subroutine m_init_refine_ramses(pst)
 
   ! Read parameters from output file
   file_params=TRIM(r%initfile(r%levelmin))//'/params.bin'
-  call input_params(mdl,r,g,file_params,ncpu_file,levelmin_file,nlevelmax_file)
+  call input_params(mdl,r,g,file_params,ncpu_file,ncpu_file_dummy,levelmin_file,nlevelmax_file)
   write(*,'(" Output folder has levelmin=",I4)')levelmin_file
   write(*,'(" Output folder has levelmax=",I4)')nlevelmax_file
 
