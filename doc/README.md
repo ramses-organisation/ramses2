@@ -39,6 +39,12 @@ We describe the meaning and default values of the namelist variables in each of 
 
 [Star formation parameters](./star_params.md): Parameters controlling the subgrid star formation model used in the code.
 
+[Supernovae feedback parameters](./feedback_params.md): Parameters controlling the supernova feedback model.
+
+[Turbulence driving parameters](./turb_params.md): Parameters controlling turbulent driving and forcing.
+
+[Gadget initial conditions parameters](./gadget_params.md): Parameters controlling the reading and scaling of Gadget IC files.
+
 [Clump finder parameters](./clump_params.md): Parameters controlling the clump finder.
 
 [Sink particle parameters](./sink_params.md): Parameters controlling sink particle formation, accretion and AGN feedback.
