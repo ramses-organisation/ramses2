@@ -28,6 +28,10 @@ The block named `&BOUNDARY_PARAMS` contains the parameters related to boundary c
 | `p_bound`          | `real array`     | (0,0,...,0)          | Pressure in the corresponding BC region. Used in case `bound_type=3`. |
 | `prad_bound`       | `real array`     | (0,0,...,0)          | Non-thermal pressure in the corresponding BC region. Used in case `bound_type=3`. |
 | `var_bound`        | `real array`     | (0,0,...,0)          | Passive scalar in the corresponding BC region. Used in case `bound_type=3`. |
+| `rt_n_bound`       | `real array`     | (0,0,...,0)          | Photon number density in the BC region for each radiation group (dimensions `(1:MAXBOUND, 1:nrtgrp)`). Used in case `bound_type=3` with `DO_RT`. |
+| `rt_u_bound`       | `real array`     | (0,0,...,0)          | Reduced photon flux (x-direction) in the BC region (dimensions `(1:MAXBOUND, 1:nrtgrp)`). Used in case `bound_type=3` with `DO_RT`. |
+| `rt_v_bound`       | `real array`     | (0,0,...,0)          | Reduced photon flux (y-direction) in the BC region (dimensions `(1:MAXBOUND, 1:nrtgrp)`). Used in case `bound_type=3` with `DO_RT`. |
+| `rt_w_bound`       | `real array`     | (0,0,...,0)          | Reduced photon flux (z-direction) in the BC region (dimensions `(1:MAXBOUND, 1:nrtgrp)`). Used in case `bound_type=3` with `DO_RT`. |
 | `cr_fx_bound`      | `real array`     | (0,0,...,0)          | X component of the cosmic ray flux in the corresponding BC region. 2D array with dimensions `(1:MAXBOUND, 1:ncrgrp)`. Used in case `bound_type=3`. Only available if compiled with `CR=1`. |
 | `cr_fy_bound`      | `real array`     | (0,0,...,0)          | Y component of the cosmic ray flux in the corresponding BC region. 2D array with dimensions `(1:MAXBOUND, 1:ncrgrp)`. Used in case `bound_type=3`. Only available if compiled with `CR=1`. |
 | `cr_fz_bound`      | `real array`     | (0,0,...,0)          | Z component of the cosmic ray flux in the corresponding BC region. 2D array with dimensions `(1:MAXBOUND, 1:ncrgrp)`. Used in case `bound_type=3`. Only available if compiled with `CR=1`. |

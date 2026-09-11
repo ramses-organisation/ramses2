@@ -9,6 +9,8 @@ parameters.
 | `pic=.false.`                |  `logical`    | Activate Particle-In-Cell solver |
 | `poisson=.false.`            |  `logical`    | Activate Poisson solver for self-gravity |
 | `hydro=.false.`              |  `logical`    | Activate hydro or MHD solver. |
+| `rt=.false.`                 |  `logical`    | Activate radiative transfer solver. |
+| `cr=.false.`                 |  `logical`    | Activate cosmic rays solver. |
 | `clump_only=.false.`         |  `logical`    | Run only the clump finder on the initial conditions and stops the simulation |
 | `verbose=.false.`            |  `logical`    | Activate verbose mode |
 | `debug=.false.`              |  `logical`    | Activate debug mode |
