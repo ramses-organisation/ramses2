@@ -5,7 +5,7 @@ This directory contains the basic documentation for RAMSES II.
 
 We describe the meaning and default values of the namelist variables in each of the following namelist blocks:
 
-[Compilation parameters](./compilation_params.md): parameters used to compile the code using the `make` command.
+[Compilation parameters](./compilation_params.md): Parameters used to compile the code using the `make` command.
 
 [Global run parameters](./run_params.md): Main global parameters of the code controlling its execution.
 
