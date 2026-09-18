@@ -311,7 +311,7 @@ subroutine cr_godfine1(s,ind_grid,ilevel,h)
   use mdl_module
   use amr_parameters, only: ndim, twondim, twotondim
   use hydro_parameters, only: nvar
-  use cr_parameters, only: ncrvar,ncruvar,ncrgrp
+  use cr_parameters, only: ncruvar,ncrgrp
 
   use ramses_commons, only: ramses_t
   use nbors_utils
@@ -322,7 +322,7 @@ subroutine cr_godfine1(s,ind_grid,ilevel,h)
 #endif
   implicit none
   type(ramses_t)::s
-  integer::ind_grid,ilevel
+  integer::ind_grid,ilevel,ncrvar
   type(cr_kernel_t)::h
   !-------------------------------------------------------------------
   ! This routine gathers first CR variables from neighboring grids
@@ -723,6 +723,7 @@ subroutine cr_godfine1(s,ind_grid,ilevel,h)
   !-------------------------------------------------
   ! Reset flux along direction at refined interfaces
   !-------------------------------------------------
+  ncrvar=ncruvar+ncrgrp ! Number of CR vars, i.e. energy densities plus fluxes
   if(r%cr_nsubcycle.eq.1) then
   do idim=1,ndim
      i0=0; j0=0; k0=0

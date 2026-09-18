@@ -24,5 +24,19 @@ The namelist block `&COOLING_PARAMS` is used to specify parameters controlling g
 | `neq_Tconst`        | `real`     | -1      | If positive, set the value of the constant gas temperature for non-equilibrium chemistry. |
 | `is_init_xion`      | `logical`  |`.false.`| Turn on or off equilibrium abundances for non-equilibrium chemistry initial conditions. |
 | `upload_equilibrium_x` | `logical`  |`.true.`| Set photoionisation equilibrium ionisation fractions in the parent cell when de-refining. This is to avoid unnatural emission rates which can occur when the children ionization fractions are averaged (relevant mostly for mock observations) |
+| `cooling_uvb_delta` | `real`     | 0.05    | Redshift spacing $\Delta z$ for the UV background interpolation table. |
 | `isHe`              | `logical`  |`.false.`| Turn on or off non-equilibrium chemistry for Helium. |
 | `isH2`              | `logical`  |`.false.`| Turn on or off non-equilibrium chemistry for H2 molecule. |
+| `rtz_cooling`       | `logical`  |`.false.`| Turn on or off the RTZ non-equilibrium multi-element cooling and chemistry solver (`DO_RTZ`). |
+| `rtz_equilibrium_test` | `integer` | -1    | Equilibrium test mode for RTZ chemistry. |
+| `rtz_include_collisional_ionization` | `logical` | `.true.` | Include collisional ionization in RTZ chemistry. |
+| `rtz_include_photoionization` | `logical` | `.true.` | Include photoionization processes in RTZ chemistry. |
+| `rtz_include_cosmic_ray_ionization` | `logical` | `.true.` | Include cosmic ray ionization in RTZ chemistry. |
+| `rtz_include_charge_exchange` | `logical` | `.true.` | Include charge exchange reactions between ions in RTZ chemistry. |
+| `rtz_include_dust_recombination` | `logical` | `.true.` | Include grain-assisted recombination in RTZ chemistry. |
+| `rtz_include_HM12_UVB` | `logical` | `.true.` | Include Haardt & Madau (2012) UV background in RTZ chemistry. |
+| `isH2_rtz`          | `logical`  |`.false.`| Track molecular hydrogen ($H_2$) in RTZ chemistry. |
+| `rtz_UV_background_G0` | `real`  | 0.0     | Far-UV background field intensity in Habing ($G_0$) units. |
+| `rtz_primary_cosmic_ray_ionization_rate` | `real` | 0.0 | Primary cosmic ray ionization rate $\zeta_{\mathrm{CR}}$ in [$\text{s}^{-1}$]. |
+| `rtz_max_cool_timestep` | `real` | 1.0d11  | Maximum allowable cooling timestep for RTZ chemistry in seconds. |
+| `rtz_eqm_min_its`   | `integer`  | 0       | Minimum number of iterations in the RTZ equilibrium solver. |

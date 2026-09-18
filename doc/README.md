@@ -5,7 +5,7 @@ This directory contains the basic documentation for RAMSES II.
 
 We describe the meaning and default values of the namelist variables in each of the following namelist blocks:
 
-[Compilation parameters](./compilation_params.md): parameters used to compile the code using the `make` command.
+[Compilation parameters](./compilation_params.md): Parameters used to compile the code using the `make` command.
 
 [Global run parameters](./run_params.md): Main global parameters of the code controlling its execution.
 
@@ -38,6 +38,12 @@ We describe the meaning and default values of the namelist variables in each of 
 [Cosmic ray groups parameters](./cr_groups.md): Parameters controlling the per-group properties for cosmic ray multigroup transport.
 
 [Star formation parameters](./star_params.md): Parameters controlling the subgrid star formation model used in the code.
+
+[Supernovae feedback parameters](./feedback_params.md): Parameters controlling the supernova feedback model.
+
+[Turbulence driving parameters](./turb_params.md): Parameters controlling turbulent driving and forcing.
+
+[Gadget initial conditions parameters](./gadget_params.md): Parameters controlling the reading and scaling of Gadget IC files.
 
 [Clump finder parameters](./clump_params.md): Parameters controlling the clump finder.
 

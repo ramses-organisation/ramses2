@@ -5,7 +5,13 @@ This sets of parameters, contained in the namelist block `&INIT_PARAMS`. This is
 | `initfile=' ' ` | `80*char` | Directory where IC files are stored.
 | `filetype='ascii'` | `20*char` | Type of initial conditions file for particles and gas cells. Possible choices are `ascii`, `gadget`, `grafic` or `grafic_zoom`. Default value is `ascii`. In this case, only particles are read in the ascii file called `ic_part`, `ic_star`or `ic_sink`. For gas cells, initial conditions are set using file `condinit.f90` via compilation time parameters or via a patch. If nothing is done to set user defined initial conditions, then the default setup strategy is basd on uniform regions as explained now. |
 | `aexp_ini=10.0` | `real` | This parameter sets the starting expansion factor for cosmology runs only. Default value is read in the IC file. |
-| `omega_b=0.045` | `real` | This parameter sets the baryonic density parameter for cosmology runs only. Default value is `omega_b=0.045`.  |
+| `boxlen_ini=1.0` | `real` | Box size in comoving Mpc/h used in grafic initial conditions. |
+| `omega_b=0.045` | `real` | This parameter sets the baryonic density parameter for cosmology runs.  |
+| `omega_m=1.0`   | `real` | Matter density parameter at z=0 for cosmology runs. |
+| `omega_l=0.0`   | `real` | Cosmological constant density parameter at z=0 for cosmology runs. |
+| `h0=1.0`        | `real` | Hubble parameter in units of H_0 = 100 km/s/Mpc for cosmology runs. |
+| `ic_scale_l=1.0` | `real` | Length rescaling factor for initial conditions. |
+| `ic_scale_v=1.0` | `real` | Velocity rescaling factor for initial conditions. |
 | `ic_scale_m=1.0` | `real` | Rescale the dark matter particle masses only for ascii input files. |
 | `A_ave=0.0`     | `real` | Average magnetic field in the box (x component). |
 | `B_ave=0.0`     | `real` | Average magnetic field in the box (y component). |

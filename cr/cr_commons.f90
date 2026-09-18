@@ -36,7 +36,7 @@ contains
   subroutine init_cr_kernel(h,nn)
     use amr_parameters, only: ndim
     use hydro_parameters, only: nvar
-    use cr_parameters, only: ncrvar, ncruvar
+    use cr_parameters, only: ncruvar, ncrgrp
 
     integer::nn
     class(cr_kernel_t)::h
@@ -62,7 +62,7 @@ contains
 #endif
 #ifdef DO_CR
     allocate(h%cruloc (h%iu1:h%iu2,h%ju1:h%ju2,h%ku1:h%ku2,1:ncruvar))
-    allocate(h%crflux(h%if1:h%if2,h%jf1:h%jf2,h%kf1:h%kf2,1:ncrvar,1:ndim))
+    allocate(h%crflux(h%if1:h%if2,h%jf1:h%jf2,h%kf1:h%kf2,1:ncruvar+ncrgrp,1:ndim))
     allocate(h%cFlx(h%iu1:h%iu2,h%ju1:h%ju2,h%ku1:h%ku2,1:ndim+1,1:ndim))
     allocate(h%lmax(h%iu1:h%iu2,h%ju1:h%ju2,h%ku1:h%ku2,1:ndim))
 #endif
