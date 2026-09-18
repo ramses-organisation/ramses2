@@ -33,8 +33,8 @@ subroutine hydro_flag(s,ilevel)
 #endif
   logical::ok
   type(msg_realdp)::dummy_realdp
-
 #ifdef HYDRO
+
 
   associate(r=>s%r,g=>s%g,m=>s%m,mdl=>s%mdl)
 
@@ -48,7 +48,7 @@ subroutine hydro_flag(s,ilevel)
        & r%err_grad_p==-1.0.and.&
        & r%err_grad_u==-1.0.and.&
 #if NENER>0
-       & sum(r%err_grad_prad(1:NENER)).gt.-nener .and.&
+       & sum(r%err_grad_prad(1:NENER))==-nener .and.&
 #endif
        & r%err_grad_xHI==-1.0.and.&
        & r%err_grad_xHII==-1.0)return
