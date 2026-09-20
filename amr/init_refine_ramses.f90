@@ -243,7 +243,7 @@ subroutine init_refine_ramses(s,ilevel,ncpu_file,levelmin_file,nlevelmax_file,no
 
   ! Local variables
   integer::icpu,ilun
-  integer(kind=8)::iskip_amr=0-8,iskip_hydro=0_8,iskip_grav=0_8
+  integer(kind=8)::iskip_amr=0_8,iskip_hydro=0_8,iskip_grav=0_8
   integer::i,n,ind,istart,iend,noct_tmp,ilev,ioct,idim,i1,j1,k1
   integer::igrid,igrid_start,nleft,nright,ileft,iright
   character(LEN=80)::file_params,file_amr,file_hydro,file_grav
