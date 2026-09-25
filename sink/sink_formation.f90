@@ -448,7 +448,7 @@ subroutine sink_clump(s)
   ! Count sinks in each clump hierarchically.
   !---------------------------------------------
   call particle_peak_id(s,s%sink)
-  call sink_in_peak(s,.true.,.true.)
+  call sink_in_peak(s,s%r%sink_recenter_on_peak,.true.)
 
 #endif
 end subroutine sink_clump

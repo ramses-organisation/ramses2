@@ -504,6 +504,7 @@ subroutine m_read_params(pst)
   ! Sink formation/dynamical parameters
   integer::rho_type_sink=1
   logical::sink_descent=.false.
+  logical::sink_recenter_on_peak=.true.
   real(kind=8)::fudge_descent=0.5d0
   real(kind=8)::sink_relevance_threshold=2
   real(kind=8)::sink_density_threshold=-1
@@ -716,7 +717,8 @@ subroutine m_read_params(pst)
   ! Star particles and star formation recipe
   namelist/star_params/star,nstarmax,nstartot,T2_star,n_star,eps_star,seed,m_star,sf_model
   ! Sink particles and black hole parameters
-  namelist/sink_params/sink,nsinkmax,nsinktot,rho_type_sink,sink_descent,fudge_descent &
+  namelist/sink_params/sink,nsinkmax,nsinktot,rho_type_sink &
+       & ,sink_recenter_on_peak,sink_descent,fudge_descent &
        & ,sink_relevance_threshold,sink_density_threshold,sink_saddle_threshold &
        & ,sink_mass_threshold,sink_purity_threshold,sink_fraction_threshold &
        & ,sink_nstar_frac,sink_mseed,sink_delta_tout &
@@ -1755,6 +1757,7 @@ subroutine m_read_params(pst)
 
   s%r%rho_type_sink=rho_type_sink
   s%r%sink_descent=sink_descent
+  s%r%sink_recenter_on_peak=sink_recenter_on_peak
   s%r%fudge_descent=fudge_descent
   s%r%sink_relevance_threshold=sink_relevance_threshold
   s%r%sink_density_threshold=sink_density_threshold

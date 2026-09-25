@@ -409,6 +409,7 @@ module amr_commons
      ! Sink parameters
      integer::rho_type_sink=1
      logical::sink_descent=.false.
+     logical::sink_recenter_on_peak=.true.
      real(kind=8)::fudge_descent=0.5d0
      real(kind=8)::sink_relevance_threshold=2
      real(kind=8)::sink_density_threshold=-1
