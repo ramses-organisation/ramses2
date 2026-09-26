@@ -1294,6 +1294,15 @@ subroutine m_read_params(pst)
      endif
   endif
 
+  ! Check that sink formation uses a valid density field
+  if(sink_form)then
+     if(rho_type_sink/=1.and.rho_type_sink/=2.and.rho_type_sink/=4)then
+        write(*,*)'Error: sink_form=.true. needs rho_type_sink = 1 (DM), 2 (stars) or 4 (gas)'
+        write(*,*)'Currently rho_type_sink=',rho_type_sink
+        nml_ok=.false.
+     endif
+  endif
+
   if(.not. nml_ok)then
      write(*,*)'Too many errors in the namelist'
      write(*,*)'Aborting...'

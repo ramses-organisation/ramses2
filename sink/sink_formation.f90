@@ -186,7 +186,9 @@ subroutine sink_formation(r,g,m,p,c,msink_loc)
      !-------------------------------------
      ! Add here all sink formation criteria
      !-------------------------------------
-     if(c%ind_halo(j).NE.j+c%npeak_cum(g%myid-1))ok=.false.
+     if(c%saddle_threshold>0)then
+        if(c%ind_halo(j).NE.j+c%npeak_cum(g%myid-1))ok=.false.
+     endif
      if(c%relevance(j)<=c%relevance_threshold)ok=.false.
      if(c%clump_mass(j)<=c%mass_threshold)ok=.false.
      if(c%nsink(j)>0)ok=.false.

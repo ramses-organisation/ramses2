@@ -905,6 +905,7 @@ subroutine merge_clumps(s,action)
      c%tidal_dens(i)=c%saddle_threshold
      if(action.EQ.'relevance')then
         alive(i)=1
+        c%lev_peak(i)=-1
      endif
      if(action.EQ.'saddleden')then
         if(c%relevance(i)>c%relevance_threshold)then
@@ -1324,7 +1325,7 @@ subroutine compute_clump_properties(s,rtype)
   !-----------------------------------------------------------------------
   ! Loop over local peaks and compute peak cell coordinates, velocities...
   !-----------------------------------------------------------------------
-  c%peak_pos=0d0; c%peak_vel=0d0; c%peak_acc=0d0
+  c%peak_pos=0d0; c%peak_com=0d0; c%peak_vel=0d0; c%peak_acc=0d0
 
   do ipeak=1,c%npeak
      ilevel=c%peak_level(ipeak)
@@ -1343,6 +1344,7 @@ subroutine compute_clump_properties(s,rtype)
 #ifdef HYDRO
      if (r%hydro.AND.rtype.eq.4)then
         c%peak_vel(ipeak,1:ndim)=m%uold(ind,2:ndim+1,igrid)/m%uold(ind,1,igrid)
+        c%peak_com(ipeak,1:ndim)=xcell(1:ndim)
      endif
 #endif
 #ifdef GRAV
