@@ -6374,7 +6374,20 @@ contains
   ! NVHPC applies a kernel's launch_bounds to every kernel that follows it in the module,
   ! so kernels without launch_bounds are defined before every kernel that has them.
   ! Double precision is register-limited: cap the registers (threads per block set in gpu_runner.cuf).
-#if defined(MHD) || (defined(NPRE) && NPRE == 4)
+  ! MHD (64 threads at nsubgrid=1, 256 at nsubgrid=2): measured on Orszag-Tang, 512^3 on an H200
+  ! and 256^3 on an A100. The best caps differ between sm_90 and sm_80 (GPU_SM, from CUDA_ARCH);
+  ! other GPUs use no cap.
+#if defined(MHD) && defined(GPU_SM) && GPU_SM == 90 && NPRE == 4 && NSUBGRID == 2
+#define HYDRO_LB launch_bounds(256,3)
+#elif defined(MHD) && defined(GPU_SM) && GPU_SM == 90 && NPRE == 4
+#define HYDRO_LB launch_bounds(64,12)
+#elif defined(MHD) && defined(GPU_SM) && GPU_SM == 90 && NSUBGRID != 2
+#define HYDRO_LB launch_bounds(64,5)
+#elif defined(MHD) && defined(GPU_SM) && GPU_SM == 80 && NPRE != 4 && NSUBGRID == 2
+#define HYDRO_LB launch_bounds(256,1)
+#elif defined(MHD) && defined(GPU_SM) && GPU_SM == 80 && NPRE != 4
+#define HYDRO_LB launch_bounds(64,6)
+#elif defined(MHD) || (defined(NPRE) && NPRE == 4)
 #define HYDRO_LB
 #elif !defined(NSUBGRID) || NSUBGRID == 1
 #define HYDRO_LB launch_bounds(64,16)
