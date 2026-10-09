@@ -114,6 +114,7 @@ module gpu_runner
   !> The total number of halo and ghost octs
   integer(kind=4) :: num_send, num_recv
 
+#include "hydro_launch.h"
 contains
 
   include 'gpu_scan.cuf'
@@ -358,6 +359,28 @@ contains
 
   end subroutine gpu_set_uold
 
+#ifndef MHD
+  !> @brief
+  !> True if the Godunov update of ilevel writes unew = uold + dU, so that set_unew skips its copy
+  !>
+  !> @detail
+  !> Requires that nothing modifies unew between set_unew and the Godunov update (see amr_step):
+  !> no finer level adds flux corrections, and no feedback, sink, RT or CR step runs in between.
+  !> With static_gas the Godunov update does not run, so unew must be copied.
+  !>
+  logical function unew_from_uold(sim, ilevel)
+    use ramses_commons, only: ramses_t
+    type(ramses_t), intent(in) :: sim
+    integer, intent(in) :: ilevel
+
+    unew_from_uold = .false.
+#if !defined(TRCFLX) && !defined(PAPER) && NENER == 0
+    unew_from_uold = ilevel == sim%r%nlevelmax .and. .not. sim%r%static_gas &
+         & .and. .not. (sim%r%star .or. sim%r%sink .or. sim%r%rt .or. sim%r%cr)
+#endif
+  end function unew_from_uold
+#endif
+
   !> @brief
   !> Set unew equal to uold on a GPU
   !>
@@ -374,6 +397,10 @@ contains
 
     integer(kind=4) :: head_idx, num_octs
     integer :: threadsX_per_block, threadsY_per_block, num_blocks
+
+#ifndef MHD
+    if(unew_from_uold(sim, ilevel))return
+#endif
 
     head_idx = sim%m%head(ilevel)
     num_octs = sim%m%noct(ilevel)
@@ -663,9 +690,9 @@ contains
          & f, father, nbor, &
          & head_idx, num_subgrids, sim%m%ngridmax, ilevel, sim%r%levelmin, sim%r%nlevelmax, &
          & gamma, smallr, smallc2, dt, dx, slope, slope_mag, riemann, riemann2d, &
-         & switch_llf_dmin, switch_llf_pmin, induction, etamag, constant_gravity)
+         & switch_llf_dmin, switch_llf_pmin, induction, etamag, constant_gravity, .false.)
 #else
-    if(nsubgrid == 4)threads_per_block = 512
+    threads_per_block = HYDRO_THREADS
     shmem_bytes = storage_size(smem_probe) / 8
     istat = cudaFuncSetAttribute(hydro_integrator_kernel, &
          & cudaFuncAttributeMaxDynamicSharedMemorySize, shmem_bytes)
@@ -678,7 +705,7 @@ contains
          & f, father, nbor, &
          & head_idx, num_subgrids, sim%m%ngridmax, ilevel, sim%r%levelmin, sim%r%nlevelmax, &
          & gamma, smallr, smallc2, dt, dx, slope, slope_mag, riemann, riemann2d, &
-         & switch_llf_dmin, switch_llf_pmin, induction, etamag, constant_gravity)
+         & switch_llf_dmin, switch_llf_pmin, induction, etamag, constant_gravity, unew_from_uold(sim, ilevel))
 #endif
     call GPU_Error_Check(__FILE__, __LINE__)
 #endif

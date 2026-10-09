@@ -4,6 +4,7 @@
 # Compilation time parameters
 COMPILER = GNU
 CUDA_ARCH = sm_80
+NSUBGRID = 1
 NDIM = 3
 MPI = 0
 HYDRO = 1
@@ -71,6 +72,7 @@ BUILDDATE = $(shell date +"%D-%T")
 BUILDCOMMAND = ${MAKE} ${MAKEFLAGS}
 DEFINES += -DNDIM=$(NDIM) -DNVAR=$(NVAR)
 DEFINES += $(EXTRA_DEFINES)
+DEFINES += -DNSUBGRID=$(NSUBGRID)
 #############################################################################
 # RTZ options
 ifeq ($(DO_RTZ),1)
@@ -346,6 +348,10 @@ test_cooling:	$(MODOBJ) test_cooling.o
 write_gitinfo.o: FORCE
 	$(FC) -O0 -cpp -DPATCH=\'"$(PATCH)"\' -DGITBRANCH=\'"$(GITBRANCH)"\' -DGITHASH=\'"$(GITHASH)"\' \
                 -DGITREPO=\'"$(GITREPO)"\' -DBUILDDATE=\'"$(BUILDDATE)"\' -DBUILDCOMMAND=\'"$(BUILDCOMMAND)"\' -c ../amr/write_gitinfo.f90 -o $@
+#############################################################################
+ifeq ($(COMPILER),NVHPC)
+gpu_hydro.o gpu_runner.o: $(wildcard $(GPU_PATH)/*_launch.h)
+endif
 #############################################################################
 cub_inclusive_scan_c.o: cub_inclusive_scan.h cub_inclusive_scan.cu
 	nvcc -arch=$(CUDA_ARCH) -O3 -lineinfo -c $(GPU_PATH)/cub_inclusive_scan.cu -o cub_inclusive_scan_c.o

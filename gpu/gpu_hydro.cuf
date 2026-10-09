@@ -198,6 +198,7 @@ module hydro_device
   real(kind=dp), device :: switch_llf_dmin_d
   real(kind=dp), device :: switch_llf_pmin_d
 
+#include "hydro_launch.h"
 contains
 
   include 'gpu_reduce.cuf'
@@ -463,17 +464,25 @@ contains
     type(conserved_t), intent(in) :: conserved
     real(kind=dp), value :: gamma, smallr, smallc2
     type(primitive_t) :: primitive
+    real(kind=dp) :: inv_density, internal_energy
 
     primitive%density    = max(conserved%density, smallr)
-    primitive%velocity_x = conserved%momentum_x / primitive%density
-    primitive%velocity_y = conserved%momentum_y / primitive%density
-    primitive%velocity_z = conserved%momentum_z / primitive%density
+    inv_density = 1.0_dp / primitive%density
+    primitive%velocity_x = conserved%momentum_x * inv_density
+    primitive%velocity_y = conserved%momentum_y * inv_density
+    primitive%velocity_z = conserved%momentum_z * inv_density
 #ifdef MHD
     primitive%Bx = conserved%Bx
     primitive%By = conserved%By
     primitive%Bz = conserved%Bz
 #endif
-    primitive%pressure   = compute_pressure(conserved, gamma, smallr, smallc2)
+    ! compute_pressure with the reciprocal density
+    internal_energy = conserved%energy - 0.5_dp*magnitude_squared(conserved%momentum_x, &
+         & conserved%momentum_y, conserved%momentum_z)*inv_density
+#ifdef MHD
+    internal_energy = internal_energy - compute_emag(conserved%Bx, conserved%By, conserved%Bz)
+#endif
+    primitive%pressure   = max((gamma - 1.0_dp)*internal_energy, primitive%density*(smallc2/gamma))
     return
   end function conserved_2_primitive
   ! ==========================================================================
@@ -1266,7 +1275,7 @@ contains
 #ifdef MHD
        & bf, &
 #endif
-       & head_idx, block_idx, thread_idx, gamma, smallr, smallc2, dt, local_subgrid)
+       & head_idx, block_idx, thread_idx, gamma, smallr, smallc2, dt, load_refined, local_subgrid)
     type(oct), device :: grid(*)
     real(kind=dp), device :: constant_gravity(3)
     real(kind=dp), device :: f(1:twotondim,1:ndim,*)
@@ -1277,6 +1286,7 @@ contains
     integer(kind=4), value :: block_idx, thread_idx
     real(kind=dp), value :: gamma, smallr, smallc2
     real(kind=dp), value :: dt
+    logical, value :: load_refined
     type(subgrid_6x6x6cell_primitive), intent(inout) :: local_subgrid
 #if NVAR>5+NENER
     real(kind=dp) :: scalar_sub(0:2*nsubgrid+3, 0:2*nsubgrid+3, 0:2*nsubgrid+3, 1:nscalar)
@@ -1395,8 +1405,8 @@ contains
        end do
 #endif
        ! Store refinement flags.
-       if (i >= 1 .and. i <= 2*nsubgrid+2 .and. j >= 1 .and. j <= 2*nsubgrid+2 &
-            & .and. k >= 1 .and. k <= 2*nsubgrid+2) then
+       if (load_refined .and. i >= 1 .and. i <= 2*nsubgrid+2 &
+            & .and. j >= 1 .and. j <= 2*nsubgrid+2 .and. k >= 1 .and. k <= 2*nsubgrid+2) then
           local_subgrid%refined(i, j, k) = grid(source_idx)%refined(cell_idx)
        endif
 
@@ -1489,11 +1499,15 @@ contains
     type(primitive_t) :: cell ! The cell centered primitive variables and (eventually) predicted states
     type(primitive_t) :: slopes_x, slopes_y, slopes_z ! The limited slopes in the x, y, and z directions
     type(primitive_t) :: source_term ! The sources terms
+    real(kind=dp) :: inv_density
 
     real(kind=dp) :: smallp
     integer :: work_idx   ! Loop index for unit of work
     integer :: i, j, k    ! Cell indices
     integer :: work_size
+#ifndef MHD
+    integer :: ncell, nwork, face_idx, face_work, face_i, face_j
+#endif
 #if NVAR>5+NENER
     real(kind=dp) :: scalar_sub(0:2*nsubgrid+3, 0:2*nsubgrid+3, 0:2*nsubgrid+3, 1:nscalar)
     real(kind=dp) :: dscal_x(1:nscalar), dscal_y(1:nscalar), dscal_z(1:nscalar)
@@ -1527,9 +1541,14 @@ contains
 
     ! Compute the size of the section of the subgrid to operate on
     work_size = 2*nsubgrid+2
+#ifndef MHD
+    ncell = 2*nsubgrid
+    nwork = ncell**3 + 6*ncell**2
+#endif
 
     smallp = smallr * smallc2
 
+#ifdef MHD
     ! Note that we're now excluding the outermost shell of cells since this
     ! stencil operation requires 1 ghost cell. This also requires the
     ! transformation from the basic 3D indexing as shown below to shift the indices from going from 0-5 to 1-6
@@ -1537,6 +1556,34 @@ contains
        ! Compute the 3D indices, note the tranformation so that we're indexing 1-6 and not 0-5
        call index_1Dto3D(work_idx, work_size, work_size, i, j, k)
        i = i + 1; j = j + 1; k = k + 1
+#else
+    ! Interior cells, then the six face layers.
+    do work_idx = thread_idx, nwork - 1, blockDim%x
+       if (work_idx < ncell**3) then
+          call index_1Dto3D(work_idx, ncell, ncell, i, j, k)
+          i = i + 2; j = j + 2; k = k + 2
+       else
+          face_work = work_idx - ncell**3
+          face_idx = face_work / ncell**2
+          face_work = mod(face_work, ncell**2)
+          face_i = mod(face_work, ncell) + 2
+          face_j = face_work / ncell + 2
+          select case (face_idx)
+          case (0)
+             i = 1; j = face_i; k = face_j
+          case (1)
+             i = work_size; j = face_i; k = face_j
+          case (2)
+             i = face_i; j = 1; k = face_j
+          case (3)
+             i = face_i; j = work_size; k = face_j
+          case (4)
+             i = face_i; j = face_j; k = 1
+          case (5)
+             i = face_i; j = face_j; k = work_size
+          end select
+       endif
+#endif
 
 #ifdef MHD
        ! Face
@@ -1630,6 +1677,7 @@ contains
 #endif
 
        ! Source terms
+       inv_density = 1.0_dp / cell%density
        source_term%density    = -cell%velocity_x * slopes_x%density    &
                                 -cell%velocity_y * slopes_y%density    &
                                 -cell%velocity_z * slopes_z%density    &
@@ -1637,15 +1685,15 @@ contains
        source_term%velocity_x = -cell%velocity_x * slopes_x%velocity_x &
                                 -cell%velocity_y * slopes_y%velocity_x &
                                 -cell%velocity_z * slopes_z%velocity_x &
-                                - (slopes_x%pressure) / cell%density
+                                - (slopes_x%pressure) * inv_density
        source_term%velocity_y = -cell%velocity_x * slopes_x%velocity_y &
                                 -cell%velocity_y * slopes_y%velocity_y &
                                 -cell%velocity_z * slopes_z%velocity_y &
-                                - (slopes_y%pressure) / cell%density
+                                - (slopes_y%pressure) * inv_density
        source_term%velocity_z = -cell%velocity_x * slopes_x%velocity_z &
                                 -cell%velocity_y * slopes_y%velocity_z &
                                 -cell%velocity_z * slopes_z%velocity_z &
-                                - (slopes_z%pressure) / cell%density
+                                - (slopes_z%pressure) * inv_density
        source_term%pressure   = -cell%velocity_x * slopes_x%pressure   &
                                 -cell%velocity_y * slopes_y%pressure   &
                                 -cell%velocity_z * slopes_z%pressure   &
@@ -2066,10 +2114,11 @@ contains
     real(kind=dp) :: smallp, entho
     real(kind=dp) :: rl, rr, pl, pr, ul, ur, vl, vr, wl, wr
     real(kind=dp) :: el, er, ekinl, ekinr, etotl, etotr
-    real(kind=dp) :: sound_speed_l, sound_speed_r, speed_l, speed_r
+    real(kind=dp) :: c2l, c2r, cmax, speed_l, speed_r
     real(kind=dp) :: rcl, rcr, ustar, pstar
     real(kind=dp) :: rstarl, rstarr, etotstarl, etotstarr
     real(kind=dp) :: ro, uo, vo, wo, po, etoto
+    real(kind=dp) :: inv_rc, inv_star
 
     ! Verify that the density and pressure are reasonable and positive
     smallp = smallc2 / gamma
@@ -2097,24 +2146,19 @@ contains
     etotl = el + ekinl
     etotr = er + ekinr
 
-    ! Compute the sound speeds
-    sound_speed_l = sound_speed(left_state_p, gamma)
-    sound_speed_r = sound_speed(right_state_p, gamma)
-
     ! Compute the wave speeds
-    speed_l = min(ul, ur) - max(sound_speed_l, sound_speed_r)
-    speed_r = max(ul, ur) + max(sound_speed_l, sound_speed_r)
+    c2l = gamma*pl/rl
+    c2r = gamma*pr/rr
+    cmax = sqrt(max(c2l, c2r))
+    speed_l = min(ul, ur) - cmax
+    speed_r = max(ul, ur) + cmax
 
     rcl = rl * (ul - speed_l)
     rcr = rr * (speed_r - ur)
 
-    ustar = (rcr * ur + rcl * ul + (pl - pr)) / (rcr + rcl)
-    pstar = (rcr * pl + rcl * pr + rcl * rcr * (ul - ur)) / (rcr + rcl)
-
-    rstarl = rl * (speed_l - ul) / (speed_l - ustar)
-    rstarr = rr * (speed_r - ur) / (speed_r - ustar)
-    etotstarl = ((speed_l - ul) * etotl - pl * ul + pstar * ustar) / (speed_l - ustar)
-    etotstarr = ((speed_r - ur) * etotr - pr * ur + pstar * ustar) / (speed_r - ustar)
+    inv_rc = 1.0_dp / (rcr + rcl)
+    ustar = (rcr * ur + rcl * ul + (pl - pr)) * inv_rc
+    pstar = (rcr * pl + rcl * pr + rcl * rcr * (ul - ur)) * inv_rc
 
     ! Sample the solution at x/t=0
     if (speed_l > 0.0_dp) then
@@ -2125,6 +2169,9 @@ contains
        po = pl
        etoto = etotl
     else if (ustar > 0.0_dp) then
+       inv_star = 1.0_dp / (speed_l - ustar)
+       rstarl = rl * (speed_l - ul) * inv_star
+       etotstarl = ((speed_l - ul) * etotl - pl * ul + pstar * ustar) * inv_star
        ro = rstarl
        uo = ustar
        vo = vl
@@ -2132,6 +2179,9 @@ contains
        po = pstar
        etoto = etotstarl
     else if (speed_r > 0.0_dp) then
+       inv_star = 1.0_dp / (speed_r - ustar)
+       rstarr = rr * (speed_r - ur) * inv_star
+       etotstarr = ((speed_r - ur) * etotr - pr * ur + pstar * ustar) * inv_star
        ro = rstarr
        uo = ustar
        vo = vr
@@ -2513,11 +2563,12 @@ contains
   ! =========================================================================
 
   ! =========================================================================
-  attributes(device) subroutine conservative_update(unew, bnew, nbor, fluxes_x, fluxes_y, fluxes_z, &
+  attributes(device) subroutine conservative_update(uold, unew, bnew, nbor, fluxes_x, fluxes_y, fluxes_z, &
 #ifdef MHD
        & emfx, emfy, emfz, &
 #endif
-       & head_idx, block_idx, thread_idx, dtdx)
+       & head_idx, block_idx, thread_idx, dtdx, from_uold)
+    real(kind=dp), device :: uold(1:twotondim,1:nvar,*)
     real(kind=dp), device :: unew(1:twotondim,1:nvar,*)
     real(kind=dp), device :: bnew(1:twotondim,1:6,*) ! Unused without MHD
     integer(kind=4), device :: nbor(1:subgridsize,*)
@@ -2532,14 +2583,16 @@ contains
     integer(kind=4), value :: head_idx
     integer, value :: block_idx, thread_idx
     real(kind=dp), value :: dtdx
+    logical, value :: from_uold
 
     integer :: work_size
     integer :: i, j, k, i_subgrid_idx, j_subgrid_idx, k_subgrid_idx
     integer :: work_idx, subgrid_idx, oct_idx, cell_idx, ind_nbor
     type(conserved_t) :: update_term
+    real(kind=dp) :: base(1:5)
 #if NVAR>5+NENER
     integer :: n
-    real(kind=dp) :: supd
+    real(kind=dp) :: supd, scalar_base
 #endif
 #ifdef MHD
     real(kind=dp) :: dflux
@@ -2599,19 +2652,30 @@ contains
        update_term%momentum_z = (fluxes_z%velocity_z(i, j, k) - fluxes_z%velocity_z(i, j, k+1)) * dtdx + update_term%momentum_z
        update_term%energy     = (fluxes_z%pressure  (i, j, k) - fluxes_z%pressure  (i, j, k+1)) * dtdx + update_term%energy
 
+       if(from_uold)then
+          base = uold(cell_idx, 1:5, oct_idx)
+       else
+          base = unew(cell_idx, 1:5, oct_idx)
+       endif
+
        ! Conservative update. Note that in this code dt/dx = dt/dy = dt/dz in all cases
-       unew(cell_idx, 1, oct_idx) = unew(cell_idx, 1, oct_idx) + update_term%density
-       unew(cell_idx, 2, oct_idx) = unew(cell_idx, 2, oct_idx) + update_term%momentum_x
-       unew(cell_idx, 3, oct_idx) = unew(cell_idx, 3, oct_idx) + update_term%momentum_y
-       unew(cell_idx, 4, oct_idx) = unew(cell_idx, 4, oct_idx) + update_term%momentum_z
-       unew(cell_idx, 5, oct_idx) = unew(cell_idx, 5, oct_idx) + update_term%energy
+       unew(cell_idx, 1, oct_idx) = base(1) + update_term%density
+       unew(cell_idx, 2, oct_idx) = base(2) + update_term%momentum_x
+       unew(cell_idx, 3, oct_idx) = base(3) + update_term%momentum_y
+       unew(cell_idx, 4, oct_idx) = base(4) + update_term%momentum_z
+       unew(cell_idx, 5, oct_idx) = base(5) + update_term%energy
 
 #if NVAR>5+NENER
        do n = 1, nscalar
           supd = (fluxes_x%scalar(i,j,k,n) - fluxes_x%scalar(i+1,j,k,n)) * dtdx &
                & + (fluxes_y%scalar(i,j,k,n) - fluxes_y%scalar(i,j+1,k,n)) * dtdx &
                & + (fluxes_z%scalar(i,j,k,n) - fluxes_z%scalar(i,j,k+1,n)) * dtdx
-          unew(cell_idx, 5+nener+n, oct_idx) = unew(cell_idx, 5+nener+n, oct_idx) + supd
+          if(from_uold)then
+             scalar_base = uold(cell_idx, 5+nener+n, oct_idx)
+          else
+             scalar_base = unew(cell_idx, 5+nener+n, oct_idx)
+          endif
+          unew(cell_idx, 5+nener+n, oct_idx) = scalar_base + supd
        end do
 
 #endif
@@ -3404,170 +3468,6 @@ contains
        coct = fidx
     end if
   end subroutine get_cf_cell
-
-#endif
-
-  !
-  ! Fused MHD Godunov+CT kernel; working buffers live in shared memory.
-
-#ifndef PAPER
-  attributes(global) subroutine hydro_integrator_kernel(grid, uold, unew, bold, bnew, &
-       & f, father, nbor, &
-       & head_idx, num_subgrids, ngridmax, ilevel, levelmin, levelmax, &
-       & gamma, smallr, smallc2, dt, dx, slope, slope_mag, riemann, riemann2d, &
-       & switch_llf_dmin, switch_llf_pmin, induction, etamag, constant_gravity)
-    type(oct), device :: grid(*)
-    integer, device :: father(*)
-    integer, device :: nbor(1:subgridsize,*)
-    real(kind=dp), device :: constant_gravity(1:3)
-    real(kind=dp), device :: f(1:twotondim,1:ndim,*)
-    real(kind=dp), device :: uold(1:twotondim,1:nvar,*)
-    real(kind=dp), device :: unew(1:twotondim,1:nvar,*)
-    real(kind=dp), device :: bold(1:twotondim,1:6,*)
-    real(kind=dp), device :: bnew(1:twotondim,1:6,*)
-    integer(kind=4), intent(in), value :: head_idx
-    integer(kind=4), intent(in), value :: num_subgrids
-    integer, intent(in), value :: ngridmax
-    integer, intent(in), value :: ilevel, levelmin, levelmax
-    real(kind=dp), intent(in), value :: gamma, smallr, smallc2
-    real(kind=dp), intent(in), value :: dt
-    real(kind=dp), intent(in), value :: dx
-    integer, intent(in), value :: slope
-    integer, intent(in), value :: slope_mag
-    integer, intent(in), value :: riemann
-    integer, intent(in), value :: riemann2d
-    real(kind=dp), intent(in), value :: switch_llf_dmin, switch_llf_pmin
-    logical, intent(in), value :: induction
-    real(kind=dp), intent(in), value :: etamag
-
-#ifdef MHD
-    type(mhd_smem_t), shared :: smem(*)
-#else
-    type(hydro_smem_t), shared :: smem(*)
-#endif
-    real(kind=dp) :: dtdx
-    integer :: block_idx  ! The index of this block, corresponds to the subgrid to load
-    integer :: thread_idx ! The index of this thread within the block
-#ifdef MHD
-    real(kind=dp) :: smallc
-    smallc = sqrt(smallc2)
-#endif
-    dtdx = dt / dx
-
-    ! compute the various indices. Note the conversion to zero based indexing
-    block_idx = blockIdx%x - 1
-    thread_idx = threadIdx%x - 1
-
-    ! thread guard, probably not needed since num_blocks should always be equal to num_subgrids
-    if (block_idx >= num_subgrids) return
-
-#ifdef MHD
-    associate(local_subgrid => smem(1)%local_subgrid, &
-#if NVAR>5+NENER
-            & scalar_subgrid => smem(1)%scalar_subgrid, &
-#endif
-            & left_interfaces_x => smem(1)%left_interfaces_x, right_interfaces_x => smem(1)%right_interfaces_x, &
-            & left_interfaces_y => smem(1)%left_interfaces_y, right_interfaces_y => smem(1)%right_interfaces_y, &
-            & left_interfaces_z => smem(1)%left_interfaces_z, right_interfaces_z => smem(1)%right_interfaces_z, &
-            & bf => smem(1)%bf, emfx => smem(1)%emfx, emfy => smem(1)%emfy, emfz => smem(1)%emfz, &
-            & corner_x => smem(1)%corner_x, corner_y => smem(1)%corner_y, corner_z => smem(1)%corner_z)
-#else
-    associate(local_subgrid => smem(1)%local_subgrid, &
-#if NVAR>5+NENER
-            & scalar_subgrid => smem(1)%scalar_subgrid, &
-#endif
-            & left_interfaces_x => smem(1)%left_interfaces_x, right_interfaces_x => smem(1)%right_interfaces_x, &
-            & left_interfaces_y => smem(1)%left_interfaces_y, right_interfaces_y => smem(1)%right_interfaces_y, &
-            & left_interfaces_z => smem(1)%left_interfaces_z, right_interfaces_z => smem(1)%right_interfaces_z)
-#endif
-
-    ! =======================================================================
-    ! Convert from conserved to primitive variables
-    ! =======================================================================
-    call subgrid_conserved_2_primitive(grid, uold, bold, f, constant_gravity, nbor, &
-#if NVAR>5+NENER
-         & scalar_subgrid, &
-#endif
-#ifdef MHD
-         & bf, &
-#endif
-         & head_idx, block_idx, thread_idx, gamma, smallr, smallc2, dt, local_subgrid)
-
-    ! =======================================================================
-    ! Perform tracing step and compute the interface states
-    ! =======================================================================
-    ! This will compute the interface states and write them to shared memory
-    call trace_3d(local_subgrid, thread_idx, &
-#if NVAR>5+NENER
-         & scalar_subgrid, &
-#endif
-#ifdef MHD
-         & bf, corner_x, corner_y, corner_z, &
-         & smallc, slope_mag, induction, &
-#endif
-         & left_interfaces_x, right_interfaces_x, left_interfaces_y, right_interfaces_y, &
-         & left_interfaces_z, right_interfaces_z, gamma, smallr, smallc2, dtdx, slope)
-
-    ! =======================================================================
-    ! Compute the fluxes.
-    ! =======================================================================
-    ! This will compute the fluxes and write them to shared memory. Note that
-    ! it writes the fluxes to the `left_interfaces_?` arrays and that those
-    ! fluxes are in the conserved variables despite what the member variables
-    ! names say
-    call riemann_driver(left_interfaces_x, right_interfaces_x, left_interfaces_y, &
-         & right_interfaces_y, left_interfaces_z, right_interfaces_z, thread_idx, &
-         & gamma, smallr, smallc2, riemann)
-
-#ifdef MHD
-    ! Zero Euler fluxes when induction-only CT is active.
-    if (induction) then
-       call zero_euler_fluxes_mhd(left_interfaces_x, left_interfaces_y, left_interfaces_z, thread_idx)
-    endif
-
-    ! 2D EMF solve from the shared edge-corner buffers -> edge-EMF subgrids
-    call cmp_mag_flx_mhd(corner_x, corner_y, corner_z, emfx, emfy, emfz, thread_idx, &
-         & gamma, smallr, smallc, switch_llf_dmin, switch_llf_pmin, riemann2d)
-
-    if (etamag > 0.0_dp) then
-       call cmpcurrent_mhd(bf, emfx, emfy, emfz, etamag, dx, thread_idx)
-    endif
-#endif
-
-    ! =======================================================================
-    ! Zero fluxes at boundaries with finer levels.
-    ! =======================================================================
-    if (ilevel < levelmax) then
-       call zero_fine_fluxes(local_subgrid%refined, left_interfaces_x, left_interfaces_y, left_interfaces_z, thread_idx)
-#ifdef MHD
-       call zero_fine_emf(local_subgrid%refined, emfx, emfy, emfz, thread_idx)
-#endif
-    endif
-
-    ! =======================================================================
-    ! Update the conserved variables at current level.
-    ! =======================================================================
-    call conservative_update(unew, bnew, nbor, left_interfaces_x, left_interfaces_y, left_interfaces_z, &
-#ifdef MHD
-         & emfx, emfy, emfz, &
-#endif
-         & head_idx, block_idx, &
-         & thread_idx, dtdx)
-
-    ! =======================================================================
-    ! Update the conserved variables at coarser level.
-    ! =======================================================================
-    if (ilevel > levelmin) then
-       call coarse_cell_update(grid, unew, bnew, father, nbor, left_interfaces_x, left_interfaces_y, left_interfaces_z, &
-#ifdef MHD
-            & emfx, emfy, emfz, &
-#endif
-            & head_idx, block_idx, thread_idx, ngridmax, dtdx)
-    endif
-
-    end associate
-
-  end subroutine hydro_integrator_kernel
 
 #endif
 
@@ -6054,6 +5954,176 @@ contains
   end subroutine hydro_integrator_paper_kernel
 #endif
   ! =========================================================================
+
+  !
+  ! Fused MHD Godunov+CT kernel; working buffers live in shared memory.
+
+#ifndef PAPER
+  ! NVHPC applies a kernel's launch_bounds to every kernel that follows it in the module,
+  ! so kernels without launch_bounds are defined before every kernel that has them.
+#ifndef HYDRO_LB
+#define HYDRO_LB
+#endif
+  attributes(global) HYDRO_LB subroutine hydro_integrator_kernel(grid, uold, unew, bold, bnew, &
+       & f, father, nbor, &
+       & head_idx, num_subgrids, ngridmax, ilevel, levelmin, levelmax, &
+       & gamma, smallr, smallc2, dt, dx, slope, slope_mag, riemann, riemann2d, &
+       & switch_llf_dmin, switch_llf_pmin, induction, etamag, constant_gravity, from_uold)
+    type(oct), device :: grid(*)
+    integer, device :: father(*)
+    integer, device :: nbor(1:subgridsize,*)
+    real(kind=dp), device :: constant_gravity(1:3)
+    real(kind=dp), device :: f(1:twotondim,1:ndim,*)
+    real(kind=dp), device :: uold(1:twotondim,1:nvar,*)
+    real(kind=dp), device :: unew(1:twotondim,1:nvar,*)
+    real(kind=dp), device :: bold(1:twotondim,1:6,*)
+    real(kind=dp), device :: bnew(1:twotondim,1:6,*)
+    integer(kind=4), intent(in), value :: head_idx
+    integer(kind=4), intent(in), value :: num_subgrids
+    integer, intent(in), value :: ngridmax
+    integer, intent(in), value :: ilevel, levelmin, levelmax
+    real(kind=dp), intent(in), value :: gamma, smallr, smallc2
+    real(kind=dp), intent(in), value :: dt
+    real(kind=dp), intent(in), value :: dx
+    integer, intent(in), value :: slope
+    integer, intent(in), value :: slope_mag
+    integer, intent(in), value :: riemann
+    integer, intent(in), value :: riemann2d
+    real(kind=dp), intent(in), value :: switch_llf_dmin, switch_llf_pmin
+    logical, intent(in), value :: induction
+    logical, value :: from_uold
+    real(kind=dp), intent(in), value :: etamag
+
+#ifdef MHD
+    type(mhd_smem_t), shared :: smem(*)
+#else
+    type(hydro_smem_t), shared :: smem(*)
+#endif
+    real(kind=dp) :: dtdx
+    integer :: block_idx  ! The index of this block, corresponds to the subgrid to load
+    integer :: thread_idx ! The index of this thread within the block
+#ifdef MHD
+    real(kind=dp) :: smallc
+    smallc = sqrt(smallc2)
+#endif
+    dtdx = dt / dx
+
+    ! compute the various indices. Note the conversion to zero based indexing
+    block_idx = blockIdx%x - 1
+    thread_idx = threadIdx%x - 1
+
+    ! thread guard, probably not needed since num_blocks should always be equal to num_subgrids
+    if (block_idx >= num_subgrids) return
+
+#ifdef MHD
+    associate(local_subgrid => smem(1)%local_subgrid, &
+#if NVAR>5+NENER
+            & scalar_subgrid => smem(1)%scalar_subgrid, &
+#endif
+            & left_interfaces_x => smem(1)%left_interfaces_x, right_interfaces_x => smem(1)%right_interfaces_x, &
+            & left_interfaces_y => smem(1)%left_interfaces_y, right_interfaces_y => smem(1)%right_interfaces_y, &
+            & left_interfaces_z => smem(1)%left_interfaces_z, right_interfaces_z => smem(1)%right_interfaces_z, &
+            & bf => smem(1)%bf, emfx => smem(1)%emfx, emfy => smem(1)%emfy, emfz => smem(1)%emfz, &
+            & corner_x => smem(1)%corner_x, corner_y => smem(1)%corner_y, corner_z => smem(1)%corner_z)
+#else
+    associate(local_subgrid => smem(1)%local_subgrid, &
+#if NVAR>5+NENER
+            & scalar_subgrid => smem(1)%scalar_subgrid, &
+#endif
+            & left_interfaces_x => smem(1)%left_interfaces_x, right_interfaces_x => smem(1)%right_interfaces_x, &
+            & left_interfaces_y => smem(1)%left_interfaces_y, right_interfaces_y => smem(1)%right_interfaces_y, &
+            & left_interfaces_z => smem(1)%left_interfaces_z, right_interfaces_z => smem(1)%right_interfaces_z)
+#endif
+
+    ! =======================================================================
+    ! Convert from conserved to primitive variables
+    ! =======================================================================
+    call subgrid_conserved_2_primitive(grid, uold, bold, f, constant_gravity, nbor, &
+#if NVAR>5+NENER
+         & scalar_subgrid, &
+#endif
+#ifdef MHD
+         & bf, &
+#endif
+         & head_idx, block_idx, thread_idx, gamma, smallr, smallc2, dt, ilevel < levelmax, local_subgrid)
+
+    ! =======================================================================
+    ! Perform tracing step and compute the interface states
+    ! =======================================================================
+    ! This will compute the interface states and write them to shared memory
+    call trace_3d(local_subgrid, thread_idx, &
+#if NVAR>5+NENER
+         & scalar_subgrid, &
+#endif
+#ifdef MHD
+         & bf, corner_x, corner_y, corner_z, &
+         & smallc, slope_mag, induction, &
+#endif
+         & left_interfaces_x, right_interfaces_x, left_interfaces_y, right_interfaces_y, &
+         & left_interfaces_z, right_interfaces_z, gamma, smallr, smallc2, dtdx, slope)
+
+    ! =======================================================================
+    ! Compute the fluxes.
+    ! =======================================================================
+    ! This will compute the fluxes and write them to shared memory. Note that
+    ! it writes the fluxes to the `left_interfaces_?` arrays and that those
+    ! fluxes are in the conserved variables despite what the member variables
+    ! names say
+    call riemann_driver(left_interfaces_x, right_interfaces_x, left_interfaces_y, &
+         & right_interfaces_y, left_interfaces_z, right_interfaces_z, thread_idx, &
+         & gamma, smallr, smallc2, riemann)
+
+#ifdef MHD
+    ! Zero Euler fluxes when induction-only CT is active.
+    if (induction) then
+       call zero_euler_fluxes_mhd(left_interfaces_x, left_interfaces_y, left_interfaces_z, thread_idx)
+    endif
+
+    ! 2D EMF solve from the shared edge-corner buffers -> edge-EMF subgrids
+    call cmp_mag_flx_mhd(corner_x, corner_y, corner_z, emfx, emfy, emfz, thread_idx, &
+         & gamma, smallr, smallc, switch_llf_dmin, switch_llf_pmin, riemann2d)
+
+    if (etamag > 0.0_dp) then
+       call cmpcurrent_mhd(bf, emfx, emfy, emfz, etamag, dx, thread_idx)
+    endif
+#endif
+
+    ! =======================================================================
+    ! Zero fluxes at boundaries with finer levels.
+    ! =======================================================================
+    if (ilevel < levelmax) then
+       call zero_fine_fluxes(local_subgrid%refined, left_interfaces_x, left_interfaces_y, left_interfaces_z, thread_idx)
+#ifdef MHD
+       call zero_fine_emf(local_subgrid%refined, emfx, emfy, emfz, thread_idx)
+#endif
+    endif
+
+    ! =======================================================================
+    ! Update the conserved variables at current level.
+    ! =======================================================================
+    call conservative_update(uold, unew, bnew, nbor, left_interfaces_x, left_interfaces_y, left_interfaces_z, &
+#ifdef MHD
+         & emfx, emfy, emfz, &
+#endif
+         & head_idx, block_idx, &
+         & thread_idx, dtdx, from_uold)
+
+    ! =======================================================================
+    ! Update the conserved variables at coarser level.
+    ! =======================================================================
+    if (ilevel > levelmin) then
+       call coarse_cell_update(grid, unew, bnew, father, nbor, left_interfaces_x, left_interfaces_y, left_interfaces_z, &
+#ifdef MHD
+            & emfx, emfy, emfz, &
+#endif
+            & head_idx, block_idx, thread_idx, ngridmax, dtdx)
+    endif
+
+    end associate
+
+  end subroutine hydro_integrator_kernel
+
+#endif
 
 #ifdef MHD
   ! One substep or stage of the non-ideal MHD update. As in the Godunov step, the energy fluxes

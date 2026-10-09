@@ -24,6 +24,7 @@ You can compile the code by setting these parameters to your preffered value usi
 | `MPIF90 = mpif90` | `string`  | This sets the name of the MPI Fortran compiler on your system. |
 | `EXEC=ramses`    | `string` | This sets the name of the executable for the compiled code. The number of dimensions used at compilation via parameter `NDIM` is appended at the end. |
 | `NHILBERT = 1`   | `1`, `2` or `3`  | This sets the number of long integers uswed to code the Hilbert key. This choice sets also the maximum level of refinement. In 3D, `NHILBERT=1` corresponds to `levelmax<21`, `NHILBERT=2` to `levelmax<42` and `NHILBERT=3` to `levelmax<63`.|
+| `NSUBGRID = 1`  | `1`, `2` or `4` (MHD: `1` or `2`) | CUDA subgrid size in octs per dimension; the GPU launch configuration also depends on `CUDA_ARCH` and `NPRE`. |
 | `NVECTOR = 32`   | `integer`  | This sets the size of the vector sweeps used in many subroutines of the code. This is used for optimization purposes. This is highly problem and architecture dependant. |
 | `NPRE = 8`       | `4` or `8`  | This sets the number of bytes used to code floating point numbers. `4` means single precision (not recommanded) `8` means double precision. |
 | `DEBUG = 0`      | `0` or `1`  | This turns on or off the debug mode. |
