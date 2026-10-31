@@ -655,7 +655,7 @@ subroutine collect_peak(s)
 
      end do
 
-     density_max=1.0001*m%rho(ind,igrid)
+     density_max=1.0001d0*m%rho(ind,igrid)
      ok_peak=.true.
 
      do j=1,nSnei
