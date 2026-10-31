@@ -320,7 +320,7 @@ subroutine mechanical_feedback(s,p,ilevel,texp_old,msn_loc)
   real(kind=8),parameter::expZ_SN=-0.14
 
   real(kind=8)::d,d_nei,dloss,ekloss,dzloss,zloss,dm_ejecta,dm_load,m_SN
-  real(kind=8)::e,ekk,eth,p_solid,ek_solid,f_esn2,f_w_cell,f_w_crit
+  real(kind=8)::e,ekk,eth,p_solid,f_esn2,f_w_cell,f_w_crit,m_pt,de
   real(kind=8)::nH_nei,u,v,w,up,vp,wp,T2,x,y,z,rr,Z_nei,Zdepen
   real(kind=8)::vload,vload_rad,vol_nei
   real(kind=8),dimension(1:3,1:nSNnei)::xSNnei
@@ -337,7 +337,7 @@ subroutine mechanical_feedback(s,p,ilevel,texp_old,msn_loc)
   real(kind=8)::mejecta,ekinetic,ethermal
   real(kind=8)::birth_time,t_sn,e_sn,dold,num_SN,fecrtot
   real(kind=8),dimension(ncrgrp)::e_sn_crs
-  real(kind=8),dimension(1:3)::xcen,xnei
+  real(kind=8),dimension(1:3)::xcen,xnei,vv,p_pt,v_new
   real(kind=8),dimension(1:nvar)::q
   type(msg_large_realdp)::dummy_large_realdp
   logical::ok_level,ok_leaf,ok,ok_face
@@ -615,16 +615,25 @@ subroutine mechanical_feedback(s,p,ilevel,texp_old,msn_loc)
         endif
         if(vload > vload_rad) vload = vload_rad ! safety
 
-        ! Compute radial momentum and kinetic energy
+        ! Compute radial momentum
         p_solid = (1d0+f_w_cell)*dm_ejecta*vload
-        ek_solid = p_solid*(vload*f_LOAD)/2d0
+
+        ! Energy: kinetic energy change of the gas of the sample point after
+        ! merging with the loaded mass and the shell momentum, so that its
+        ! thermal energy is unchanged (plus the thermal energy of the gas
+        ! loaded from the central cell)
+        m_pt = d_nei/8d0
+        vv(1:3) = m%uold(icelln,2:4,igridn)/d_nei
+        p_pt(1:3) = ((/up,vp,wp/)*dloss*f_LOAD+(/u,v,w/)*d*f_LOAD_CEN)/dble(nSNnei) + p_solid*vSNnei(1:3,j)
+        v_new(1:3) = (m_pt*vv(1:3)+p_pt(1:3))/(m_pt+dm_load)
+        de = 0.5d0*(m_pt+dm_load)*sum(v_new(1:3)**2) - 0.5d0*m_pt*sum(vv(1:3)**2) + eth*f_LOAD_CEN/dble(nSNnei)
 
         ! Add mass, momentum and energy coming from central cell loading
         m%unew(icelln,1,igridn)=m%unew(icelln,1,igridn)+(dloss*f_LOAD+d*f_LOAD_CEN)/dble(nSNnei)/vol_nei
         m%unew(icelln,2,igridn)=m%unew(icelln,2,igridn)+(dloss*up*f_LOAD+d*u*f_LOAD_CEN)/dble(nSNnei)/vol_nei
         m%unew(icelln,3,igridn)=m%unew(icelln,3,igridn)+(dloss*vp*f_LOAD+d*v*f_LOAD_CEN)/dble(nSNnei)/vol_nei
         m%unew(icelln,4,igridn)=m%unew(icelln,4,igridn)+(dloss*wp*f_LOAD+d*w*f_LOAD_CEN)/dble(nSNnei)/vol_nei
-        m%unew(icelln,5,igridn)=m%unew(icelln,5,igridn)+(ekloss*f_LOAD+(ekk+eth)*f_LOAD_CEN)/dble(nSNnei)/vol_nei
+        m%unew(icelln,5,igridn)=m%unew(icelln,5,igridn)+de/vol_nei
 
         ! Add metals
         if(r%metal)then
@@ -637,11 +646,10 @@ subroutine mechanical_feedback(s,p,ilevel,texp_old,msn_loc)
            m%unew(icelln,ivar,igridn)=m%unew(icelln,ivar,igridn)+(dloss*f_LOAD+d*f_LOAD_CEN)*q(ivar)/dble(nSNnei)/vol_nei
         end do
 
-        ! Add momentum and energy coming from the cold shell
+        ! Add momentum coming from the cold shell
         m%unew(icelln,2,igridn)=m%unew(icelln,2,igridn)+p_solid*vSNnei(1,j)/vol_nei
         m%unew(icelln,3,igridn)=m%unew(icelln,3,igridn)+p_solid*vSNnei(2,j)/vol_nei
         m%unew(icelln,4,igridn)=m%unew(icelln,4,igridn)+p_solid*vSNnei(3,j)/vol_nei
-        m%unew(icelln,5,igridn)=m%unew(icelln,5,igridn)+ek_solid/vol_nei
 
      end do
      ! End loop over solid angle
