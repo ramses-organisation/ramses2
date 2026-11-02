@@ -5,6 +5,7 @@ contains
 subroutine m_read_params(pst)
   use core_params_module, only: read_core_params
   use amr_parameters
+  use hilbert, only: levels_per_key
   use hydro_parameters
   use rt_parameters, only: nrtgrp
   use cr_parameters, only: ncrgrp
@@ -909,6 +910,14 @@ subroutine m_read_params(pst)
   if(nlevelmax<levelmin)then
      write(*,*)'Error in the namelist:'
      write(*,*)'levelmax should not be lower than levelmin'
+     nml_ok=.false.
+  end if
+  ! The keys go to level levelmax+1: levels_per_key levels per Hilbert word,
+  ! and the Cartesian keys 2**(level-1) in a default integer
+  if(nlevelmax+1>min(levels_per_key(ndim)*nhilbert,digits(0)))then
+     write(*,*)'Error in the namelist:'
+     write(*,'(" levelmax should not be larger than ",I0,", the largest the keys allow with NHILBERT=",I0)') &
+          & min(levels_per_key(ndim)*nhilbert,digits(0))-1,nhilbert
      nml_ok=.false.
   end if
   if(part_dep_algo<1 .or. part_dep_algo>3)then

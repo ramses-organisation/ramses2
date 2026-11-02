@@ -108,7 +108,7 @@ poisson_flag.o: amr_commons.o amr_parameters.o hash.o hydro_parameters.o ramses_
 posix_io.o: amr_parameters.o
 ramses_commons.o: amr_commons.o amr_parameters.o clfind_commons.o cooling_module.o coolrates_module.o cr_parameters.o hydro_parameters.o mdl.o pm_commons.o rt_parameters.o rt_spectra.o turb_commons.o
 read_cr_params.o: amr_parameters.o constants.o cr_parameters.o hydro_parameters.o mdl.o movie.o ramses_commons.o
-read_params.o: amr_commons.o amr_parameters.o constants.o core_params.o cr_parameters.o hydro_parameters.o mdl.o mdl_commons.o movie.o ramses_commons.o read_cr_params.o read_rt_params.o rt_parameters.o
+read_params.o: amr_commons.o amr_parameters.o constants.o core_params.o cr_parameters.o hilbert.o hydro_parameters.o mdl.o mdl_commons.o movie.o ramses_commons.o read_cr_params.o read_rt_params.o rt_parameters.o
 read_rt_params.o: amr_parameters.o constants.o hydro_parameters.o mdl.o movie.o ramses_commons.o rt_parameters.o
 refine_utils.o: amr_commons.o amr_parameters.o boundaries.o cache.o cache_commons.o call_back.o cr_parameters.o hash.o hilbert.o hydro_parameters.o init_refine_basegrid.o load_balance.o marshal.o mdl.o mdl_commons.o nbors_utils.o oct_commons.o ramses_commons.o rt_parameters.o
 rho_ana.o: amr_parameters.o
