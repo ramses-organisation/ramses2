@@ -127,8 +127,6 @@ module cooling_module
           -26.4168d0,     0.0479454d0,  1.70948d0,   &
           -1.26395d0,     0.378922d0,  -0.0570957d0, &
           0.00428897d0, -0.000127909d0 /),(/Nordercourty+1,6/) )
-     real(kind=8), dimension(6) :: coef_fit= 20
-     integer, dimension(6)      :: beta_fit = 6
 
      ! UVB change tracking
      real(kind=8) :: uvb_delta = 0.05d0      ! Relative change threshold
@@ -1298,7 +1296,7 @@ function taux_rad_courty(c,ispec,z)
   implicit none
   type(cooling_t)::c
   integer :: ispec,i,iweinb
-  real(kind=8) :: z,zz,taux_rad_courty,hh,tt,hhreion
+  real(kind=8) :: z,zz,taux_rad_courty,hh,tt
   taux_rad_courty=0d0
   if (z < c%zreioniz) then
      if (ispec==HI  ) iweinb=1
@@ -1309,8 +1307,7 @@ function taux_rad_courty(c,ispec,z)
      do i=0,Nordercourty
         hh=hh+c%coefcourty(i,iweinb)*zz**i
      enddo
-     hhreion=c%coef_fit(iweinb)*(zz/c%zreioniz)**c%beta_fit(iweinb)
-     taux_rad_courty=10**(hh-hhreion)
+     taux_rad_courty=10**hh
   endif
   tt=taux_rad_theuns(c,ispec,c%J0min)
   taux_rad_courty=max(tt,taux_rad_courty)
@@ -1377,7 +1374,7 @@ function heat_rad_courty(c,ispec,z)
   implicit none
   type(cooling_t)::c
   integer :: ispec,i,iweinb
-  real(kind=8) :: z,zz,heat_rad_courty,hh,tt,hhreion
+  real(kind=8) :: z,zz,heat_rad_courty,hh,tt
   heat_rad_courty=0d0
   if (z < c%zreioniz) then
      if (ispec==HI  ) iweinb=4
@@ -1388,8 +1385,7 @@ function heat_rad_courty(c,ispec,z)
      do i=0,Nordercourty
         hh=hh+c%coefcourty(i,iweinb)*zz**i
      enddo
-     hhreion=c%coef_fit(iweinb)*(zz/c%zreioniz)**c%beta_fit(iweinb)
-     heat_rad_courty=10**(hh-hhreion)
+     heat_rad_courty=10**hh
   endif
   tt=heat_rad_theuns(c,ispec,c%J0min)
   heat_rad_courty=max(tt,heat_rad_courty)
