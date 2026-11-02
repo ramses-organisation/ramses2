@@ -8,12 +8,14 @@ import ramses as ram
 parser = argparse.ArgumentParser(description="Plot the stellar mass fraction of each clump versus clump mass")
 parser.add_argument("nout", help="enter output number")
 parser.add_argument("--path", help="run directory containing output_* (default ./)")
+parser.add_argument("--npart", help="minimum number of dark matter particles per clump (default 100)")
 parser.add_argument("--out", help="output a png image")
 args = parser.parse_args()
 no_display = set_backend()
 
 nout = args.nout
 path = args.path+"/" if args.path else "./"
+npart_min = int(args.npart) if args.npart else 100
 
 print("Reading output number ",nout," in ",path)
 i=ram.rd_info(nout,path=path)
@@ -43,9 +45,9 @@ print("Stars in a peak: N=%d  M=%10.4e Msol" % (np.count_nonzero(inpeak), np.sum
 print("Peaks with stars not in the catalog: %d  M=%10.4e Msol" % (np.count_nonzero(~found), np.sum(mpeak[~found])*unit_m))
 print("Clumps: N=%d  with stars: %d" % (len(c.index), np.count_nonzero(mstar > 0)))
 
-# Keep only central clumps (index = parent = halo)
-central = (c.index == c.parent) & (c.index == c.halo)
-print("Central clumps: N=%d  with stars: %d" % (np.count_nonzero(central), np.count_nonzero(central & (mstar > 0))))
+# Keep only central clumps (index = parent = halo) with at least npart_min particles
+central = (c.index == c.parent) & (c.index == c.halo) & (c.npart >= npart_min)
+print("Central clumps with npart>=%d: N=%d  with stars: %d" % (npart_min, np.count_nonzero(central), np.count_nonzero(central & (mstar > 0))))
 
 # Stellar mass fraction versus clump mass
 mclump = c.mass * unit_m
