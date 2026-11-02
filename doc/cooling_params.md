@@ -18,7 +18,7 @@ The namelist block `&COOLING_PARAMS` is used to specify parameters controlling g
 | `self_shielding`    | `logical`  | .false. | Turn on or off a simple self-shielding model to reduce the UV radiation using the following attenuation factor: `exp(-nH/0.01)`. |
 | `J21`               | `real`     | 0       | Nornalization of the UV background Spectral Energy Distribution at 13.6 eV in units of `10^21 erg`. |
 | `a_spec`            | `real`     | -1      | Power law of the UV background Spectral Energy Distribution as `J(nu)=J21*(nu/13.6)^(a_spec)`. |
-| `z_reion`           | `real`     | 8.5     | Reionization redshift that marks the starting eoph of the adopted UV background. |
+| `z_reion`           | `real`     | 8.5     | Reionization redshift that marks the starting epoch of the adopted UV background. Must satisfy `z_reion <= 10`. |
 | `z_ave`             | `real`     | 0       | Average metallicity (in solar units) used in the cooling function in case `metal=.false.`. If `metal=.true.`, it is used as the default value in the initial conditions for the corresponding passive scalar. Note that a metallicity of 1 in solar units corresponds to the passive scalar value `Z=0.02`. |
 | `T2max`             | `real`     | 1d50    | Maximum temperature (T/mu in units of [K]) allowed in the cooling routine. If for some reason `T2>T2max`, then the code resets `T2=T2max` in the corresponding cell. |
 | `neq_Tconst`        | `real`     | -1      | If positive, set the value of the constant gas temperature for non-equilibrium chemistry. |
