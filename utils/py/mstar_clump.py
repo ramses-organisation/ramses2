@@ -63,6 +63,16 @@ ratio = mstar[ok] / c.mpatch[ok]
 
 fig, ax = plt.subplots(figsize=(6,5))
 ax.scatter(mclump[ok], ratio, s=2, alpha=0.5)
+
+# Median in log-spaced mass bins (bins with at least 5 halos)
+lm = np.log10(mclump[ok])
+bins = np.linspace(lm.min(), lm.max(), 16)
+ib = np.digitize(lm, bins[1:-1])
+kept = [k for k in range(len(bins)-1) if np.count_nonzero(ib==k) >= 5]
+if kept:
+    xm = [np.median(lm[ib==k]) for k in kept]
+    ym = [np.median(ratio[ib==k]) for k in kept]
+    ax.plot(10**np.array(xm), ym, color='k', lw=2, label='median')
 ax.axhline(i.omega_b/i.omega_m, color='k', ls='--', lw=1, label=r'$\Omega_b/\Omega_m$')
 ax.set_xscale("log")
 ax.set_yscale("log")
