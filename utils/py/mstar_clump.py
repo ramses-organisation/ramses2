@@ -45,14 +45,21 @@ print("Stars in a peak: N=%d  M=%10.4e Msol" % (np.count_nonzero(inpeak), np.sum
 print("Peaks with stars not in the catalog: %d  M=%10.4e Msol" % (np.count_nonzero(~found), np.sum(mpeak[~found])*unit_m))
 print("Clumps: N=%d  with stars: %d" % (len(c.index), np.count_nonzero(mstar > 0)))
 
+# Maximum stellar mass over all clumps of the same halo, stored on the halo clump
+hpos = order[np.searchsorted(c.index, c.halo, sorter=order)]
+mstar_max = np.zeros(len(c.index))
+np.maximum.at(mstar_max, hpos, mstar)
+print("Halos where the max stellar mass is not in the central clump: %d" % np.count_nonzero(mstar_max > mstar))
+mstar = mstar_max
+
 # Keep only central clumps (index = parent = halo) with at least npart_min particles
 central = (c.index == c.parent) & (c.index == c.halo) & (c.npart >= npart_min)
 print("Central clumps with npart>=%d: N=%d  with stars: %d" % (npart_min, np.count_nonzero(central), np.count_nonzero(central & (mstar > 0))))
 
 # Stellar mass fraction versus clump mass
-mclump = c.mass * unit_m
-ok = central & (mstar > 0) & (c.mass > 0)
-ratio = mstar[ok] / c.mass[ok]
+mclump = c.mpatch * unit_m
+ok = central & (mstar > 0) & (c.mpatch > 0)
+ratio = mstar[ok] / c.mpatch[ok]
 
 fig, ax = plt.subplots(figsize=(6,5))
 ax.scatter(mclump[ok], ratio, s=2, alpha=0.5)
