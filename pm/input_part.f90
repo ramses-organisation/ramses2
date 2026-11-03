@@ -171,7 +171,7 @@ recursive subroutine r_check_part_emission(pst)
         endif
         r%rt_advect=.true.
         ! Update cross sections based on star properties
-        if(r%sedprops_update .gt. 0) then
+        if(r%sedprops_update .gt. 0 .and. r%nrestart .eq. 0) then
            call update_SED_group_props(r, g, pst%s%sed, pst%s%star)
         endif
      endif
