@@ -1090,7 +1090,10 @@ contains
           if (agn_use_mass_weighting) w = d
           if (.not. s_quasar) then
              mu = xoff(1) * s_jet(1) + xoff(2) * s_jet(2) + xoff(3) * s_jet(3)
-             if (mu == 0.0_dp) w = 0.0_dp
+             ! Points in the plane (tolerance: FMA round-off when |x|=|z|)
+             if (abs(mu) < 1.0e-6_dp) then
+                mu = 0.0_dp; w = 0.0_dp
+             endif
           endif
        endif
        w_tot = w

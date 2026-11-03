@@ -556,7 +556,10 @@ contains
           do j=1,nSKnei
              if(.not.quasar_mode)then
                 mu_nbor(j) = dot_product(xSKnei(1:ndim,j),jet_direction(1:ndim))
-                if(mu_nbor(j)==0.0d0)cycle
+                ! Points in the plane (tolerance: FMA round-off when |x|=|z|)
+                if(abs(mu_nbor(j))<1.0d-6)then
+                   mu_nbor(j)=0.0d0; cycle
+                endif
              endif
              w_nbor(j) = 1d0
              if(r%agn_use_mass_weighting)w_nbor(j) = d_nbor(j)
