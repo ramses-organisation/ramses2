@@ -15,13 +15,14 @@ subroutine m_init_refine_restart(pst)
   use rho_fine_module, only: m_rho_fine
 #endif
   use output_amr_module, only: input_params
+  use output_rt_module, only: input_rt_groups
   implicit none
   type(pst_t)::pst
   !--------------------------------------------------------------------
   ! This routine is the master procedure to set the base grid
   ! and initialize all cell-based variables within it.
   !--------------------------------------------------------------------
-  character(LEN=flen)::file_params,file_amr
+  character(LEN=flen)::file_params,file_amr,file_rt
   character(LEN=5)::nchar,ncharcpu
   integer(kind=8),dimension(1:nhilbert)::zero_key
   integer(kind=8),dimension(1:nhilbert,0:pst%s%g%ncpu)::bound_key
@@ -44,6 +45,11 @@ subroutine m_init_refine_restart(pst)
   call title(r%nrestart,nchar)
   file_params='backup_'//TRIM(nchar)//'/params.bin'
   call input_params(mdl,r,g,file_params,nfile_file,ncpu_file,levelmin_file,nlevelmax_file)
+  ! Read back the photon group properties
+  if(r%rt)then
+     file_rt='backup_'//TRIM(nchar)//'/rt_groups.bin'
+     call input_rt_groups(r,g,file_rt)
+  endif
   write(*,'(" Restart snapshot has levelmin=",I4)')levelmin_file
   write(*,'(" Restart snapshot has levelmax=",I4)')nlevelmax_file
 

@@ -263,6 +263,66 @@ end subroutine output_rtInfo
 !########################################################################
 !########################################################################
 !########################################################################
+subroutine output_rt_groups(r, filename)
+
+! Output the photon group properties, for a restart
+!------------------------------------------------------------------------
+  use amr_parameters, only: flen
+  use amr_commons, only: run_t
+  use rt_parameters, only: nrtgrp
+  implicit none
+  type(run_t)::r
+  character(LEN=flen)::filename
+  integer :: ilun
+!------------------------------------------------------------------------
+  ilun=11
+  open(unit=ilun,file=TRIM(filename),access="stream",action="write",form='unformatted')
+  write(ilun)nrtgrp,size(r%group_csn)
+  write(ilun)r%group_egy,r%group_csn,r%group_cse
+  close(ilun)
+
+end subroutine output_rt_groups
+
+!########################################################################
+!########################################################################
+!########################################################################
+!########################################################################
+subroutine input_rt_groups(r, g, filename)
+
+! Read back the photon group properties written by output_rt_groups
+!------------------------------------------------------------------------
+  use amr_parameters, only: flen
+  use amr_commons, only: run_t, global_t
+  use rt_parameters, only: nrtgrp
+  implicit none
+  type(run_t)::r
+  type(global_t)::g
+  character(LEN=flen)::filename
+  integer :: ilun, nrtgrp_file, ncs_file
+  logical :: file_exist
+!------------------------------------------------------------------------
+  inquire(file=filename, exist=file_exist)
+  if(.not.file_exist)then
+     if(g%myid==1)write(*,*)'Missing '//TRIM(filename)
+     return
+  endif
+  if(g%myid==1)write(*,*)'Reading '//TRIM(filename)
+  ilun=11
+  open(unit=ilun,file=TRIM(filename),access="stream",action="read",form='unformatted')
+  read(ilun)nrtgrp_file,ncs_file
+  if(nrtgrp_file/=nrtgrp.or.ncs_file/=size(r%group_csn))then
+     write(*,*)'Error: '//TRIM(filename)//' does not match the photon groups of this run'
+     stop
+  endif
+  read(ilun)r%group_egy,r%group_csn,r%group_cse
+  close(ilun)
+
+end subroutine input_rt_groups
+
+!########################################################################
+!########################################################################
+!########################################################################
+!########################################################################
 subroutine write_group_props(r, update, lun)
 
 ! Write photon group properties to file or std output.
