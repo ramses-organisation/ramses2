@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-import os
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MultipleLocator
@@ -8,30 +7,25 @@ import argparse
 import ramses as ram
 
 parser = argparse.ArgumentParser(description="Plot the cosmic star formation rate density versus redshift")
-parser.add_argument("nout", nargs="+", help="enter output number (one for all paths, or one per path)")
-parser.add_argument("--path", nargs="+", help="specify one or more paths")
-parser.add_argument("--label", nargs="+", help="legend labels, one per path (default: path names)")
+parser.add_argument("nout", help="enter output number")
+parser.add_argument("paths", nargs="*", default=["."], help="run directories containing output_* (default ./)")
+parser.add_argument("--labels", nargs="+", help="legend labels, one per run")
 parser.add_argument("--out", help="output a png image")
 parser.add_argument("--bin", help="specify the bin size in Gyr")
 args = parser.parse_args()
 no_display = set_backend()
 
-paths = args.path if args.path else ["."]
-nouts = args.nout
-if len(nouts) == 1:
-    nouts = nouts * len(paths)
-if len(nouts) != len(paths):
-    print("Give one output number, or one per path")
-    exit()
-labels = args.label if args.label else [os.path.basename(os.path.normpath(os.path.abspath(p))) for p in paths]
+nout = args.nout
+paths = args.paths
+labels = args.labels if args.labels else paths
 if len(labels) != len(paths):
-    print("Give one label per path")
+    print("Need one label per run")
     exit()
 bin_size = float(args.bin) if args.bin else 0.1  # in Gyr
 
 fig, ax = plt.subplots()
 
-for path, nout, label in zip(paths, nouts, labels):
+for path, label in zip(paths, labels):
     path = path+"/"
     print("Reading output number ",nout," in ",path)
 
