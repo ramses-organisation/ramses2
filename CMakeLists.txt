@@ -586,7 +586,7 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "NVHPC")
         gpu/gpu_phew.cuf
     )
     list(APPEND fortran_files ${gpu_cuf_files} gpu/gpu_manager.cuf)
-    set_source_files_properties(${gpu_cuf_files} PROPERTIES LANGUAGE Fortran)
+    set_source_files_properties(${gpu_cuf_files} gpu/gpu_manager.cuf PROPERTIES LANGUAGE Fortran)
 
     # -------------------------------------------------------------------------
     # CUB wrappers: .cu files compiled with nvcc, then .cuf wrappers compiled
