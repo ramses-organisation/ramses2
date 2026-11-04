@@ -164,7 +164,7 @@ recursive subroutine r_check_part_emission(pst)
   else
 
      ! Check if radiadion advection should be turned on
-     if(r%rt .and. r%star .and. .not. r%rt_advect                         &
+     if(r%rt .and. r%star .and. r%rt_star .and. .not. r%rt_advect         &
         .and. pst%s%star%npart_tot .gt. 0) then
         if(g%myid==1) then
           write(*,*) 'Stellar radiation is emitted and advected'

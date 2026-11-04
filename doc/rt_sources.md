@@ -2,7 +2,7 @@ The namelist block `&RT_SOURCES` is used to specify the sources of radiation.
 
 | Variable name | Fortran type | Default value  | Description      |
 |:------------------- |:-------|:----- |:------------------------- |
-| `rt_star`           | `logical`   | `.false.`  | Activate the emission of radiation from stellar particles. |
+| `rt_star`           | `logical`   | `.true.`   | Activate the emission of radiation from stellar particles. |
 | `rt_sink`           | `logical`   | `.false.`  | Activate the emission of radiation from sink particles (this is for now not working). |
 | `rt_esc_frac`       | `real`      | 1.0        | Escape fraction of photons from stellar particles, essentially a multiplication factor for the particle emission. |
 | `rt_emission_stats` | `logical`   | `.false.`  | Print information about photon emission to standard output |

@@ -39,7 +39,7 @@ subroutine m_rt_step(pst,ilevel)
   dt_rad = dt_save/dble(i_substep)
 
   ! Compute isotropic emissivity from stars
-  if(r%star)call r_star_RT_feedback(pst,ilevel,1)
+  if(r%star .and. r%rt_star) call r_star_RT_feedback(pst,ilevel,1)
 
   ! Compute isotropic emissivity from sinks
   ! if(r%rt_sink) call r_sink_RT_feedback(pst,ilevel,1)

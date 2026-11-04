@@ -39,7 +39,7 @@ recursive subroutine r_star_formation(pst,ilevel,input_size,output,output_size)
 #endif
 
      ! Check if radiadion advection should be turned on
-     if(pst%s%r%rt .and. .not. pst%s%r%rt_advect .and. pst%s%star%npart_tot .gt. 0) then
+     if(pst%s%r%rt .and. pst%s%r%rt_star .and. .not. pst%s%r%rt_advect .and. pst%s%star%npart_tot .gt. 0) then
         if(pst%s%g%myid==1) then
           write(*,*) '*****************************************'
           if(pst%s%r%cosmo) then
