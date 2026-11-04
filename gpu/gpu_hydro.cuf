@@ -423,7 +423,11 @@ contains
     sz = half*(slop*dfz)
   end subroutine slope_unsplit3d
 
+  ! Pure hydro without passive scalars traces pairs of cells at slope_type=3 (trace_3d), in its own kernel.
 #if !defined(MHD) && !(NVAR>5+NENER)
+#define HYDRO_PAIR
+#endif
+#ifdef HYDRO_PAIR
   ! slope_unsplit3d of the cells (i,j,k) and (i,j,k+1) together: the 3x3 cells of each plane
   ! k-1..k+2 are loaded once for both. min and max are exact and commute with subtracting the
   ! centre, and the other expressions are those of slope_unsplit3d, so the slopes are bitwise its own.
@@ -1680,7 +1684,7 @@ contains
 #endif
   ! =========================================================================
 
-#if !defined(MHD) && !(NVAR>5+NENER)
+#ifdef HYDRO_PAIR
   ! The part of trace_3d's loop after the slopes, for pure hydro: predictor and interface states
   ! of cell (i,j,k). Keep in step with the loop body of trace_3d.
   attributes(device) subroutine trace_hydro_cell(local_subgrid, i, j, k, slopes_x, slopes_y, slopes_z, &
@@ -1837,11 +1841,17 @@ contains
        & smallc, slope_mag, induction, &
 #endif
        & left_interfaces_x, right_interfaces_x,left_interfaces_y, right_interfaces_y, &
+#ifdef HYDRO_PAIR
+       & pair, &
+#endif
        & left_interfaces_z, right_interfaces_z, gamma, smallr, smallc2, dtdx, slope)
     type(subgrid_6x6x6cell_primitive), intent(inout) :: local_subgrid ! The subgrid that this block is working on in shared memory
     integer, value :: thread_idx
     real(kind=dp), value :: gamma, smallr, smallc2, dtdx
     integer, value :: slope
+#ifdef HYDRO_PAIR
+    logical, value :: pair ! slope_type=3, by pairs of cells
+#endif
 
     type(subgrid_3x2x2cell_primitive) :: left_interfaces_x, right_interfaces_x
     type(subgrid_2x3x2cell_primitive) :: left_interfaces_y, right_interfaces_y
@@ -1858,7 +1868,7 @@ contains
 #ifndef MHD
     integer :: ncell, nwork, face_idx, face_work, face_i, face_j
 #endif
-#if !defined(MHD) && !(NVAR>5+NENER)
+#ifdef HYDRO_PAIR
     integer :: ncolumn
     type(primitive_t) :: slopes_x2, slopes_y2, slopes_z2 ! Slopes of the cell (i,j,k+1) of a pair
 #endif
@@ -1902,8 +1912,8 @@ contains
 
     smallp = smallr * smallc2
 
-#if !defined(MHD) && !(NVAR>5+NENER)
-    if (slope == 3) then
+#ifdef HYDRO_PAIR
+    if (pair) then
        ! Each thread traces the cells (i,j,k) and (i,j,k+1), whose 3x3x3 stencils share the planes
        ! k-1..k+2. The same cells as the loop below, each once: the columns k = 1..work_size over
        ! the interior (i,j), then the x and the y face layers in pairs k = 2..work_size-1.
@@ -6605,11 +6615,19 @@ contains
 #else
 #define HYDRO_LB launch_bounds(640,1)
 #endif
+#ifdef HYDRO_PAIR
+  attributes(device) subroutine hydro_integrator(grid, uold, unew, bold, bnew, &
+       & f, father, nbor, &
+       & head_idx, num_subgrids, ngridmax, ilevel, levelmin, levelmax, &
+       & gamma, smallr, smallc2, dt, dx, slope, slope_mag, riemann, riemann2d, &
+       & switch_llf_dmin, switch_llf_pmin, induction, etamag, constant_gravity, smem, pair)
+#else
   attributes(global) HYDRO_LB subroutine hydro_integrator_kernel(grid, uold, unew, bold, bnew, &
        & f, father, nbor, &
        & head_idx, num_subgrids, ngridmax, ilevel, levelmin, levelmax, &
        & gamma, smallr, smallc2, dt, dx, slope, slope_mag, riemann, riemann2d, &
        & switch_llf_dmin, switch_llf_pmin, induction, etamag, constant_gravity)
+#endif
     type(oct), device :: grid(*)
     integer, device :: father(*)
     integer, device :: nbor(1:subgridsize,*)
@@ -6636,6 +6654,9 @@ contains
 
 #ifdef MHD
     type(mhd_smem_t), shared :: smem(*)
+#elif defined(HYDRO_PAIR)
+    type(hydro_smem_t) :: smem(1)
+    logical, value :: pair
 #else
     type(hydro_smem_t), shared :: smem(*)
 #endif
@@ -6700,6 +6721,9 @@ contains
          & smallc, slope_mag, induction, &
 #endif
          & left_interfaces_x, right_interfaces_x, left_interfaces_y, right_interfaces_y, &
+#ifdef HYDRO_PAIR
+         & pair, &
+#endif
          & left_interfaces_z, right_interfaces_z, gamma, smallr, smallc2, dtdx, slope)
 
     ! =======================================================================
@@ -6761,7 +6785,87 @@ contains
 
     end associate
 
+  end subroutine
+
+#ifdef HYDRO_PAIR
+  ! slope_type 0-2. Two kernels keep the pair tracing of slope_type=3 out of this kernel's register allocation.
+  attributes(global) HYDRO_LB subroutine hydro_integrator_kernel(grid, uold, unew, bold, bnew, &
+       & f, father, nbor, &
+       & head_idx, num_subgrids, ngridmax, ilevel, levelmin, levelmax, &
+       & gamma, smallr, smallc2, dt, dx, slope, slope_mag, riemann, riemann2d, &
+       & switch_llf_dmin, switch_llf_pmin, induction, etamag, constant_gravity)
+    type(oct), device :: grid(*)
+    integer, device :: father(*)
+    integer, device :: nbor(1:subgridsize,*)
+    real(kind=dp), device :: constant_gravity(1:3)
+    real(kind=dp), device :: f(1:twotondim,1:ndim,*)
+    real(kind=dp), device :: uold(1:twotondim,1:nvar,*)
+    real(kind=dp), device :: unew(1:twotondim,1:nvar,*)
+    real(kind=dp), device :: bold(1:twotondim,1:6,*)
+    real(kind=dp), device :: bnew(1:twotondim,1:6,*)
+    integer(kind=4), intent(in), value :: head_idx
+    integer(kind=4), intent(in), value :: num_subgrids
+    integer, intent(in), value :: ngridmax
+    integer, intent(in), value :: ilevel, levelmin, levelmax
+    real(kind=dp), intent(in), value :: gamma, smallr, smallc2
+    real(kind=dp), intent(in), value :: dt
+    real(kind=dp), intent(in), value :: dx
+    integer, intent(in), value :: slope
+    integer, intent(in), value :: slope_mag
+    integer, intent(in), value :: riemann
+    integer, intent(in), value :: riemann2d
+    real(kind=dp), intent(in), value :: switch_llf_dmin, switch_llf_pmin
+    logical, intent(in), value :: induction
+    real(kind=dp), intent(in), value :: etamag
+
+    type(hydro_smem_t), shared :: smem(*)
+
+    call hydro_integrator(grid, uold, unew, bold, bnew, &
+         & f, father, nbor, &
+         & head_idx, num_subgrids, ngridmax, ilevel, levelmin, levelmax, &
+         & gamma, smallr, smallc2, dt, dx, slope, slope_mag, riemann, riemann2d, &
+         & switch_llf_dmin, switch_llf_pmin, induction, etamag, constant_gravity, smem, .false.)
   end subroutine hydro_integrator_kernel
+
+  ! slope_type=3
+  attributes(global) HYDRO_LB subroutine hydro_integrator_pair_kernel(grid, uold, unew, bold, bnew, &
+       & f, father, nbor, &
+       & head_idx, num_subgrids, ngridmax, ilevel, levelmin, levelmax, &
+       & gamma, smallr, smallc2, dt, dx, slope, slope_mag, riemann, riemann2d, &
+       & switch_llf_dmin, switch_llf_pmin, induction, etamag, constant_gravity)
+    type(oct), device :: grid(*)
+    integer, device :: father(*)
+    integer, device :: nbor(1:subgridsize,*)
+    real(kind=dp), device :: constant_gravity(1:3)
+    real(kind=dp), device :: f(1:twotondim,1:ndim,*)
+    real(kind=dp), device :: uold(1:twotondim,1:nvar,*)
+    real(kind=dp), device :: unew(1:twotondim,1:nvar,*)
+    real(kind=dp), device :: bold(1:twotondim,1:6,*)
+    real(kind=dp), device :: bnew(1:twotondim,1:6,*)
+    integer(kind=4), intent(in), value :: head_idx
+    integer(kind=4), intent(in), value :: num_subgrids
+    integer, intent(in), value :: ngridmax
+    integer, intent(in), value :: ilevel, levelmin, levelmax
+    real(kind=dp), intent(in), value :: gamma, smallr, smallc2
+    real(kind=dp), intent(in), value :: dt
+    real(kind=dp), intent(in), value :: dx
+    integer, intent(in), value :: slope
+    integer, intent(in), value :: slope_mag
+    integer, intent(in), value :: riemann
+    integer, intent(in), value :: riemann2d
+    real(kind=dp), intent(in), value :: switch_llf_dmin, switch_llf_pmin
+    logical, intent(in), value :: induction
+    real(kind=dp), intent(in), value :: etamag
+
+    type(hydro_smem_t), shared :: smem(*)
+
+    call hydro_integrator(grid, uold, unew, bold, bnew, &
+         & f, father, nbor, &
+         & head_idx, num_subgrids, ngridmax, ilevel, levelmin, levelmax, &
+         & gamma, smallr, smallc2, dt, dx, slope, slope_mag, riemann, riemann2d, &
+         & switch_llf_dmin, switch_llf_pmin, induction, etamag, constant_gravity, smem, .true.)
+  end subroutine hydro_integrator_pair_kernel
+#endif
 
 #endif
 

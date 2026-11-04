@@ -800,6 +800,9 @@ contains
     use hydro_device, only: hydro_integrator_paper_kernel
 #else
     use hydro_device, only: hydro_integrator_kernel
+#if !defined(MHD) && !(NVAR>5+NENER)
+    use hydro_device, only: hydro_integrator_pair_kernel
+#endif
 #endif
 #ifdef MHD
     use hydro_device, only: mhd_smem_t
@@ -889,18 +892,39 @@ contains
     if(nsubgrid == 4)threads_per_block = 640
 #endif
     shmem_bytes = storage_size(smem_probe) / 8
+#if !(NVAR>5+NENER)
+    if (slope == 3) then
+       istat = cudaFuncSetAttribute(hydro_integrator_pair_kernel, &
+            & cudaFuncAttributeMaxDynamicSharedMemorySize, shmem_bytes)
+    else
+#endif
     istat = cudaFuncSetAttribute(hydro_integrator_kernel, &
          & cudaFuncAttributeMaxDynamicSharedMemorySize, shmem_bytes)
+#if !(NVAR>5+NENER)
+    endif
+#endif
     if(istat /= cudaSuccess)then
        write(*,*)'gpu_godunov: cudaFuncSetAttribute(MaxDynamicSharedMemorySize=',shmem_bytes, &
             & ') failed: ',cudaGetErrorString(istat)
        error stop
     endif
+#if !(NVAR>5+NENER)
+    if (slope == 3) then
+       call hydro_integrator_pair_kernel<<<num_blocks, threads_per_block, shmem_bytes>>>(grid, uold, unew, bold, bnew, &
+            & f, father, nbor, &
+            & head_idx, num_subgrids, sim%m%ngridmax, ilevel, sim%r%levelmin, sim%r%nlevelmax, &
+            & gamma, smallr, smallc2, dt, dx, slope, slope_mag, riemann, riemann2d, &
+            & switch_llf_dmin, switch_llf_pmin, induction, etamag, constant_gravity)
+    else
+#endif
     call hydro_integrator_kernel<<<num_blocks, threads_per_block, shmem_bytes>>>(grid, uold, unew, bold, bnew, &
          & f, father, nbor, &
          & head_idx, num_subgrids, sim%m%ngridmax, ilevel, sim%r%levelmin, sim%r%nlevelmax, &
          & gamma, smallr, smallc2, dt, dx, slope, slope_mag, riemann, riemann2d, &
          & switch_llf_dmin, switch_llf_pmin, induction, etamag, constant_gravity)
+#if !(NVAR>5+NENER)
+    endif
+#endif
 #endif
     call GPU_Error_Check(__FILE__, __LINE__)
 #endif
