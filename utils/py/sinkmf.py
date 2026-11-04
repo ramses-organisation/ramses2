@@ -62,7 +62,7 @@ for ib in range(len(centers)):
             line += "%12s" % "-"
     print(line)
 
-fig, ax1 = plt.subplots()
+fig, ax1 = plt.subplots(figsize=(8, 4.8))
 
 for label, h, vol in zip(labels, hists, vols):
     # Differential mass function per unit comoving volume
@@ -72,7 +72,8 @@ for label, h, vol in zip(labels, hists, vols):
 
 ax1.yaxis.set_major_locator(MultipleLocator(0.6))
 ax1.set_ylabel(r'log$_{10}$ $\phi$ [Mpc$^{-3}$ dex$^{-1}$]')
-ax1.legend()
+ax1.legend(fontsize='small', ncol=1 if len(labels) <= 12 else 2,
+           loc='upper left', bbox_to_anchor=(1.02, 1), borderaxespad=0)
 ax1.set_xlabel(r'log$_{10}$ M$_{\rm sink}$ [Msol]')
 plt.tight_layout()
 
