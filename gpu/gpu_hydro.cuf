@@ -1434,7 +1434,7 @@ contains
     real(kind=dp), device :: f(1:twotondim,1:ndim,*)
     real(kind=dp), device :: uold(1:twotondim,1:nvar,*)
     real(kind=dp), device :: bold(1:twotondim,1:6,*) ! Unused without MHD
-    integer(kind=4), device :: nbor(1:subgridsize,*)
+    integer(kind=4) :: nbor(1:subgridsize,*)
     integer(kind=4), value :: head_idx
     integer(kind=4), value :: block_idx, thread_idx
     real(kind=dp), value :: gamma, smallr, smallc2
@@ -2730,7 +2730,7 @@ contains
        & head_idx, block_idx, thread_idx, dtdx)
     real(kind=dp), device :: unew(1:twotondim,1:nvar,*)
     real(kind=dp), device :: bnew(1:twotondim,1:6,*) ! Unused without MHD
-    integer(kind=4), device :: nbor(1:subgridsize,*)
+    integer(kind=4) :: nbor(1:subgridsize,*)
     type(subgrid_3x2x2cell_primitive), intent(in) :: fluxes_x
     type(subgrid_2x3x2cell_primitive), intent(in) :: fluxes_y
     type(subgrid_2x2x3cell_primitive), intent(in) :: fluxes_z
@@ -2855,7 +2855,7 @@ contains
        & head_idx, block_idx, thread_idx, ngridmax, dtdx)
     type(oct), device :: grid(*)
     integer, device :: father(*)
-    integer, device :: nbor(1:subgridsize,*)
+    integer :: nbor(1:subgridsize,*)
     real(kind=dp), device :: unew(1:twotondim,1:nvar,*)
     real(kind=dp), device :: bnew(1:twotondim,1:6,*) ! Unused without MHD
     type(subgrid_3x2x2cell_primitive), intent(in) :: fluxes_x
@@ -3593,7 +3593,7 @@ contains
   ! Map cache oct to parent coarse cell for coarse/fine corrections.
   attributes(device) subroutine get_cf_cell(nbor, grid, father, subgrid_idx, ngridmax, &
        & i, j, k, is_coarse, coct, ccell)
-    integer(kind=4), device :: nbor(1:subgridsize,*)
+    integer(kind=4) :: nbor(1:subgridsize,*)
     type(oct), device :: grid(*)
     integer, device :: father(*)
     integer, value :: subgrid_idx, ngridmax, i, j, k
@@ -4056,7 +4056,8 @@ contains
   attributes(device) subroutine coarse_emf_update(grid, bnew, father, nbor, emfx, emfy, emfz, &
        & head_idx, block_idx, thread_idx, ngridmax, dtdx)
     type(oct), device :: grid(*)
-    integer, device :: father(*), nbor(1:subgridsize,*)
+    integer, device :: father(*)
+    integer(kind=4) :: nbor(1:subgridsize,*)
     real(kind=dp), device :: bnew(1:twotondim,1:6,*)
     type(subgrid_2x3x3edge_primitive), intent(in) :: emfx
     type(subgrid_3x2x3edge_primitive), intent(in) :: emfy
@@ -6398,6 +6399,10 @@ contains
 #else
     type(hydro_smem_t), shared :: smem(*)
 #endif
+    ! The subgrid's neighbor octs, read once per block instead of once per gathered or updated
+    ! cell. The routines below read it as the only subgrid (head_idx=1, block_idx=0).
+    integer(kind=4), shared :: snbor(subgridsize)
+    integer :: w
     real(kind=dp) :: dtdx
     integer :: block_idx  ! The index of this block, corresponds to the subgrid to load
     integer :: thread_idx ! The index of this thread within the block
@@ -6413,6 +6418,10 @@ contains
 
     ! thread guard, probably not needed since num_blocks should always be equal to num_subgrids
     if (block_idx >= num_subgrids) return
+    do w = thread_idx, subgridsize - 1, blockDim%x
+       snbor(w+1) = nbor(w+1, head_idx + block_idx)
+    end do
+    call syncthreads()
 
 #ifdef MHD
     associate(local_subgrid => smem(1)%local_subgrid, &
@@ -6437,14 +6446,14 @@ contains
     ! =======================================================================
     ! Convert from conserved to primitive variables
     ! =======================================================================
-    call subgrid_conserved_2_primitive(grid, uold, bold, f, constant_gravity, nbor, &
+    call subgrid_conserved_2_primitive(grid, uold, bold, f, constant_gravity, snbor, &
 #if NVAR>5+NENER
          & scalar_subgrid, &
 #endif
 #ifdef MHD
          & bf, &
 #endif
-         & head_idx, block_idx, thread_idx, gamma, smallr, smallc2, dt, ilevel < levelmax, local_subgrid)
+         & 1, 0, thread_idx, gamma, smallr, smallc2, dt, ilevel < levelmax, local_subgrid)
 
     ! =======================================================================
     ! Perform tracing step and compute the interface states
@@ -6500,22 +6509,22 @@ contains
     ! =======================================================================
     ! Update the conserved variables at current level.
     ! =======================================================================
-    call conservative_update(unew, bnew, nbor, left_interfaces_x, left_interfaces_y, left_interfaces_z, &
+    call conservative_update(unew, bnew, snbor, left_interfaces_x, left_interfaces_y, left_interfaces_z, &
 #ifdef MHD
          & emfx, emfy, emfz, &
 #endif
-         & head_idx, block_idx, &
+         & 1, 0, &
          & thread_idx, dtdx)
 
     ! =======================================================================
     ! Update the conserved variables at coarser level.
     ! =======================================================================
     if (ilevel > levelmin) then
-       call coarse_cell_update(grid, unew, bnew, father, nbor, left_interfaces_x, left_interfaces_y, left_interfaces_z, &
+       call coarse_cell_update(grid, unew, bnew, father, snbor, left_interfaces_x, left_interfaces_y, left_interfaces_z, &
 #ifdef MHD
             & emfx, emfy, emfz, &
 #endif
-            & head_idx, block_idx, thread_idx, ngridmax, dtdx)
+            & 1, 0, thread_idx, ngridmax, dtdx)
     endif
 
     end associate
