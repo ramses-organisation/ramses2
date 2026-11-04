@@ -422,6 +422,71 @@ contains
     sy = half*(slop*dfy)
     sz = half*(slop*dfz)
   end subroutine slope_unsplit3d
+
+#if !defined(MHD) && !(NVAR>5+NENER)
+  ! slope_unsplit3d of the cells (i,j,k) and (i,j,k+1) together: the 3x3 cells of each plane
+  ! k-1..k+2 are loaded once for both. min and max are exact and commute with subtracting the
+  ! centre, and the other expressions are those of slope_unsplit3d, so the slopes are bitwise its own.
+  attributes(device) subroutine slope_unsplit3d_pair(f, i, j, k, sx, sy, sz, sx2, sy2, sz2)
+    real(kind=dp), intent(in) :: f(0:2*nsubgrid+3, 0:2*nsubgrid+3, 0:2*nsubgrid+3)
+    integer, value :: i, j, k
+    real(kind=dp), intent(out) :: sx, sy, sz, sx2, sy2, sz2
+    real(kind=dp) :: f0, f1, f2, f3, dfx0, dfy0, dfx1, dfy1, dfx2, dfy2, dfx3, dfy3, dfz
+    real(kind=dp) :: lo0, hi0, lo12, hi12, lo, hi, slop
+    real(kind=dp), parameter :: half = 0.5_dp
+
+    call unsplit_plane(f, i, j, k-1, f0, dfx0, dfy0, lo0, hi0)
+    call unsplit_plane(f, i, j, k  , f1, dfx1, dfy1, lo12, hi12)
+    call unsplit_plane(f, i, j, k+1, f2, dfx2, dfy2, lo, hi)
+    lo12 = min(lo12, lo); hi12 = max(hi12, hi)
+    ! Cell (i,j,k): planes k-1..k+1
+    dfz  = half*(f2-f0)
+    slop = unsplit_slop(min(f1-min(lo0,lo12), max(hi0,hi12)-f1), half*(abs(dfx1)+abs(dfy1)+abs(dfz)))
+    sx = half*(slop*dfx1)
+    sy = half*(slop*dfy1)
+    sz = half*(slop*dfz)
+    ! Cell (i,j,k+1): planes k..k+2
+    call unsplit_plane(f, i, j, k+2, f3, dfx3, dfy3, lo, hi)
+    dfz  = half*(f3-f1)
+    slop = unsplit_slop(min(f2-min(lo12,lo), max(hi12,hi)-f2), half*(abs(dfx2)+abs(dfy2)+abs(dfz)))
+    sx2 = half*(slop*dfx2)
+    sy2 = half*(slop*dfy2)
+    sz2 = half*(slop*dfz)
+  end subroutine slope_unsplit3d_pair
+
+  ! The cell (i,j,k), its central differences in x and y, and the least and the largest of the
+  ! 3x3 cells of plane k around it, each cell loaded once.
+  attributes(device) subroutine unsplit_plane(f, i, j, k, c, dfx, dfy, lo, hi)
+    real(kind=dp), intent(in) :: f(0:2*nsubgrid+3, 0:2*nsubgrid+3, 0:2*nsubgrid+3)
+    integer, value :: i, j, k
+    real(kind=dp), intent(out) :: c, dfx, dfy, lo, hi
+    real(kind=dp) :: fm, fp
+
+    c = f(i,j,k)
+    fm = f(i-1,j,k); fp = f(i+1,j,k)
+    dfx = 0.5_dp*(fp-fm)
+    lo = min(c,fm,fp); hi = max(c,fm,fp)
+    fm = f(i,j-1,k); fp = f(i,j+1,k)
+    dfy = 0.5_dp*(fp-fm)
+    lo = min(lo,fm,fp); hi = max(hi,fm,fp)
+    fm = f(i-1,j-1,k); fp = f(i+1,j-1,k)
+    lo = min(lo,fm,fp); hi = max(hi,fm,fp)
+    fm = f(i-1,j+1,k); fp = f(i+1,j+1,k)
+    lo = min(lo,fm,fp); hi = max(hi,fm,fp)
+  end subroutine unsplit_plane
+
+  ! Limiter factor of slope_unsplit3d, from min(|vmin|,|vmax|) and dff.
+  attributes(device) function unsplit_slop(dlim, dff) result(slop)
+    real(kind=dp), value :: dlim, dff
+    real(kind=dp) :: slop
+
+    if(dff>0.0_dp)then
+       slop = min(1.0_dp,dlim/dff)
+    else
+       slop = 1.0_dp
+    endif
+  end function unsplit_slop
+#endif
   ! ==========================================================================
 
   ! ==========================================================================
@@ -1615,6 +1680,138 @@ contains
 #endif
   ! =========================================================================
 
+#if !defined(MHD) && !(NVAR>5+NENER)
+  ! The part of trace_3d's loop after the slopes, for pure hydro: predictor and interface states
+  ! of cell (i,j,k). Keep in step with the loop body of trace_3d.
+  attributes(device) subroutine trace_hydro_cell(local_subgrid, i, j, k, slopes_x, slopes_y, slopes_z, &
+       & left_interfaces_x, right_interfaces_x,left_interfaces_y, right_interfaces_y, &
+       & left_interfaces_z, right_interfaces_z, gamma, smallr, smallp, dtdx)
+    type(subgrid_6x6x6cell_primitive), intent(in) :: local_subgrid
+    integer, value :: i, j, k
+    type(primitive_t), intent(in) :: slopes_x, slopes_y, slopes_z
+    type(subgrid_3x2x2cell_primitive) :: left_interfaces_x, right_interfaces_x
+    type(subgrid_2x3x2cell_primitive) :: left_interfaces_y, right_interfaces_y
+    type(subgrid_2x2x3cell_primitive) :: left_interfaces_z, right_interfaces_z
+    real(kind=dp), value :: gamma, smallr, smallp, dtdx
+    type(primitive_t) :: cell, source_term
+    real(kind=dp) :: inv_density
+    integer :: work_size
+
+    work_size = 2*nsubgrid+2
+
+    ! Cell centered values
+    cell%density    = local_subgrid%density   (i, j, k)
+    cell%velocity_x = local_subgrid%velocity_x(i, j, k)
+    cell%velocity_y = local_subgrid%velocity_y(i, j, k)
+    cell%velocity_z = local_subgrid%velocity_z(i, j, k)
+    cell%pressure   = local_subgrid%pressure  (i, j, k)
+
+    ! Source terms
+    inv_density = 1.0_dp / cell%density
+    source_term%density    = -cell%velocity_x * slopes_x%density    &
+                             -cell%velocity_y * slopes_y%density    &
+                             -cell%velocity_z * slopes_z%density    &
+                             - (slopes_x%velocity_x + slopes_y%velocity_y + slopes_z%velocity_z) * cell%density
+    source_term%velocity_x = -cell%velocity_x * slopes_x%velocity_x &
+                             -cell%velocity_y * slopes_y%velocity_x &
+                             -cell%velocity_z * slopes_z%velocity_x &
+                             - (slopes_x%pressure) * inv_density
+    source_term%velocity_y = -cell%velocity_x * slopes_x%velocity_y &
+                             -cell%velocity_y * slopes_y%velocity_y &
+                             -cell%velocity_z * slopes_z%velocity_y &
+                             - (slopes_y%pressure) * inv_density
+    source_term%velocity_z = -cell%velocity_x * slopes_x%velocity_z &
+                             -cell%velocity_y * slopes_y%velocity_z &
+                             -cell%velocity_z * slopes_z%velocity_z &
+                             - (slopes_z%pressure) * inv_density
+    source_term%pressure   = -cell%velocity_x * slopes_x%pressure   &
+                             -cell%velocity_y * slopes_y%pressure   &
+                             -cell%velocity_z * slopes_z%pressure   &
+                             - (slopes_x%velocity_x + slopes_y%velocity_y + slopes_z%velocity_z) * gamma * cell%pressure
+
+    ! Cell-centered predicted states
+    cell%density    = cell%density    + dtdx * source_term%density
+    cell%velocity_x = cell%velocity_x + dtdx * source_term%velocity_x
+    cell%velocity_y = cell%velocity_y + dtdx * source_term%velocity_y
+    cell%velocity_z = cell%velocity_z + dtdx * source_term%velocity_z
+    cell%pressure   = cell%pressure   + dtdx * source_term%pressure
+
+    ! Compute and write out the interface states
+
+    ! The right state at i-1/2
+    if (i > 1 .and. (j > 1 .and. j < work_size) .and. (k > 1 .and. k < work_size)) then
+       right_interfaces_x%density   (i-2, j-2, k-2) = cell%density    - slopes_x%density
+       right_interfaces_x%velocity_x(i-2, j-2, k-2) = cell%velocity_x - slopes_x%velocity_x
+       right_interfaces_x%velocity_y(i-2, j-2, k-2) = cell%velocity_y - slopes_x%velocity_y
+       right_interfaces_x%velocity_z(i-2, j-2, k-2) = cell%velocity_z - slopes_x%velocity_z
+       right_interfaces_x%pressure  (i-2, j-2, k-2) = cell%pressure   - slopes_x%pressure
+       ! Fallback to first order
+       if (right_interfaces_x%density (i-2, j-2, k-2) < smallr) right_interfaces_x%density (i-2, j-2, k-2) = local_subgrid%density (i, j, k)
+       if (right_interfaces_x%pressure(i-2, j-2, k-2) < smallp) right_interfaces_x%pressure(i-2, j-2, k-2) = local_subgrid%pressure(i, j, k)
+    end if
+
+    ! The left state at i+1/2
+    if (i < work_size .and. (j > 1 .and. j < work_size) .and. (k > 1 .and. k < work_size)) then
+       left_interfaces_x%density   (i-1, j-2, k-2) = cell%density    + slopes_x%density
+       left_interfaces_x%velocity_x(i-1, j-2, k-2) = cell%velocity_x + slopes_x%velocity_x
+       left_interfaces_x%velocity_y(i-1, j-2, k-2) = cell%velocity_y + slopes_x%velocity_y
+       left_interfaces_x%velocity_z(i-1, j-2, k-2) = cell%velocity_z + slopes_x%velocity_z
+       left_interfaces_x%pressure  (i-1, j-2, k-2) = cell%pressure   + slopes_x%pressure
+       ! Fallback to first order
+       if (left_interfaces_x%density (i-1, j-2, k-2) < smallr) left_interfaces_x%density (i-1, j-2, k-2) = local_subgrid%density (i, j, k)
+       if (left_interfaces_x%pressure(i-1, j-2, k-2) < smallp) left_interfaces_x%pressure(i-1, j-2, k-2) = local_subgrid%pressure(i, j, k)
+    end if
+
+    ! The right state at j-1/2
+    if ((i > 1 .and. i < work_size) .and. j > 1 .and. (k > 1 .and. k < work_size)) then
+       right_interfaces_y%density   (i-2, j-2, k-2) = cell%density    - slopes_y%density
+       right_interfaces_y%velocity_x(i-2, j-2, k-2) = cell%velocity_x - slopes_y%velocity_x
+       right_interfaces_y%velocity_y(i-2, j-2, k-2) = cell%velocity_y - slopes_y%velocity_y
+       right_interfaces_y%velocity_z(i-2, j-2, k-2) = cell%velocity_z - slopes_y%velocity_z
+       right_interfaces_y%pressure  (i-2, j-2, k-2) = cell%pressure   - slopes_y%pressure
+       ! Fallback to first order
+       if (right_interfaces_y%density (i-2, j-2, k-2) < smallr) right_interfaces_y%density (i-2, j-2, k-2) = local_subgrid%density (i, j, k)
+       if (right_interfaces_y%pressure(i-2, j-2, k-2) < smallp) right_interfaces_y%pressure(i-2, j-2, k-2) = local_subgrid%pressure(i, j, k)
+    end if
+
+    ! The left state at j+1/2
+    if ((i > 1 .and. i < work_size) .and. j < work_size .and. (k > 1 .and. k < work_size)) then
+       left_interfaces_y%density   (i-2, j-1, k-2) = cell%density    + slopes_y%density
+       left_interfaces_y%velocity_x(i-2, j-1, k-2) = cell%velocity_x + slopes_y%velocity_x
+       left_interfaces_y%velocity_y(i-2, j-1, k-2) = cell%velocity_y + slopes_y%velocity_y
+       left_interfaces_y%velocity_z(i-2, j-1, k-2) = cell%velocity_z + slopes_y%velocity_z
+       left_interfaces_y%pressure  (i-2, j-1, k-2) = cell%pressure   + slopes_y%pressure
+       ! Fallback to first order
+       if (left_interfaces_y%density (i-2, j-1, k-2) < smallr) left_interfaces_y%density (i-2, j-1, k-2) = local_subgrid%density (i, j, k)
+       if (left_interfaces_y%pressure(i-2, j-1, k-2) < smallp) left_interfaces_y%pressure(i-2, j-1, k-2) = local_subgrid%pressure(i, j, k)
+    end if
+
+    ! The right state at k-1/2
+    if ((i > 1 .and. i < work_size) .and. (j > 1 .and. j < work_size) .and. k > 1) then
+       right_interfaces_z%density   (i-2, j-2, k-2) = cell%density    - slopes_z%density
+       right_interfaces_z%velocity_x(i-2, j-2, k-2) = cell%velocity_x - slopes_z%velocity_x
+       right_interfaces_z%velocity_y(i-2, j-2, k-2) = cell%velocity_y - slopes_z%velocity_y
+       right_interfaces_z%velocity_z(i-2, j-2, k-2) = cell%velocity_z - slopes_z%velocity_z
+       right_interfaces_z%pressure  (i-2, j-2, k-2) = cell%pressure   - slopes_z%pressure
+       ! Fallback to first order
+       if (right_interfaces_z%density (i-2, j-2, k-2) < smallr) right_interfaces_z%density (i-2, j-2, k-2) = local_subgrid%density (i, j, k)
+       if (right_interfaces_z%pressure(i-2, j-2, k-2) < smallp) right_interfaces_z%pressure(i-2, j-2, k-2) = local_subgrid%pressure(i, j, k)
+    end if
+
+    ! The left state at k+1/2
+    if ((i > 1 .and. i < work_size) .and. (j > 1 .and. j < work_size) .and. k < work_size) then
+       left_interfaces_z%density   (i-2, j-2, k-1) = cell%density    + slopes_z%density
+       left_interfaces_z%velocity_x(i-2, j-2, k-1) = cell%velocity_x + slopes_z%velocity_x
+       left_interfaces_z%velocity_y(i-2, j-2, k-1) = cell%velocity_y + slopes_z%velocity_y
+       left_interfaces_z%velocity_z(i-2, j-2, k-1) = cell%velocity_z + slopes_z%velocity_z
+       left_interfaces_z%pressure  (i-2, j-2, k-1) = cell%pressure   + slopes_z%pressure
+       ! Fallback to first order
+       if (left_interfaces_z%density (i-2, j-2, k-1) < smallr) left_interfaces_z%density (i-2, j-2, k-1) = local_subgrid%density (i, j, k)
+       if (left_interfaces_z%pressure(i-2, j-2, k-1) < smallp) left_interfaces_z%pressure(i-2, j-2, k-1) = local_subgrid%pressure(i, j, k)
+    end if
+  end subroutine trace_hydro_cell
+#endif
+
   ! =========================================================================
   !> @brief
   !> Compute the interface states with tracing
@@ -1661,6 +1858,10 @@ contains
 #ifndef MHD
     integer :: ncell, nwork, face_idx, face_work, face_i, face_j
 #endif
+#if !defined(MHD) && !(NVAR>5+NENER)
+    integer :: ncolumn
+    type(primitive_t) :: slopes_x2, slopes_y2, slopes_z2 ! Slopes of the cell (i,j,k+1) of a pair
+#endif
 #if NVAR>5+NENER
     real(kind=dp) :: scalar_sub(0:2*nsubgrid+3, 0:2*nsubgrid+3, 0:2*nsubgrid+3, 1:nscalar)
     real(kind=dp) :: dscal_x(1:nscalar), dscal_y(1:nscalar), dscal_z(1:nscalar)
@@ -1700,6 +1901,46 @@ contains
 #endif
 
     smallp = smallr * smallc2
+
+#if !defined(MHD) && !(NVAR>5+NENER)
+    if (slope == 3) then
+       ! Each thread traces the cells (i,j,k) and (i,j,k+1), whose 3x3x3 stencils share the planes
+       ! k-1..k+2. The same cells as the loop below, each once: the columns k = 1..work_size over
+       ! the interior (i,j), then the x and the y face layers in pairs k = 2..work_size-1.
+       ncolumn = ncell**2*(ncell/2+1)
+       do work_idx = thread_idx, ncolumn + 2*ncell**2 - 1, blockDim%x
+          if (work_idx < ncolumn) then
+             call index_1Dto3D(work_idx, ncell, ncell, i, j, k)
+             i = i + 2; j = j + 2; k = 2*k + 1
+          else
+             face_work = mod(work_idx - ncolumn, ncell**2)
+             k = 2*(face_work/(2*ncell)) + 2
+             if (work_idx < ncolumn + ncell**2) then
+                i = 1 + (work_size-1)*mod(face_work, 2); j = mod(face_work/2, ncell) + 2
+             else
+                i = mod(face_work, ncell) + 2; j = 1 + (work_size-1)*mod(face_work/ncell, 2)
+             endif
+          endif
+          call slope_unsplit3d_pair(local_subgrid%density,    i, j, k, slopes_x%density,    slopes_y%density,    slopes_z%density, &
+               & slopes_x2%density,    slopes_y2%density,    slopes_z2%density)
+          call slope_unsplit3d_pair(local_subgrid%velocity_x, i, j, k, slopes_x%velocity_x, slopes_y%velocity_x, slopes_z%velocity_x, &
+               & slopes_x2%velocity_x, slopes_y2%velocity_x, slopes_z2%velocity_x)
+          call slope_unsplit3d_pair(local_subgrid%velocity_y, i, j, k, slopes_x%velocity_y, slopes_y%velocity_y, slopes_z%velocity_y, &
+               & slopes_x2%velocity_y, slopes_y2%velocity_y, slopes_z2%velocity_y)
+          call slope_unsplit3d_pair(local_subgrid%velocity_z, i, j, k, slopes_x%velocity_z, slopes_y%velocity_z, slopes_z%velocity_z, &
+               & slopes_x2%velocity_z, slopes_y2%velocity_z, slopes_z2%velocity_z)
+          call slope_unsplit3d_pair(local_subgrid%pressure,   i, j, k, slopes_x%pressure,   slopes_y%pressure,   slopes_z%pressure, &
+               & slopes_x2%pressure,   slopes_y2%pressure,   slopes_z2%pressure)
+          call trace_hydro_cell(local_subgrid, i, j, k, slopes_x, slopes_y, slopes_z, &
+               & left_interfaces_x, right_interfaces_x, left_interfaces_y, right_interfaces_y, &
+               & left_interfaces_z, right_interfaces_z, gamma, smallr, smallp, dtdx)
+          call trace_hydro_cell(local_subgrid, i, j, k+1, slopes_x2, slopes_y2, slopes_z2, &
+               & left_interfaces_x, right_interfaces_x, left_interfaces_y, right_interfaces_y, &
+               & left_interfaces_z, right_interfaces_z, gamma, smallr, smallp, dtdx)
+       end do
+       nwork = 0 ! The loop below has no work left
+    end if
+#endif
 
 #ifdef MHD
     ! Note that we're now excluding the outermost shell of cells since this
