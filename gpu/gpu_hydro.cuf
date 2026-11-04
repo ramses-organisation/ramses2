@@ -5564,7 +5564,7 @@ contains
 #endif
     grav   = grav*dx/ctot**2
     grav   = MAX(grav, 0.0001_dp)
-    dt_loc = dx / ctot * (sqrt(1_dp+2_dp*courant_factor*grav)-1_dp)/grav
+    dt_loc = 2_dp*courant_factor*dx / (ctot * (1_dp+sqrt(1_dp+2_dp*courant_factor*grav)))
 
   end subroutine cmpdt_cell
   ! =========================================================================
