@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.ticker import MultipleLocator
 from plot_backend import set_backend
 import argparse
 import ramses as ram
@@ -24,14 +25,16 @@ if args.nbin==None:
 else:
     nbin=int(args.nbin)
 
-# Sink masses in Msol for each run
+# Sink masses in Msol and comoving box volume in Mpc^3 for each run
 masses = []
+vols = []
 for path in args.paths:
     print("Reading output number ",nout," in ",path)
     s=ram.rd_part(nout,path=path+"/",prefix='sink')
     i=ram.rd_info(nout,path=path+"/")
     unit_m = i.unit_d * i.unit_l**3 / 2e33
     masses.append(s.mass[s.mass > 0] * unit_m)
+    vols.append((i.boxlen * i.unit_l / i.aexp / 3.08568e24)**3)
 
 # Common logarithmic bins
 lmin = np.floor(np.log10(min([np.min(m) for m in masses]))*nbin)/nbin
@@ -59,25 +62,18 @@ for ib in range(len(centers)):
             line += "%12s" % "-"
     print(line)
 
-fig, (ax1, ax2, ax3) = plt.subplots(3, 1, sharex=True, figsize=(6,10))
+fig, ax1 = plt.subplots()
 
-for label, m, h in zip(labels, masses, hists):
-    # Differential mass function
-    ax1.step(centers, h/bin_size, where='mid', label=label)
-    # Cumulative number above M
-    ms = np.sort(m)[::-1]
-    ax2.plot(np.log10(ms), np.arange(1,len(ms)+1), label=label)
-    # Cumulative mass in sinks above M
-    ax3.plot(np.log10(ms), np.cumsum(ms), label=label)
+for label, h, vol in zip(labels, hists, vols):
+    # Differential mass function per unit comoving volume
+    with np.errstate(divide='ignore'):
+        logphi = np.where(h > 0, np.log10(h/bin_size/vol), np.nan)
+    ax1.step(centers, logphi, where='mid', label=label)
 
-ax1.set_yscale("log")
-ax1.set_ylabel(r'dN/dlog$_{10}$M')
+ax1.yaxis.set_major_locator(MultipleLocator(0.6))
+ax1.set_ylabel(r'log$_{10}$ $\phi$ [Mpc$^{-3}$ dex$^{-1}$]')
 ax1.legend()
-ax2.set_yscale("log")
-ax2.set_ylabel(r'N(>M)')
-ax3.set_yscale("log")
-ax3.set_ylabel(r'M$_{\rm sink}$(>M) [Msol]')
-ax3.set_xlabel(r'log$_{10}$ M$_{\rm sink}$ [Msol]')
+ax1.set_xlabel(r'log$_{10}$ M$_{\rm sink}$ [Msol]')
 plt.tight_layout()
 
 if args.out:
