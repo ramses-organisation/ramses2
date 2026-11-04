@@ -9,7 +9,7 @@ subroutine finish_star_formation(s)
   type(ramses_t)::s
 
   ! Check if radiation advection should be turned on
-  if(s%r%rt .and. .not. s%r%rt_advect .and. s%star%npart_tot .gt. 0) then
+  if(s%r%rt .and. s%r%rt_star .and. .not. s%r%rt_advect .and. s%star%npart_tot .gt. 0) then
      if(s%g%myid==1) then
        write(*,*) '*****************************************'
        if(s%r%cosmo) then

@@ -33,7 +33,7 @@ subroutine m_read_rt_params(pst)
   ! RT_PARAMS namelist
   logical::rt_advect=.false.           ! Advection of photons?                           !
   logical::rt_smooth=.true.            ! Smooth the discrete RT update of op. splitting  !
-  logical::rt_star=.false.             ! Activate radiation from star particles          !
+  logical::rt_star=.true.              ! Activate radiation from star particles          !
   logical::rt_sink=.false.             ! Activate radiation from sink particles          !
   logical::rt_emission_stats=.false.   ! Print stellar emission info                     !
   real(kind=8)::rt_esc_frac=1d0            ! Photon escape fraction from stellar particles   !

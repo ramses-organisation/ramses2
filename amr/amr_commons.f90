@@ -537,7 +537,7 @@ module amr_commons
      ! RT parameters. Some parameters are not (yet) used
      logical::rt_advect=.false.            ! Advection of photons?                           !
      logical::rt_smooth=.true.             ! Smooth the discrete RT update of op. splitting  !
-     logical::rt_star=.false.              ! Activate radiation from star particles          !
+     logical::rt_star=.true.               ! Activate radiation from star particles          !
      logical::rt_sink=.false.              ! Activate radiation from sink particles          !
      real(kind=8)::rt_esc_frac=1d0             ! Photon escape fraction from stellar particles   !
      logical::rt_is_outflow_bound=.false.  ! Make all boundaries=outflow for RT              !
