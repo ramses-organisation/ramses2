@@ -363,10 +363,19 @@ subroutine init_bound_refine(r,g,m,igrid,igrid_ref,ibound)
         m%bold(ind,3,igrid)=r%C_bound(ibound)
         m%bold(ind,6,igrid)=r%C_bound(ibound)
 #endif
-#if NDIM==2
+#if NDIM>1
+        ! Tangential field imposed, normal field continuing the boundary face
+        m%bold(ind,1,igrid)=r%A_bound(ibound)
+        m%bold(ind,4,igrid)=r%A_bound(ibound)
+        m%bold(ind,2,igrid)=r%B_bound(ibound)
+        m%bold(ind,5,igrid)=r%B_bound(ibound)
         m%bold(ind,3,igrid)=r%C_bound(ibound)
         m%bold(ind,6,igrid)=r%C_bound(ibound)
+        if(shift==+1)m%bold(ind,dir,igrid)=m%bold(ind2_right(ind,dir),dir,igrid_ref)
+        if(shift==-1)m%bold(ind,dir,igrid)=m%bold(ind2_left(ind,dir),dir+3,igrid_ref)
+        m%bold(ind,dir+3,igrid)=m%bold(ind,dir,igrid)
 #endif
+        m%uold(ind,5,igrid)=m%uold(ind,5,igrid)+0.125d0*sum((m%bold(ind,1:3,igrid)+m%bold(ind,4:6,igrid))**2)
 #endif
      end do
 #ifdef DO_RT

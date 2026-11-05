@@ -397,6 +397,11 @@ subroutine m_read_params(pst)
   integer,dimension(1:MAXBOUND)::bound_zmax=0
   real(kind=8),dimension(1:MAXBOUND)::d_bound=0
   real(kind=8),dimension(1:MAXBOUND)::p_bound=0
+#ifdef MHD
+  real(kind=8),dimension(1:MAXBOUND)::A_bound=0
+  real(kind=8),dimension(1:MAXBOUND)::B_bound=0
+  real(kind=8),dimension(1:MAXBOUND)::C_bound=0
+#endif
   real(kind=8),dimension(1:MAXBOUND)::u_bound=0
   real(kind=8),dimension(1:MAXBOUND)::v_bound=0
   real(kind=8),dimension(1:MAXBOUND)::w_bound=0
@@ -706,6 +711,9 @@ subroutine m_read_params(pst)
 #endif
 #ifdef DO_CR
        & ,cr_fx_bound,cr_fy_bound,cr_fz_bound &
+#endif
+#ifdef MHD
+       & ,A_bound,B_bound,C_bound &
 #endif
        & ,d_bound,u_bound,v_bound,w_bound,p_bound
   ! Cooling / basic chemistry parameters
@@ -1856,6 +1864,11 @@ subroutine m_read_params(pst)
   s%r%v_bound=v_bound
   s%r%w_bound=w_bound
   s%r%p_bound=p_bound
+#ifdef MHD
+  s%r%A_bound=A_bound
+  s%r%B_bound=B_bound
+  s%r%C_bound=C_bound
+#endif
 #if NENER>0
   s%r%prad_bound=prad_bound
 #endif
