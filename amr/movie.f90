@@ -615,6 +615,9 @@ subroutine output_frame(s,ind_proj,ind_var,map_size,map)
                       ekk = ekk+m%uold(ind,5+irad,igrid)
                     enddo
 #endif
+#ifdef MHD
+                    ekk=ekk+0.125d0*sum((m%bold(ind,1:3,igrid)+m%bold(ind,4:6,igrid))**2)
+#endif
                     temp=(r%gamma-1d0)*(m%uold(ind,5,igrid)-ekk)
                     temp=max(temp/max(dble(m%uold(ind,1,igrid)),r%smallr),r%smallc**2)*scale_T2
                     uvar = temp
