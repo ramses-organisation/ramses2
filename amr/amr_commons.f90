@@ -320,6 +320,7 @@ module amr_commons
      real(kind=8),dimension(1:MAXBOUND,1:NVAR-5-NENER)::var_bound=0
 #endif
 #ifdef MHD
+     real(kind=8),dimension(1:MAXBOUND)::A_bound=0
      real(kind=8),dimension(1:MAXBOUND)::B_bound=0
      real(kind=8),dimension(1:MAXBOUND)::C_bound=0
 #endif

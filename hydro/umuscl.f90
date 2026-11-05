@@ -465,7 +465,9 @@ subroutine trace1d(q,dq,qm,qp,dx,dt,iu1,iu2,ju1,ju2,ku1,ku2,params)
               sr0 = -u*drx              ! Source terms
               r   = r + sr0*dtdx
               qp(i,j,k,n,1) = r - drx   ! Right state
+              if(qp(i,j,k,n,1)<zero)qp(i,j,k,n,1)=q(i,j,k,n)
               qm(i,j,k,n,1) = r + drx   ! Left state
+              if(qm(i,j,k,n,1)<zero)qm(i,j,k,n,1)=q(i,j,k,n)
            end do
         end do
      end do
@@ -831,9 +833,13 @@ subroutine trace2d(q,dq,qm,qp, &
               sr0 = -u*drx-v*dry        ! Source terms
               r   = r + sr0*dtdx
               qp(i,j,k,n,1) = r - drx   ! Right state
+              if(qp(i,j,k,n,1)<zero)qp(i,j,k,n,1)=q(i,j,k,n)
               qm(i,j,k,n,1) = r + drx   ! Left state
+              if(qm(i,j,k,n,1)<zero)qm(i,j,k,n,1)=q(i,j,k,n)
               qp(i,j,k,n,2) = r - dry   ! Top state
+              if(qp(i,j,k,n,2)<zero)qp(i,j,k,n,2)=q(i,j,k,n)
               qm(i,j,k,n,2) = r + dry   ! Bottom state
+              if(qm(i,j,k,n,2)<zero)qm(i,j,k,n,2)=q(i,j,k,n)
            end do
         end do
      end do
@@ -1436,11 +1442,17 @@ subroutine trace3d(q,dq,qm,qp, &
               sr0 = -u*drx-v*dry-w*drz ! Source terms
               r   = r + sr0*dtdx
               qp(i,j,k,n,1) = r - drx  ! Right state
+              if(qp(i,j,k,n,1)<zero)qp(i,j,k,n,1)=q(i,j,k,n)
               qm(i,j,k,n,1) = r + drx  ! Left state
+              if(qm(i,j,k,n,1)<zero)qm(i,j,k,n,1)=q(i,j,k,n)
               qp(i,j,k,n,2) = r - dry  ! Bottom state
+              if(qp(i,j,k,n,2)<zero)qp(i,j,k,n,2)=q(i,j,k,n)
               qm(i,j,k,n,2) = r + dry  ! Upper state
+              if(qm(i,j,k,n,2)<zero)qm(i,j,k,n,2)=q(i,j,k,n)
               qp(i,j,k,n,3) = r - drz  ! Front state
+              if(qp(i,j,k,n,3)<zero)qp(i,j,k,n,3)=q(i,j,k,n)
               qm(i,j,k,n,3) = r + drz  ! Back state
+              if(qm(i,j,k,n,3)<zero)qm(i,j,k,n,3)=q(i,j,k,n)
            end do
         end do
      end do

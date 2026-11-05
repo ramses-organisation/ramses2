@@ -73,6 +73,10 @@ BUILDDATE = $(shell date +"%D-%T")
 BUILDCOMMAND = ${MAKE} ${MAKEFLAGS}
 DEFINES += -DNDIM=$(NDIM) -DNVAR=$(NVAR)
 DEFINES += $(EXTRA_DEFINES)
+GPU_SM := $(shell echo '$(CUDA_ARCH)' | sed -nE 's/^sm_([0-9]+)[af]?$$/\1/p')
+ifneq ($(GPU_SM),)
+DEFINES += -DGPU_SM=$(GPU_SM)
+endif
 #############################################################################
 # RTZ options
 ifeq ($(DO_RTZ),1)
