@@ -63,7 +63,10 @@ module gpu_runner
   real(kind=8), device, allocatable, dimension(:,:,:,:) :: afield_now_d
   complex(kind=8), device, allocatable, dimension(:,:,:,:,:) :: turb_spec_d
   complex(kind=8), device, allocatable, dimension(:,:,:,:) :: turb_fft_d
-  real(kind=dp), device, allocatable, dimension(:,:,:) :: fturb
+  !> Forcing table of each level at its last drive, and the drive's density filter
+  !> (turb_filter_kernel): the force is interpolated where it is used
+  real(kind=8), device, allocatable, dimension(:,:,:,:,:) :: afield_lev_d
+  integer(kind=1), device, allocatable, dimension(:,:) :: turb_mask_d
   integer :: iturb_last = 1
   integer :: turb_fft_plan
 
@@ -205,6 +208,9 @@ contains
     integer(kind=4) :: head_idx, num_octs
     integer :: num_threads, num_blocks
     real(kind=dp) :: gamma, smallr, smallc2, dx, courant_factor
+#ifdef TURB
+    real(kind=dp) :: boxlen, turb_min_rho
+#endif
     real(kind=8), device, dimension(5) :: d_data !mass, ekin, eint, emag, dt
     real(kind=8), dimension(5) :: h_data
 
@@ -213,6 +219,10 @@ contains
     smallr = sim%r%smallr
     smallc2 = sim%r%smallc**2
     dx = sim%r%boxlen/2**ilevel
+#ifdef TURB
+    boxlen = sim%r%boxlen
+    turb_min_rho = sim%r%turb_min_rho
+#endif
     dt = courant_factor*dx/sim%r%smallc
 
     ! initialize device memory for reduction
@@ -228,7 +238,7 @@ contains
         & constant_gravity, head_idx, num_octs, d_data, dx, gamma, &
         & smallr, smallc2, courant_factor, sim%r%induction &
 #ifdef TURB
-        & , fturb &
+        & , afield_lev_d(1,0,0,0,ilevel), d_skip, boxlen, turb_min_rho &
 #endif
         & )
     call GPU_Error_Check(__FILE__, __LINE__)
@@ -269,6 +279,9 @@ contains
     integer(kind=8) :: cap_slots, need_slots, base_B, base_C
     integer(kind=8) :: bytes_per_slot
     real(kind=dp) :: gamma, smallr, smallc2, dx, courant_factor
+#ifdef TURB
+    real(kind=dp) :: boxlen, turb_min_rho
+#endif
     real(kind=8), device, dimension(5) :: d_data ! mass, ekin, eint, emag, dt
     real(kind=8), dimension(5) :: h_data
 
@@ -285,6 +298,10 @@ contains
     smallr = sim%r%smallr
     smallc2 = sim%r%smallc**2
     dx = sim%r%boxlen/2**ilevel
+#ifdef TURB
+    boxlen = sim%r%boxlen
+    turb_min_rho = sim%r%turb_min_rho
+#endif
     dt = courant_factor*dx/sim%r%smallc
     mass = 0d0; ekin = 0d0; eint = 0d0; emag = 0d0
 
@@ -351,7 +368,7 @@ contains
         & A_mass, A_ekin, A_eint, A_emag, A_dt, &
         & dx, gamma, smallr, smallc2, courant_factor, sim%r%induction &
 #ifdef TURB
-        & , fturb &
+        & , afield_lev_d(1,0,0,0,ilevel), d_skip, boxlen, turb_min_rho &
 #endif
         & )
     call GPU_Error_Check(__FILE__, __LINE__)
@@ -637,24 +654,22 @@ contains
   end subroutine gpu_turb_transform
 
   !> @brief
-  !> Compute the turbulent driving force on a level, filling fturb.
+  !> Take the forcing table of a level for its time step, with its density filter.
   !>
   !> @param[in] sim : The simulation object
   !> @param[in] ilevel : The refinement level to drive
   !>
   subroutine gpu_drive_turb(sim, ilevel)
     use nvtx
-    use turb_device, only: turb_drive_kernel
+    use turb_device, only: turb_filter_kernel
     use ramses_commons, only: ramses_t
     type(ramses_t), intent(inout)::sim
     integer, intent(in)::ilevel
 
     integer(kind=4) :: head_idx, num_octs
     integer :: threadsX_per_block, threadsY_per_block, num_blocks
-    real(kind=dp) :: dx, boxlen, turb_min_rho
+    real(kind=dp) :: turb_min_rho
 
-    dx = sim%r%boxlen/2**ilevel
-    boxlen = sim%r%boxlen
     turb_min_rho = sim%r%turb_min_rho
 
     head_idx = sim%m%head(ilevel)
@@ -665,8 +680,10 @@ contains
     num_blocks = (num_octs + threadsY_per_block - 1)/threadsY_per_block
 
     call nvtxStartRange("GPU drive_turb", color=0)!green
-    call turb_drive_kernel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(grid, uold, &
-         & fturb, afield_now_d, d_skip, head_idx, num_octs, dx, boxlen, turb_min_rho)
+    ! update_time advances afield_now_d before the source term of this level is added.
+    afield_lev_d(:,:,:,:,ilevel) = afield_now_d
+    call turb_filter_kernel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(uold, &
+         & turb_mask_d, head_idx, num_octs, turb_min_rho)
     call GPU_Error_Check(__FILE__, __LINE__)
     call nvtxEndRange()
 
@@ -681,7 +698,7 @@ contains
   !>
   subroutine gpu_turb_hydro(sim, ilevel, dteff)
     use nvtx
-    use turb_device, only: turb_hydro_kernel
+    use hydro_device, only: turb_hydro_kernel
     use ramses_commons, only: ramses_t
     type(ramses_t), intent(inout)::sim
     integer, intent(in)::ilevel
@@ -689,10 +706,12 @@ contains
 
     integer(kind=4) :: head_idx, num_octs
     integer :: threadsX_per_block, threadsY_per_block, num_blocks
-    real(kind=dp) :: smallr, smallc
+    real(kind=dp) :: smallr, smallc, dx, boxlen
 
     smallr = sim%r%smallr
     smallc = sim%r%smallc
+    dx = sim%r%boxlen/2**ilevel
+    boxlen = sim%r%boxlen
 
     head_idx = sim%m%head(ilevel)
     num_octs = sim%m%noct(ilevel)
@@ -702,8 +721,8 @@ contains
     num_blocks = (num_octs + threadsY_per_block - 1)/threadsY_per_block
 
     call nvtxStartRange("GPU turb_hydro", color=0)!green
-    call turb_hydro_kernel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(uold, fturb, &
-         & head_idx, num_octs, smallr, smallc, dteff)
+    call turb_hydro_kernel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(grid, uold, &
+         & turb_mask_d, afield_lev_d(1,0,0,0,ilevel), d_skip, head_idx, num_octs, dx, boxlen, smallr, smallc, dteff)
     call GPU_Error_Check(__FILE__, __LINE__)
     call nvtxEndRange()
 

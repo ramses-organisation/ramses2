@@ -157,25 +157,19 @@ contains
   end subroutine turb_conjg_pairs_kernel
 
   !=====================================================================================
-  ! Turbulent driving force.
-  ! Per (cell, oct): compute cell-centre position, read density from uold, apply the
-  ! density filter, trilinearly interpolate the 64^3 afield_now onto the cell, and store
-  ! the result in fturb. Fuses drive_turb (turb/turb_driving.f90) and turb_force_calc
-  ! (turb/turb_commons.f90). NDIM==3.
+  ! Density filter of the turbulent driving force (turb_force_calc, turb/turb_commons.f90):
+  ! per (cell, oct), mask = 1 where the density in uold is below turb_min_rho, else 0.
+  ! The force itself is interpolated where it is used, from the forcing table of the level
+  ! taken at the same time (turb_force_cell).
   !=====================================================================================
-  attributes(global) subroutine turb_drive_kernel(grid, uold, fturb, afield_now, &
-       & d_skip, head_idx, num_octs, dx, boxlen, turb_min_rho)
-    type(oct), device :: grid(*)
+  attributes(global) subroutine turb_filter_kernel(uold, mask, head_idx, num_octs, turb_min_rho)
     real(kind=dp), device :: uold(1:twotondim,1:nvar,*)
-    real(kind=dp), device :: fturb(1:twotondim,1:3,*)
-    real(kind=8), device :: afield_now(1:ndim,0:TURB_GS-1,0:TURB_GS-1,0:TURB_GS-1)
-    real(kind=8), device :: d_skip(1:3)
+    integer(kind=1), device :: mask(1:twotondim,*)
     integer(kind=4), intent(in), value :: head_idx, num_octs
-    real(kind=dp), intent(in), value :: dx, boxlen, turb_min_rho
+    real(kind=dp), intent(in), value :: turb_min_rho
 
-    integer :: block_idx, cell_idx, oct_idx, idim
-    integer :: bmin(1:3), bmax(1:3)
-    real(kind=8) :: x, rr, rho, dr1(1:3), dr2(1:3)
+    integer :: block_idx, cell_idx, oct_idx
+    real(kind=8) :: rho
 
     block_idx = blockIdx%x - 1
 
@@ -187,86 +181,13 @@ contains
     ! Compute the cell idx
     cell_idx = threadIdx%x
 
-    ! Density filter: leave fturb=0 for under-dense cells (matches turb_force_calc).
     rho = uold(cell_idx, 1, oct_idx)
     if (rho < turb_min_rho) then
-       do idim = 1, 3
-          fturb(cell_idx, idim, oct_idx) = 0d0
-       end do
-       return
+       mask(cell_idx, oct_idx) = 1
+    else
+       mask(cell_idx, oct_idx) = 0
     end if
 
-    ! Cell-centre position -> position in the turbulence grid, with periodic wrap.
-    do idim = 1, ndim
-       x = (2*grid(oct_idx)%ckey(idim) + mod((cell_idx-1)/2**(idim-1), 2) + 0.5d0)*dx - d_skip(idim)
-       rr = x/boxlen*turb_gs_real
-       bmin(idim) = floor(rr)
-       bmax(idim) = ceiling(rr)
-       if (bmin(idim) == TURB_GS) bmin(idim) = 0
-       if (bmax(idim) == TURB_GS) bmax(idim) = 0
-       dr1(idim) = rr - real(floor(rr), kind=8)
-       dr2(idim) = 1d0 - dr1(idim)
-    end do
-
-    ! Trilinear interpolation over the 8 corners, all 3 force components.
-    do idim = 1, 3
-       fturb(cell_idx, idim, oct_idx) = &
-            & afield_now(idim, bmin(1), bmin(2), bmin(3))*dr2(1)*dr2(2)*dr2(3) + &
-            & afield_now(idim, bmax(1), bmin(2), bmin(3))*dr1(1)*dr2(2)*dr2(3) + &
-            & afield_now(idim, bmin(1), bmax(2), bmin(3))*dr2(1)*dr1(2)*dr2(3) + &
-            & afield_now(idim, bmax(1), bmax(2), bmin(3))*dr1(1)*dr1(2)*dr2(3) + &
-            & afield_now(idim, bmin(1), bmin(2), bmax(3))*dr2(1)*dr2(2)*dr1(3) + &
-            & afield_now(idim, bmax(1), bmin(2), bmax(3))*dr1(1)*dr2(2)*dr1(3) + &
-            & afield_now(idim, bmin(1), bmax(2), bmax(3))*dr2(1)*dr1(2)*dr1(3) + &
-            & afield_now(idim, bmax(1), bmax(2), bmax(3))*dr1(1)*dr1(2)*dr1(3)
-    end do
-
-  end subroutine turb_drive_kernel
-
-  !=====================================================================================
-  ! Turbulent source term.
-  ! Per (cell, oct): subtract kinetic energy, add rho*fturb*dteff to momentum, recompute
-  ! total energy. Direct port of turb_hydro (turb/turb_hydro.f90); operates on uold.
-  !=====================================================================================
-  attributes(global) subroutine turb_hydro_kernel(uold, fturb, head_idx, num_octs, &
-       & smallr, smallc, dteff)
-    real(kind=dp), device :: uold(1:twotondim,1:nvar,*)
-    real(kind=dp), device :: fturb(1:twotondim,1:3,*)
-    integer(kind=4), intent(in), value :: head_idx, num_octs
-    real(kind=dp), intent(in), value :: smallr, smallc
-    real(kind=8), intent(in), value :: dteff
-
-    integer :: block_idx, cell_idx, oct_idx, idim
-    real(kind=dp) :: ener, rho
-
-    block_idx = blockIdx%x - 1
-
-    oct_idx = block_idx*blockDim%y + threadIdx%y - 1
-    if (oct_idx >= num_octs) return
-    oct_idx = head_idx + oct_idx
-
-    cell_idx = threadIdx%x
-
-    rho = uold(cell_idx, 1, oct_idx)
-
-    ! Remove kinetic energy from total energy
-    ener = uold(cell_idx, 5, oct_idx)
-    do idim = 1, 3
-       ener = max(ener - 0.5_dp*uold(cell_idx, idim+1, oct_idx)**2/max(rho, smallr), rho*smallc**2)
-    end do
-
-    ! Update momentum
-    do idim = 1, 3
-       uold(cell_idx, idim+1, oct_idx) = uold(cell_idx, idim+1, oct_idx) + &
-            & max(rho, smallr)*fturb(cell_idx, idim, oct_idx)*dteff
-    end do
-
-    ! Update total energy
-    do idim = 1, 3
-       ener = max(ener + 0.5_dp*uold(cell_idx, idim+1, oct_idx)**2/max(rho, smallr), rho*smallc**2)
-    end do
-    uold(cell_idx, 5, oct_idx) = ener
-
-  end subroutine turb_hydro_kernel
+  end subroutine turb_filter_kernel
 
 end module turb_device

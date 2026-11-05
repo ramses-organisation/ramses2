@@ -626,11 +626,13 @@ subroutine gpu_allocate_amr(sim)
   allocate(afield_now_d(1:ndim,0:TURB_GS-1,0:TURB_GS-1,0:TURB_GS-1))
   allocate(turb_spec_d (1:ndim,0:TURB_GS-1,0:TURB_GS-1,0:TURB_GS-1,1:2))
   allocate(turb_fft_d  (1:ndim,0:TURB_GS-1,0:TURB_GS-1,0:TURB_GS-1))
-  allocate(fturb(1:twotondim,1:3,1:sim%m%ngridmax+sim%m%ncachemax))
+  allocate(afield_lev_d(1:ndim,0:TURB_GS-1,0:TURB_GS-1,0:TURB_GS-1,sim%r%levelmin:sim%r%nlevelmax))
+  allocate(turb_mask_d(1:twotondim,1:sim%m%ngridmax+sim%m%ncachemax))
   afield_d=0d0
   afield_now_d=0d0
   turb_spec_d=(0d0,0d0)
-  fturb=0d0
+  afield_lev_d=0d0
+  turb_mask_d=0
 #endif
 #ifdef GRAV
   allocate(rho(1:twotondim,1:sim%m%ngridmax+sim%m%ncachemax))
