@@ -1508,6 +1508,13 @@ subroutine m_read_params(pst)
      write(*,*)'Error: nimhd_solver=explicit or sts only runs on a single rank'
      nml_ok=.false.
   endif
+#ifdef MHD
+  ! Boundaries from condinit or boundana do not set the magnetic field
+  if(any(bound_type(1:nbound)==4).or.any(bound_type(1:nbound)==5))then
+     write(*,*)'Error: bound_type=4 and bound_type=5 are not supported with MHD'
+     nml_ok=.false.
+  endif
+#endif
 
   if(.not. nml_ok)then
      write(*,*)'Too many errors in the namelist'
