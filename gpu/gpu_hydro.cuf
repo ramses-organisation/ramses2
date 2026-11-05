@@ -826,6 +826,7 @@ contains
     real(kind=dp) :: rstarr, er, vstarr, Bstarr, wstarr, Cstarr, vdotBstarr, etotstarr, sqrrstarr, calfvenr, SAR
     real(kind=dp) :: vstarstar, wstarstar, Bstarstar, Cstarstar, vdotBstarstar, etotstarstarl, etotstarstarr
     real(kind=dp) :: ro, uo, vo, wo, Bo, Co, Ptoto, etoto, vdotBo
+    real(kind=dp) :: inv_rl, inv_rr, inv_rc, inv_sl, inv_sr, inv_estar, inv_sqrsum
 
     smallp = smallc2 / gamma
     entho = 1.0_dp / (gamma - 1.0_dp)
@@ -859,57 +860,64 @@ contains
     vdotBr = ur*A + vr*Br + wr*Cr
 
     ! Fast magnetosonic speeds (find_speed_fast) using the continuity-enforced A.
-    b2l = A*A + Bl*Bl + Cl*Cl; c2l = gamma*Pl/rl; d2l = 0.5_dp*(b2l/rl + c2l)
-    cfastl = sqrt(d2l + sqrt(max(d2l**2 - c2l*A*A/rl, 0.0_dp)))
-    b2r = A*A + Br*Br + Cr*Cr; c2r = gamma*Pr/rr; d2r = 0.5_dp*(b2r/rr + c2r)
-    cfastr = sqrt(d2r + sqrt(max(d2r**2 - c2r*A*A/rr, 0.0_dp)))
+    inv_rl = 1.0_dp/rl; inv_rr = 1.0_dp/rr
+    b2l = A*A + Bl*Bl + Cl*Cl; c2l = gamma*Pl*inv_rl; d2l = 0.5_dp*(b2l*inv_rl + c2l)
+    cfastl = sqrt(d2l + sqrt(max(d2l**2 - c2l*A*A*inv_rl, 0.0_dp)))
+    b2r = A*A + Br*Br + Cr*Cr; c2r = gamma*Pr*inv_rr; d2r = 0.5_dp*(b2r*inv_rr + c2r)
+    cfastr = sqrt(d2r + sqrt(max(d2r**2 - c2r*A*A*inv_rr, 0.0_dp)))
 
     ! HLL wave speeds and star state.
     SL = min(ul, ur) - max(cfastl, cfastr)
     SR = max(ul, ur) + max(cfastl, cfastr)
     rcl = rl*(ul - SL); rcr = rr*(SR - ur)
-    ustar    = (rcr*ur    + rcl*ul    + (Ptotl - Ptotr))      /(rcr + rcl)
-    Ptotstar = (rcr*Ptotl + rcl*Ptotr + rcl*rcr*(ul - ur))    /(rcr + rcl)
+    inv_rc = 1.0_dp/(rcr + rcl)
+    ustar    = (rcr*ur    + rcl*ul    + (Ptotl - Ptotr))      *inv_rc
+    Ptotstar = (rcr*Ptotl + rcl*Ptotr + rcl*rcr*(ul - ur))    *inv_rc
 
     ! Left star region.
-    rstarl = rl*(SL - ul)/(SL - ustar)
+    inv_sl = 1.0_dp/(SL - ustar)
+    rstarl = rl*(SL - ul)*inv_sl
     rstarl = max(rstarl, smallr)
     estar  = rl*(SL - ul)*(SL - ustar) - A*A
     el     = rl*(SL - ul)*(SL - ul   ) - A*A
     if (abs(estar) < 1e-4_dp*A*A) then
        vstarl = vl; Bstarl = Bl; wstarl = wl; Cstarl = Cl
     else
-       vstarl = vl - A*Bl*(ustar - ul)/estar
-       Bstarl = Bl*el/estar
-       wstarl = wl - A*Cl*(ustar - ul)/estar
-       Cstarl = Cl*el/estar
+       inv_estar = 1.0_dp/estar
+       vstarl = vl - A*Bl*(ustar - ul)*inv_estar
+       Bstarl = Bl*el*inv_estar
+       wstarl = wl - A*Cl*(ustar - ul)*inv_estar
+       Cstarl = Cl*el*inv_estar
     endif
     vdotBstarl = ustar*A + vstarl*Bstarl + wstarl*Cstarl
-    etotstarl = ((SL - ul)*etotl - Ptotl*ul + Ptotstar*ustar + A*(vdotBl - vdotBstarl))/(SL - ustar)
+    etotstarl = ((SL - ul)*etotl - Ptotl*ul + Ptotstar*ustar + A*(vdotBl - vdotBstarl))*inv_sl
     sqrrstarl = sqrt(rstarl); calfvenl = abs(A)/sqrrstarl; SAL = ustar - calfvenl
 
     ! Right star region.
-    rstarr = rr*(SR - ur)/(SR - ustar)
+    inv_sr = 1.0_dp/(SR - ustar)
+    rstarr = rr*(SR - ur)*inv_sr
     rstarr = max(rstarr, smallr)
     estar  = rr*(SR - ur)*(SR - ustar) - A*A
     er     = rr*(SR - ur)*(SR - ur   ) - A*A
     if (abs(estar) < 1e-4_dp*A*A) then
        vstarr = vr; Bstarr = Br; wstarr = wr; Cstarr = Cr
     else
-       vstarr = vr - A*Br*(ustar - ur)/estar
-       Bstarr = Br*er/estar
-       wstarr = wr - A*Cr*(ustar - ur)/estar
-       Cstarr = Cr*er/estar
+       inv_estar = 1.0_dp/estar
+       vstarr = vr - A*Br*(ustar - ur)*inv_estar
+       Bstarr = Br*er*inv_estar
+       wstarr = wr - A*Cr*(ustar - ur)*inv_estar
+       Cstarr = Cr*er*inv_estar
     endif
     vdotBstarr = ustar*A + vstarr*Bstarr + wstarr*Cstarr
-    etotstarr = ((SR - ur)*etotr - Ptotr*ur + Ptotstar*ustar + A*(vdotBr - vdotBstarr))/(SR - ustar)
+    etotstarr = ((SR - ur)*etotr - Ptotr*ur + Ptotstar*ustar + A*(vdotBr - vdotBstarr))*inv_sr
     sqrrstarr = sqrt(rstarr); calfvenr = abs(A)/sqrrstarr; SAR = ustar + calfvenr
 
     ! Double-star region.
-    vstarstar = (sqrrstarl*vstarl + sqrrstarr*vstarr + sgnm*(Bstarr - Bstarl))/(sqrrstarl + sqrrstarr)
-    wstarstar = (sqrrstarl*wstarl + sqrrstarr*wstarr + sgnm*(Cstarr - Cstarl))/(sqrrstarl + sqrrstarr)
-    Bstarstar = (sqrrstarl*Bstarr + sqrrstarr*Bstarl + sgnm*sqrrstarl*sqrrstarr*(vstarr - vstarl))/(sqrrstarl + sqrrstarr)
-    Cstarstar = (sqrrstarl*Cstarr + sqrrstarr*Cstarl + sgnm*sqrrstarl*sqrrstarr*(wstarr - wstarl))/(sqrrstarl + sqrrstarr)
+    inv_sqrsum = 1.0_dp/(sqrrstarl + sqrrstarr)
+    vstarstar = (sqrrstarl*vstarl + sqrrstarr*vstarr + sgnm*(Bstarr - Bstarl))*inv_sqrsum
+    wstarstar = (sqrrstarl*wstarl + sqrrstarr*wstarr + sgnm*(Cstarr - Cstarl))*inv_sqrsum
+    Bstarstar = (sqrrstarl*Bstarr + sqrrstarr*Bstarl + sgnm*sqrrstarl*sqrrstarr*(vstarr - vstarl))*inv_sqrsum
+    Cstarstar = (sqrrstarl*Cstarr + sqrrstarr*Cstarl + sgnm*sqrrstarl*sqrrstarr*(wstarr - wstarl))*inv_sqrsum
     vdotBstarstar = ustar*A + vstarstar*Bstarstar + wstarstar*Cstarstar
     etotstarstarl = etotstarl - sgnm*sqrrstarl*(vdotBstarl - vdotBstarstar)
     etotstarstarr = etotstarr + sgnm*sqrrstarr*(vdotBstarr - vdotBstarstar)
@@ -1063,6 +1071,8 @@ contains
     real(kind=dp) :: d2LL, d2LR, d2RL, d2RR
     real(kind=dp) :: rmin, pmin, Smax
     logical :: switch_to_llf
+    real(kind=dp) :: inv_r, inv_xL, inv_xR, inv_yB, inv_yT, inv_dx, inv_dy
+    real(kind=dp) :: isqLL, isqLR, isqRL, isqRR
 
     smallp = smallc**2 / gamma
 
@@ -1093,22 +1103,26 @@ contains
     uRR = stateRR%velocity_x; vRR = stateRR%velocity_y
     ARR = stateRR%Bx; BRR = stateRR%By; CRR = stateRR%Bz
 
-    b2LL = compute_bsquared(ALL, BLL, CLL); c2LL = gamma*pLL/rLL
-    d2LL = 0.5_dp*(b2LL/rLL + c2LL)
-    cfastLLx = sqrt(d2LL + sqrt(max(d2LL**2 - c2LL*ALL*ALL/rLL, 0.0_dp)))
-    cfastLLy = sqrt(d2LL + sqrt(max(d2LL**2 - c2LL*BLL*BLL/rLL, 0.0_dp)))
-    b2LR = compute_bsquared(ALR, BLR, CLR); c2LR = gamma*pLR/rLR
-    d2LR = 0.5_dp*(b2LR/rLR + c2LR)
-    cfastLRx = sqrt(d2LR + sqrt(max(d2LR**2 - c2LR*ALR*ALR/rLR, 0.0_dp)))
-    cfastLRy = sqrt(d2LR + sqrt(max(d2LR**2 - c2LR*BLR*BLR/rLR, 0.0_dp)))
-    b2RL = compute_bsquared(ARL, BRL, CRL); c2RL = gamma*pRL/rRL
-    d2RL = 0.5_dp*(b2RL/rRL + c2RL)
-    cfastRLx = sqrt(d2RL + sqrt(max(d2RL**2 - c2RL*ARL*ARL/rRL, 0.0_dp)))
-    cfastRLy = sqrt(d2RL + sqrt(max(d2RL**2 - c2RL*BRL*BRL/rRL, 0.0_dp)))
-    b2RR = compute_bsquared(ARR, BRR, CRR); c2RR = gamma*pRR/rRR
-    d2RR = 0.5_dp*(b2RR/rRR + c2RR)
-    cfastRRx = sqrt(d2RR + sqrt(max(d2RR**2 - c2RR*ARR*ARR/rRR, 0.0_dp)))
-    cfastRRy = sqrt(d2RR + sqrt(max(d2RR**2 - c2RR*BRR*BRR/rRR, 0.0_dp)))
+    inv_r = 1.0_dp/rLL
+    b2LL = compute_bsquared(ALL, BLL, CLL); c2LL = gamma*pLL*inv_r
+    d2LL = 0.5_dp*(b2LL*inv_r + c2LL)
+    cfastLLx = sqrt(d2LL + sqrt(max(d2LL**2 - c2LL*ALL*ALL*inv_r, 0.0_dp)))
+    cfastLLy = sqrt(d2LL + sqrt(max(d2LL**2 - c2LL*BLL*BLL*inv_r, 0.0_dp)))
+    inv_r = 1.0_dp/rLR
+    b2LR = compute_bsquared(ALR, BLR, CLR); c2LR = gamma*pLR*inv_r
+    d2LR = 0.5_dp*(b2LR*inv_r + c2LR)
+    cfastLRx = sqrt(d2LR + sqrt(max(d2LR**2 - c2LR*ALR*ALR*inv_r, 0.0_dp)))
+    cfastLRy = sqrt(d2LR + sqrt(max(d2LR**2 - c2LR*BLR*BLR*inv_r, 0.0_dp)))
+    inv_r = 1.0_dp/rRL
+    b2RL = compute_bsquared(ARL, BRL, CRL); c2RL = gamma*pRL*inv_r
+    d2RL = 0.5_dp*(b2RL*inv_r + c2RL)
+    cfastRLx = sqrt(d2RL + sqrt(max(d2RL**2 - c2RL*ARL*ARL*inv_r, 0.0_dp)))
+    cfastRLy = sqrt(d2RL + sqrt(max(d2RL**2 - c2RL*BRL*BRL*inv_r, 0.0_dp)))
+    inv_r = 1.0_dp/rRR
+    b2RR = compute_bsquared(ARR, BRR, CRR); c2RR = gamma*pRR*inv_r
+    d2RR = 0.5_dp*(b2RR*inv_r + c2RR)
+    cfastRRx = sqrt(d2RR + sqrt(max(d2RR**2 - c2RR*ARR*ARR*inv_r, 0.0_dp)))
+    cfastRRy = sqrt(d2RR + sqrt(max(d2RR**2 - c2RR*BRR*BRR*inv_r, 0.0_dp)))
 
     SL = min(uLL, uLR, uRL, uRR) - max(cfastLLx, cfastLRx, cfastRLx, cfastRRx)
     SR = max(uLL, uLR, uRL, uRR) + max(cfastLLx, cfastLRx, cfastRLx, cfastRRx)
@@ -1144,34 +1158,36 @@ contains
     rcRLy = rRL*(vRL - SB); rcRRy = rRR*(ST - vRR)
 
     ustar = (rcLLx*uLL + rcLRx*uLR + rcRLx*uRL + rcRRx*uRR &
-         & + (PtotLL - PtotRL + PtotLR - PtotRR))/(rcLLx + rcLRx + rcRLx + rcRRx)
+         & + (PtotLL - PtotRL + PtotLR - PtotRR))*(1.0_dp/(rcLLx + rcLRx + rcRLx + rcRRx))
     vstar = (rcLLy*vLL + rcLRy*vLR + rcRLy*vRL + rcRRy*vRR &
-         & + (PtotLL - PtotLR + PtotRL - PtotRR))/(rcLLy + rcLRy + rcRLy + rcRRy)
+         & + (PtotLL - PtotLR + PtotRL - PtotRR))*(1.0_dp/(rcLLy + rcLRy + rcRLy + rcRRy))
 
-    rstarLLx = rLL*(SL - uLL)/(SL - ustar); BstarLL = BLL*(SL - uLL)/(SL - ustar)
-    rstarLLy = rLL*(SB - vLL)/(SB - vstar); AstarLL = ALL*(SB - vLL)/(SB - vstar)
-    rstarLL  = rLL*(SL - uLL)/(SL - ustar)*(SB - vLL)/(SB - vstar)
+    inv_xL = 1.0_dp/(SL - ustar); inv_xR = 1.0_dp/(SR - ustar)
+    inv_yB = 1.0_dp/(SB - vstar); inv_yT = 1.0_dp/(ST - vstar)
+    rstarLLx = rLL*(SL - uLL)*inv_xL; BstarLL = BLL*(SL - uLL)*inv_xL
+    rstarLLy = rLL*(SB - vLL)*inv_yB; AstarLL = ALL*(SB - vLL)*inv_yB
+    rstarLL  = rLL*(SL - uLL)*inv_xL*(SB - vLL)*inv_yB
     EstarLLx = ustar*BstarLL - vLL*ALL
     EstarLLy = uLL*BLL - vstar*AstarLL
     EstarLL  = ustar*BstarLL - vstar*AstarLL
 
-    rstarLRx = rLR*(SL - uLR)/(SL - ustar); BstarLR = BLR*(SL - uLR)/(SL - ustar)
-    rstarLRy = rLR*(ST - vLR)/(ST - vstar); AstarLR = ALR*(ST - vLR)/(ST - vstar)
-    rstarLR  = rLR*(SL - uLR)/(SL - ustar)*(ST - vLR)/(ST - vstar)
+    rstarLRx = rLR*(SL - uLR)*inv_xL; BstarLR = BLR*(SL - uLR)*inv_xL
+    rstarLRy = rLR*(ST - vLR)*inv_yT; AstarLR = ALR*(ST - vLR)*inv_yT
+    rstarLR  = rLR*(SL - uLR)*inv_xL*(ST - vLR)*inv_yT
     EstarLRx = ustar*BstarLR - vLR*ALR
     EstarLRy = uLR*BLR - vstar*AstarLR
     EstarLR  = ustar*BstarLR - vstar*AstarLR
 
-    rstarRLx = rRL*(SR - uRL)/(SR - ustar); BstarRL = BRL*(SR - uRL)/(SR - ustar)
-    rstarRLy = rRL*(SB - vRL)/(SB - vstar); AstarRL = ARL*(SB - vRL)/(SB - vstar)
-    rstarRL  = rRL*(SR - uRL)/(SR - ustar)*(SB - vRL)/(SB - vstar)
+    rstarRLx = rRL*(SR - uRL)*inv_xR; BstarRL = BRL*(SR - uRL)*inv_xR
+    rstarRLy = rRL*(SB - vRL)*inv_yB; AstarRL = ARL*(SB - vRL)*inv_yB
+    rstarRL  = rRL*(SR - uRL)*inv_xR*(SB - vRL)*inv_yB
     EstarRLx = ustar*BstarRL - vRL*ARL
     EstarRLy = uRL*BRL - vstar*AstarRL
     EstarRL  = ustar*BstarRL - vstar*AstarRL
 
-    rstarRRx = rRR*(SR - uRR)/(SR - ustar); BstarRR = BRR*(SR - uRR)/(SR - ustar)
-    rstarRRy = rRR*(ST - vRR)/(ST - vstar); AstarRR = ARR*(ST - vRR)/(ST - vstar)
-    rstarRR  = rRR*(SR - uRR)/(SR - ustar)*(ST - vRR)/(ST - vstar)
+    rstarRRx = rRR*(SR - uRR)*inv_xR; BstarRR = BRR*(SR - uRR)*inv_xR
+    rstarRRy = rRR*(ST - vRR)*inv_yT; AstarRR = ARR*(ST - vRR)*inv_yT
+    rstarRR  = rRR*(SR - uRR)*inv_xR*(ST - vRR)*inv_yT
     EstarRRx = ustar*BstarRR - vRR*ARR
     EstarRRy = uRR*BRR - vstar*AstarRR
     EstarRR  = ustar*BstarRR - vstar*AstarRR
@@ -1182,20 +1198,22 @@ contains
     rstarRLy = max(rstarRLy, smallr); rstarRRy = max(rstarRRy, smallr)
     rstarLL  = max(rstarLL,  smallr); rstarLR  = max(rstarLR,  smallr)
     rstarRL  = max(rstarRL,  smallr); rstarRR  = max(rstarRR,  smallr)
-    calfvenL = max(abs(ALR)/sqrt(rstarLRx), abs(AstarLR)/sqrt(rstarLR), &
-         &         abs(ALL)/sqrt(rstarLLx), abs(AstarLL)/sqrt(rstarLL), smallc)
-    calfvenR = max(abs(ARR)/sqrt(rstarRRx), abs(AstarRR)/sqrt(rstarRR), &
-         &         abs(ARL)/sqrt(rstarRLx), abs(AstarRL)/sqrt(rstarRL), smallc)
-    calfvenB = max(abs(BLL)/sqrt(rstarLLy), abs(BstarLL)/sqrt(rstarLL), &
-         &         abs(BRL)/sqrt(rstarRLy), abs(BstarRL)/sqrt(rstarRL), smallc)
-    calfvenT = max(abs(BLR)/sqrt(rstarLRy), abs(BstarLR)/sqrt(rstarLR), &
-         &         abs(BRR)/sqrt(rstarRRy), abs(BstarRR)/sqrt(rstarRR), smallc)
+    isqLL = rsqrt(rstarLL); isqLR = rsqrt(rstarLR); isqRL = rsqrt(rstarRL); isqRR = rsqrt(rstarRR)
+    calfvenL = max(abs(ALR)*rsqrt(rstarLRx), abs(AstarLR)*isqLR, &
+         &         abs(ALL)*rsqrt(rstarLLx), abs(AstarLL)*isqLL, smallc)
+    calfvenR = max(abs(ARR)*rsqrt(rstarRRx), abs(AstarRR)*isqRR, &
+         &         abs(ARL)*rsqrt(rstarRLx), abs(AstarRL)*isqRL, smallc)
+    calfvenB = max(abs(BLL)*rsqrt(rstarLLy), abs(BstarLL)*isqLL, &
+         &         abs(BRL)*rsqrt(rstarRLy), abs(BstarRL)*isqRL, smallc)
+    calfvenT = max(abs(BLR)*rsqrt(rstarLRy), abs(BstarLR)*isqLR, &
+         &         abs(BRR)*rsqrt(rstarRRy), abs(BstarRR)*isqRR, smallc)
     SAL = min(ustar - calfvenL, 0.0_dp); SAR = max(ustar + calfvenR, 0.0_dp)
     SAB = min(vstar - calfvenB, 0.0_dp); SAT = max(vstar + calfvenT, 0.0_dp)
-    AstarT = (SAR*AstarRR - SAL*AstarLR)/(SAR - SAL)
-    AstarB = (SAR*AstarRL - SAL*AstarLL)/(SAR - SAL)
-    BstarR = (SAT*BstarRR - SAB*BstarRL)/(SAT - SAB)
-    BstarL = (SAT*BstarLR - SAB*BstarLL)/(SAT - SAB)
+    inv_dx = 1.0_dp/(SAR - SAL); inv_dy = 1.0_dp/(SAT - SAB)
+    AstarT = (SAR*AstarRR - SAL*AstarLR)*inv_dx
+    AstarB = (SAR*AstarRL - SAL*AstarLL)*inv_dx
+    BstarR = (SAT*BstarRR - SAB*BstarRL)*inv_dy
+    BstarL = (SAT*BstarLR - SAB*BstarLL)*inv_dy
 
     if (SB > 0.0_dp) then
        if (SL > 0.0_dp) then
@@ -1203,7 +1221,7 @@ contains
        else if (SR < 0.0_dp) then
           E = ERL
        else
-          E = (SAR*EstarLLx - SAL*EstarRLx + SAR*SAL*(BRL - BLL))/(SAR - SAL)
+          E = (SAR*EstarLLx - SAL*EstarRLx + SAR*SAL*(BRL - BLL))*inv_dx
        endif
     else if (ST < 0.0_dp) then
        if (SL > 0.0_dp) then
@@ -1211,17 +1229,17 @@ contains
        else if (SR < 0.0_dp) then
           E = ERR
        else
-          E = (SAR*EstarLRx - SAL*EstarRRx + SAR*SAL*(BRR - BLR))/(SAR - SAL)
+          E = (SAR*EstarLRx - SAL*EstarRRx + SAR*SAL*(BRR - BLR))*inv_dx
        endif
     else if (SL > 0.0_dp) then
-       E = (SAT*EstarLLy - SAB*EstarLRy - SAT*SAB*(ALR - ALL))/(SAT - SAB)
+       E = (SAT*EstarLLy - SAB*EstarLRy - SAT*SAB*(ALR - ALL))*inv_dy
     else if (SR < 0.0_dp) then
-       E = (SAT*EstarRLy - SAB*EstarRRy - SAT*SAB*(ARR - ARL))/(SAT - SAB)
+       E = (SAT*EstarRLy - SAB*EstarRRy - SAT*SAB*(ARR - ARL))*inv_dy
     else
        E = (SAL*SAB*EstarRR - SAL*SAT*EstarRL - SAR*SAB*EstarLR + SAR*SAT*EstarLL) &
-            & /(SAR - SAL)/(SAT - SAB) &
-            & - SAT*SAB/(SAT - SAB)*(AstarT - AstarB) &
-            & + SAR*SAL/(SAR - SAL)*(BstarR - BstarL)
+            & *inv_dx*inv_dy &
+            & - SAT*SAB*inv_dy*(AstarT - AstarB) &
+            & + SAR*SAL*inv_dx*(BstarR - BstarL)
     endif
 
     return
@@ -1853,9 +1871,9 @@ contains
                                 - (slopes_x%velocity_x + slopes_y%velocity_y + slopes_z%velocity_z) * gamma * cell%pressure
 #ifdef MHD
        ! Lorentz-force source terms.
-       source_term%velocity_x = source_term%velocity_x + (-(B*dBx+C*dCx)/r) + (B*dAy/r) + (C*dAz/r)
-       source_term%velocity_y = source_term%velocity_y + (A*dBx/r) + (-(A*dAy+C*dCy)/r) + (C*dBz/r)
-       source_term%velocity_z = source_term%velocity_z + (A*dCx/r) + (B*dCy/r) + (-(A*dAz+B*dBz)/r)
+       source_term%velocity_x = source_term%velocity_x + ((-(B*dBx+C*dCx)) + (B*dAy) + (C*dAz))*inv_density
+       source_term%velocity_y = source_term%velocity_y + ((A*dBx) + (-(A*dAy+C*dCy)) + (C*dBz))*inv_density
+       source_term%velocity_z = source_term%velocity_z + ((A*dCx) + (B*dCy) + (-(A*dAz+B*dBz)))*inv_density
        if (induction) then
           source_term%velocity_x = 0.0_dp; source_term%velocity_y = 0.0_dp; source_term%velocity_z = 0.0_dp
        end if
@@ -3264,7 +3282,7 @@ contains
     fac = real(min(slope_mag,2), kind=dp)
     dlft = fac*(b0 - bm)
     drgt = fac*(bp - b0)
-    dcen = half*(dlft+drgt)/fac; dsgn = sign(one, dcen)
+    dcen = (dlft+drgt)*merge(0.25_dp, half, slope_mag >= 2); dsgn = sign(one, dcen)
     slop = min(abs(dlft),abs(drgt)); dlim = merge(zero, slop, (dlft*drgt) <= zero)
     db = dsgn*min(dlim,abs(dcen))
   end function face_b_tvd_slope
@@ -6355,7 +6373,20 @@ contains
   ! NVHPC applies a kernel's launch_bounds to every kernel that follows it in the module,
   ! so kernels without launch_bounds are defined before every kernel that has them.
   ! Double precision is register-limited: cap the registers (threads per block set in gpu_runner.cuf).
-#if defined(MHD) || (defined(NPRE) && NPRE == 4)
+  ! MHD (64 threads at nsubgrid=1, 256 at nsubgrid=2): measured on Orszag-Tang, 512^3 on an H200
+  ! and 256^3 on an A100. The best caps differ between sm_90 and sm_80 (GPU_SM, from CUDA_ARCH);
+  ! other GPUs use no cap.
+#if defined(MHD) && defined(GPU_SM) && GPU_SM == 90 && NPRE == 4 && NSUBGRID == 2
+#define HYDRO_LB launch_bounds(256,3)
+#elif defined(MHD) && defined(GPU_SM) && GPU_SM == 90 && NPRE == 4
+#define HYDRO_LB launch_bounds(64,12)
+#elif defined(MHD) && defined(GPU_SM) && GPU_SM == 90 && NSUBGRID != 2
+#define HYDRO_LB launch_bounds(64,5)
+#elif defined(MHD) && defined(GPU_SM) && GPU_SM == 80 && NPRE != 4 && NSUBGRID == 2
+#define HYDRO_LB launch_bounds(256,1)
+#elif defined(MHD) && defined(GPU_SM) && GPU_SM == 80 && NPRE != 4
+#define HYDRO_LB launch_bounds(64,6)
+#elif defined(MHD) || (defined(NPRE) && NPRE == 4)
 #define HYDRO_LB
 #elif !defined(NSUBGRID) || NSUBGRID == 1
 #define HYDRO_LB launch_bounds(64,16)
