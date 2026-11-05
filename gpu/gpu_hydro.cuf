@@ -2159,18 +2159,30 @@ contains
           dscalz = dscal_z(n)
           srscal = -uscal*dscalx - vscal*dscaly - wscal*dscalz
           rscal = rscal + srscal*dtdx
-          if (i > 1 .and. (j > 1 .and. j < work_size) .and. (k > 1 .and. k < work_size)) &
-               & right_interfaces_x%scalar(i-2,j-2,k-2,n) = rscal - dscalx
-          if (i < work_size .and. (j > 1 .and. j < work_size) .and. (k > 1 .and. k < work_size)) &
-               & left_interfaces_x%scalar(i-1,j-2,k-2,n) = rscal + dscalx
-          if ((i > 1 .and. i < work_size) .and. j > 1 .and. (k > 1 .and. k < work_size)) &
-               & right_interfaces_y%scalar(i-2,j-2,k-2,n) = rscal - dscaly
-          if ((i > 1 .and. i < work_size) .and. j < work_size .and. (k > 1 .and. k < work_size)) &
-               & left_interfaces_y%scalar(i-2,j-1,k-2,n) = rscal + dscaly
-          if ((i > 1 .and. i < work_size) .and. (j > 1 .and. j < work_size) .and. k > 1) &
-               & right_interfaces_z%scalar(i-2,j-2,k-2,n) = rscal - dscalz
-          if ((i > 1 .and. i < work_size) .and. (j > 1 .and. j < work_size) .and. k < work_size) &
-               & left_interfaces_z%scalar(i-2,j-2,k-1,n) = rscal + dscalz
+          if (i > 1 .and. (j > 1 .and. j < work_size) .and. (k > 1 .and. k < work_size)) then
+             right_interfaces_x%scalar(i-2,j-2,k-2,n) = rscal - dscalx
+             if (right_interfaces_x%scalar(i-2,j-2,k-2,n) < 0.0_dp) right_interfaces_x%scalar(i-2,j-2,k-2,n) = scalar_sub(i,j,k,n)
+          end if
+          if (i < work_size .and. (j > 1 .and. j < work_size) .and. (k > 1 .and. k < work_size)) then
+             left_interfaces_x%scalar(i-1,j-2,k-2,n) = rscal + dscalx
+             if (left_interfaces_x%scalar(i-1,j-2,k-2,n) < 0.0_dp) left_interfaces_x%scalar(i-1,j-2,k-2,n) = scalar_sub(i,j,k,n)
+          end if
+          if ((i > 1 .and. i < work_size) .and. j > 1 .and. (k > 1 .and. k < work_size)) then
+             right_interfaces_y%scalar(i-2,j-2,k-2,n) = rscal - dscaly
+             if (right_interfaces_y%scalar(i-2,j-2,k-2,n) < 0.0_dp) right_interfaces_y%scalar(i-2,j-2,k-2,n) = scalar_sub(i,j,k,n)
+          end if
+          if ((i > 1 .and. i < work_size) .and. j < work_size .and. (k > 1 .and. k < work_size)) then
+             left_interfaces_y%scalar(i-2,j-1,k-2,n) = rscal + dscaly
+             if (left_interfaces_y%scalar(i-2,j-1,k-2,n) < 0.0_dp) left_interfaces_y%scalar(i-2,j-1,k-2,n) = scalar_sub(i,j,k,n)
+          end if
+          if ((i > 1 .and. i < work_size) .and. (j > 1 .and. j < work_size) .and. k > 1) then
+             right_interfaces_z%scalar(i-2,j-2,k-2,n) = rscal - dscalz
+             if (right_interfaces_z%scalar(i-2,j-2,k-2,n) < 0.0_dp) right_interfaces_z%scalar(i-2,j-2,k-2,n) = scalar_sub(i,j,k,n)
+          end if
+          if ((i > 1 .and. i < work_size) .and. (j > 1 .and. j < work_size) .and. k < work_size) then
+             left_interfaces_z%scalar(i-2,j-2,k-1,n) = rscal + dscalz
+             if (left_interfaces_z%scalar(i-2,j-2,k-1,n) < 0.0_dp) left_interfaces_z%scalar(i-2,j-2,k-1,n) = scalar_sub(i,j,k,n)
+          end if
        end do
 #endif
     end do
