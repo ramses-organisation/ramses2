@@ -1432,8 +1432,7 @@ contains
   !> @brief
   !> Convert a subgrid of conserved variables to primitive variables in shared memory
   !>
-  !> @param[in] head_idx : The head index of the octs at the current AMR level
-  !> @param[in] block_idx : The CUDA block index of the calling thread
+  !> @param[in] nbor : The neighbor octs of this subgrid
   !> @param[in] thread_idx : The index of calling thread within its block
   !> @param[in] gamma : The adiabatic index
   !> @param[out] local_subgrid : The local subgrid in shared memory to write the primitive variables to
@@ -1446,15 +1445,14 @@ contains
 #ifdef MHD
        & bf, &
 #endif
-       & head_idx, block_idx, thread_idx, gamma, smallr, smallc2, dt, load_refined, local_subgrid)
+       & thread_idx, gamma, smallr, smallc2, dt, load_refined, local_subgrid)
     type(oct), device :: grid(*)
     real(kind=dp), device :: constant_gravity(3)
     real(kind=dp), device :: f(1:twotondim,1:ndim,*)
     real(kind=dp), device :: uold(1:twotondim,1:nvar,*)
     real(kind=dp), device :: bold(1:twotondim,1:6,*) ! Unused without MHD
-    integer(kind=4), device :: nbor(1:subgridsize,*)
-    integer(kind=4), value :: head_idx
-    integer(kind=4), value :: block_idx, thread_idx
+    integer(kind=4) :: nbor(1:subgridsize)
+    integer(kind=4), value :: thread_idx
     real(kind=dp), value :: gamma, smallr, smallc2
     real(kind=dp), value :: dt
     logical, value :: load_refined
@@ -1472,7 +1470,7 @@ contains
     integer :: work_idx, ind_nbor
     integer :: i, j, k, i_subgrid_idx, j_subgrid_idx, k_subgrid_idx
     integer :: ib, jb, kb ! cell position bits within its oct (0 or 1 per axis)
-    integer :: cell_idx, source_idx, subgrid_idx
+    integer :: cell_idx, source_idx
     integer :: work_size
     real(kind=dp) :: invD
 #ifdef MHD
@@ -1487,12 +1485,9 @@ contains
        ! Compute the subgrid_indices index, i.e. determine the oct to load
        call index_1Dto3D(work_idx/8, work_size/2, work_size/2, i_subgrid_idx, j_subgrid_idx, k_subgrid_idx)
 
-       ! Get subgrid index
-       subgrid_idx = head_idx + block_idx
-
        ! Get neighbour index
        ind_nbor = work_idx/8 + 1
-       source_idx = nbor(ind_nbor, subgrid_idx)
+       source_idx = nbor(ind_nbor)
 
        ! Now that we have the index to the oct we need to figure out which cell within it to load
        cell_idx = mod(work_idx, 8) + 1
@@ -1516,19 +1511,19 @@ contains
        ! Low-x face of this cell:
        if (i >= 1) then
           source_idx_face = source_idx
-          if (ib == 0) source_idx_face = nbor(ind_nbor - 1, subgrid_idx)
+          if (ib == 0) source_idx_face = nbor(ind_nbor - 1)
           bf%bx(i,j,k) = 0.5_dp*(b0(1) + bold(cell_idx + 1 - 2*ib, 4, source_idx_face))
        endif
        ! Low-y face of this cell:
        if (j >= 1) then
           source_idx_face = source_idx
-          if (jb == 0) source_idx_face = nbor(ind_nbor - nsubgridp2, subgrid_idx)
+          if (jb == 0) source_idx_face = nbor(ind_nbor - nsubgridp2)
           bf%by(i,j,k) = 0.5_dp*(b0(2) + bold(cell_idx + 2*(1 - 2*jb), 5, source_idx_face))
        endif
        ! Low-z face of this cell:
        if (k >= 1) then
           source_idx_face = source_idx
-          if (kb == 0) source_idx_face = nbor(ind_nbor - nsubgridp2sq, subgrid_idx)
+          if (kb == 0) source_idx_face = nbor(ind_nbor - nsubgridp2sq)
           bf%bz(i,j,k) = 0.5_dp*(b0(3) + bold(cell_idx + 4*(1 - 2*kb), 6, source_idx_face))
        endif
 
@@ -2757,10 +2752,10 @@ contains
 #ifdef MHD
        & emfx, emfy, emfz, &
 #endif
-       & head_idx, block_idx, thread_idx, dtdx)
+       & thread_idx, dtdx)
     real(kind=dp), device :: unew(1:twotondim,1:nvar,*)
     real(kind=dp), device :: bnew(1:twotondim,1:6,*) ! Unused without MHD
-    integer(kind=4), device :: nbor(1:subgridsize,*)
+    integer(kind=4) :: nbor(1:subgridsize)
     type(subgrid_3x2x2cell_primitive), intent(in) :: fluxes_x
     type(subgrid_2x3x2cell_primitive), intent(in) :: fluxes_y
     type(subgrid_2x2x3cell_primitive), intent(in) :: fluxes_z
@@ -2769,13 +2764,12 @@ contains
     type(subgrid_3x2x3edge_primitive), intent(in) :: emfy
     type(subgrid_3x3x2edge_primitive), intent(in) :: emfz
 #endif
-    integer(kind=4), value :: head_idx
-    integer, value :: block_idx, thread_idx
+    integer, value :: thread_idx
     real(kind=dp), value :: dtdx
 
     integer :: work_size
     integer :: i, j, k, i_subgrid_idx, j_subgrid_idx, k_subgrid_idx
-    integer :: work_idx, subgrid_idx, oct_idx, cell_idx, ind_nbor
+    integer :: work_idx, oct_idx, cell_idx, ind_nbor
     type(conserved_t) :: update_term
 #if NVAR>5+NENER
     integer :: n
@@ -2791,9 +2785,6 @@ contains
     ! Note that we're now excluding the ghost cells since this operation doesn't need them.
     do work_idx = thread_idx, work_size**3 - 1, blockDim%x
 
-       ! Compute the subgrid index
-       subgrid_idx = head_idx + block_idx
-
        ! Compute the subgrid_indices index, i.e. determine the oct to load
        call index_1Dto3D(work_idx/8, work_size/2, work_size/2, i_subgrid_idx, j_subgrid_idx, k_subgrid_idx)
        i_subgrid_idx = i_subgrid_idx + 1
@@ -2802,7 +2793,7 @@ contains
 
        ! Compute the oct index
        ind_nbor = 1 + i_subgrid_idx + nsubgridp2 * j_subgrid_idx + nsubgridp2sq * k_subgrid_idx
-       oct_idx = nbor(ind_nbor, subgrid_idx)
+       oct_idx = nbor(ind_nbor)
 
        ! Compute the cell index
        cell_idx = mod(work_idx, 8) + 1
@@ -2882,10 +2873,10 @@ contains
 #ifdef MHD
        & emfx, emfy, emfz, &
 #endif
-       & head_idx, block_idx, thread_idx, ngridmax, dtdx)
+       & thread_idx, ngridmax, dtdx)
     type(oct), device :: grid(*)
     integer, device :: father(*)
-    integer, device :: nbor(1:subgridsize,*)
+    integer :: nbor(1:subgridsize)
     real(kind=dp), device :: unew(1:twotondim,1:nvar,*)
     real(kind=dp), device :: bnew(1:twotondim,1:6,*) ! Unused without MHD
     type(subgrid_3x2x2cell_primitive), intent(in) :: fluxes_x
@@ -2896,15 +2887,13 @@ contains
     type(subgrid_3x2x3edge_primitive), intent(in) :: emfy
     type(subgrid_3x3x2edge_primitive), intent(in) :: emfz
 #endif
-    integer, value :: head_idx
-    integer, value :: block_idx
     integer, value :: thread_idx
     integer, value :: ngridmax
     real(kind=dp), value :: dtdx
     real(kind=dp), parameter :: inv_twotondim = 1.0_dp / real(twotondim, kind=dp)
 
     integer :: i, j, k, i_subgrid_idx, j_subgrid_idx, k_subgrid_idx
-    integer :: subgrid_idx, cell_idx, source_idx, father_idx, work_idx
+    integer :: cell_idx, source_idx, father_idx, work_idx
     integer :: interface_array_size, info, ind_nbor
     type(conserved_t) :: flux
     real(kind=dp) :: coarse_flux_scale
@@ -2915,9 +2904,6 @@ contains
 
     interface_array_size = nsubgrid**(ndim-1)
     coarse_flux_scale = dtdx * inv_twotondim
-
-    ! Compute the oct index
-    subgrid_idx = head_idx + block_idx
 
     !============
     ! X direction
@@ -2960,7 +2946,7 @@ contains
 
        ! Update left coarse X cell if necessary
        ind_nbor = 1 + i_subgrid_idx + nsubgridp2 * j_subgrid_idx + nsubgridp2sq * k_subgrid_idx
-       source_idx = nbor(ind_nbor, subgrid_idx)
+       source_idx = nbor(ind_nbor)
        if (source_idx > ngridmax) then
           father_idx = father(source_idx)
           i = grid(source_idx)%ckey(1) - 2 * grid(father_idx)%ckey(1)
@@ -3016,7 +3002,7 @@ contains
 
        ! Update right coarse X cell if necessary
        ind_nbor = 1 + i_subgrid_idx + nsubgridp2 * j_subgrid_idx + nsubgridp2sq * k_subgrid_idx
-       source_idx = nbor(ind_nbor, subgrid_idx)
+       source_idx = nbor(ind_nbor)
        if (source_idx > ngridmax) then
           father_idx = father(source_idx)
           i = grid(source_idx)%ckey(1) - 2 * grid(father_idx)%ckey(1)
@@ -3076,7 +3062,7 @@ contains
 
        ! Update left coarse Y cell if necessary
        ind_nbor = 1 + i_subgrid_idx + nsubgridp2 * j_subgrid_idx + nsubgridp2sq * k_subgrid_idx
-       source_idx = nbor(ind_nbor, subgrid_idx)
+       source_idx = nbor(ind_nbor)
        if (source_idx > ngridmax) then
           father_idx = father(source_idx)
           i = grid(source_idx)%ckey(1) - 2 * grid(father_idx)%ckey(1)
@@ -3132,7 +3118,7 @@ contains
 
        ! Update right coarse Y cell if necessary
        ind_nbor = 1 + i_subgrid_idx + nsubgridp2 * j_subgrid_idx + nsubgridp2sq * k_subgrid_idx
-       source_idx = nbor(ind_nbor, subgrid_idx)
+       source_idx = nbor(ind_nbor)
        if (source_idx > ngridmax) then
           father_idx = father(source_idx)
           i = grid(source_idx)%ckey(1) - 2 * grid(father_idx)%ckey(1)
@@ -3192,7 +3178,7 @@ contains
 
        ! Update left coarse Z cell if necessary
        ind_nbor = 1 + i_subgrid_idx + nsubgridp2 * j_subgrid_idx + nsubgridp2sq * k_subgrid_idx
-       source_idx = nbor(ind_nbor, subgrid_idx)
+       source_idx = nbor(ind_nbor)
        if (source_idx > ngridmax) then
           father_idx = father(source_idx)
           i = grid(source_idx)%ckey(1) - 2 * grid(father_idx)%ckey(1)
@@ -3248,7 +3234,7 @@ contains
 
        ! Update right coarse Z cell if necessary
        ind_nbor = 1 + i_subgrid_idx + nsubgridp2 * j_subgrid_idx + nsubgridp2sq * k_subgrid_idx
-       source_idx = nbor(ind_nbor, subgrid_idx)
+       source_idx = nbor(ind_nbor)
        if (source_idx > ngridmax) then
           father_idx = father(source_idx)
           i = grid(source_idx)%ckey(1) - 2 * grid(father_idx)%ckey(1)
@@ -3271,7 +3257,7 @@ contains
 
 #ifdef MHD
     call coarse_emf_update(grid, bnew, father, nbor, emfx, emfy, emfz, &
-         & head_idx, block_idx, thread_idx, ngridmax, dtdx)
+         & thread_idx, ngridmax, dtdx)
 #endif
 
   end subroutine coarse_cell_update
@@ -3621,18 +3607,18 @@ contains
   end subroutine cmpcurrent_mhd
 
   ! Map cache oct to parent coarse cell for coarse/fine corrections.
-  attributes(device) subroutine get_cf_cell(nbor, grid, father, subgrid_idx, ngridmax, &
+  attributes(device) subroutine get_cf_cell(nbor, grid, father, ngridmax, &
        & i, j, k, is_coarse, coct, ccell)
-    integer(kind=4), device :: nbor(1:subgridsize,*)
+    integer(kind=4) :: nbor(1:subgridsize)
     type(oct), device :: grid(*)
     integer, device :: father(*)
-    integer, value :: subgrid_idx, ngridmax, i, j, k
+    integer, value :: ngridmax, i, j, k
     logical, intent(out) :: is_coarse
     integer, intent(out) :: coct, ccell
     integer :: stencil_idx, nbidx, fidx, ci, cj, ck
 
     stencil_idx = 1 + i + nsubgridp2*j + nsubgridp2sq*k
-    nbidx = nbor(stencil_idx, subgrid_idx)
+    nbidx = nbor(stencil_idx)
     is_coarse = (nbidx > ngridmax)
     coct = 0; ccell = 1
     if (is_coarse) then
@@ -4084,21 +4070,21 @@ contains
   end subroutine nimhd_scale_fluxes
 
   attributes(device) subroutine coarse_emf_update(grid, bnew, father, nbor, emfx, emfy, emfz, &
-       & head_idx, block_idx, thread_idx, ngridmax, dtdx)
+       & thread_idx, ngridmax, dtdx)
     type(oct), device :: grid(*)
-    integer, device :: father(*), nbor(1:subgridsize,*)
+    integer, device :: father(*)
+    integer(kind=4) :: nbor(1:subgridsize)
     real(kind=dp), device :: bnew(1:twotondim,1:6,*)
     type(subgrid_2x3x3edge_primitive), intent(in) :: emfx
     type(subgrid_3x2x3edge_primitive), intent(in) :: emfy
     type(subgrid_3x3x2edge_primitive), intent(in) :: emfz
-    integer, value :: head_idx, block_idx, thread_idx, ngridmax
+    integer, value :: thread_idx, ngridmax
     real(kind=dp), value :: dtdx
-    integer :: i, j, k, i_subgrid_idx, j_subgrid_idx, k_subgrid_idx, subgrid_idx, info
+    integer :: i, j, k, i_subgrid_idx, j_subgrid_idx, k_subgrid_idx, info
     integer :: oc1, oc2, oc3, cc1, cc2, cc3, work_idx
     real(kind=dp) :: dflux, weight
     logical :: c1, c2, c3
 
-    subgrid_idx = head_idx + block_idx
     ! Coarse/fine EMF correction at oct boundary edges: one thread per oct and edge
     ! orientation, counted from the last thread (the flux corrections use the first ones).
     ! MHD runs with nsubgrid <= 2, so the 3*nsubgrid**3 tasks fit in one pass of the block.
@@ -4112,9 +4098,9 @@ contains
 
        if (mod(work_idx, 3) == 0) then
                 ! 4 EMFz edges
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx,  j_subgrid_idx-1,k_subgrid_idx, c1,oc1,cc1)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx-1,j_subgrid_idx-1,k_subgrid_idx, c2,oc2,cc2)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx-1,j_subgrid_idx,  k_subgrid_idx, c3,oc3,cc3)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx,  j_subgrid_idx-1,k_subgrid_idx, c1,oc1,cc1)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx-1,j_subgrid_idx-1,k_subgrid_idx, c2,oc2,cc2)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx-1,j_subgrid_idx,  k_subgrid_idx, c3,oc3,cc3)
        if (c1 .or. c3) then
           weight=1.0_dp; if(.not.c1 .or. .not.c2 .or. .not.c3) weight=0.5_dp
           dflux=(emfz%edge_e(i,j,k)+emfz%edge_e(i,j,k+1))*0.25_dp*weight*dtdx
@@ -4122,9 +4108,9 @@ contains
           if(c2)then; info=atomicadd(bnew(cc2,4,oc2),dflux);  info=atomicadd(bnew(cc2,5,oc2),-dflux); endif
           if(c3)then; info=atomicadd(bnew(cc3,2,oc3),-dflux); info=atomicadd(bnew(cc3,4,oc3),-dflux); endif
        end if
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx-1,j_subgrid_idx,  k_subgrid_idx, c1,oc1,cc1)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx-1,j_subgrid_idx+1,k_subgrid_idx, c2,oc2,cc2)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx,  j_subgrid_idx+1,k_subgrid_idx, c3,oc3,cc3)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx-1,j_subgrid_idx,  k_subgrid_idx, c1,oc1,cc1)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx-1,j_subgrid_idx+1,k_subgrid_idx, c2,oc2,cc2)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx,  j_subgrid_idx+1,k_subgrid_idx, c3,oc3,cc3)
        if (c1 .or. c3) then
           weight=1.0_dp; if(.not.c1 .or. .not.c2 .or. .not.c3) weight=0.5_dp
           dflux=(emfz%edge_e(i,j+2,k)+emfz%edge_e(i,j+2,k+1))*0.25_dp*weight*dtdx
@@ -4132,9 +4118,9 @@ contains
           if(c2)then; info=atomicadd(bnew(cc2,2,oc2),-dflux); info=atomicadd(bnew(cc2,4,oc2),-dflux); endif
           if(c3)then; info=atomicadd(bnew(cc3,1,oc3),-dflux); info=atomicadd(bnew(cc3,2,oc3),dflux);  endif
        end if
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx,  j_subgrid_idx+1,k_subgrid_idx, c1,oc1,cc1)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx+1,j_subgrid_idx+1,k_subgrid_idx, c2,oc2,cc2)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx+1,j_subgrid_idx,  k_subgrid_idx, c3,oc3,cc3)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx,  j_subgrid_idx+1,k_subgrid_idx, c1,oc1,cc1)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx+1,j_subgrid_idx+1,k_subgrid_idx, c2,oc2,cc2)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx+1,j_subgrid_idx,  k_subgrid_idx, c3,oc3,cc3)
        if (c1 .or. c3) then
           weight=1.0_dp; if(.not.c1 .or. .not.c2 .or. .not.c3) weight=0.5_dp
           dflux=(emfz%edge_e(i+2,j+2,k)+emfz%edge_e(i+2,j+2,k+1))*0.25_dp*weight*dtdx
@@ -4142,9 +4128,9 @@ contains
           if(c2)then; info=atomicadd(bnew(cc2,1,oc2),-dflux); info=atomicadd(bnew(cc2,2,oc2),dflux);  endif
           if(c3)then; info=atomicadd(bnew(cc3,5,oc3),dflux);  info=atomicadd(bnew(cc3,1,oc3),dflux);  endif
        end if
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx+1,j_subgrid_idx,  k_subgrid_idx, c1,oc1,cc1)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx+1,j_subgrid_idx-1,k_subgrid_idx, c2,oc2,cc2)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx,  j_subgrid_idx-1,k_subgrid_idx, c3,oc3,cc3)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx+1,j_subgrid_idx,  k_subgrid_idx, c1,oc1,cc1)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx+1,j_subgrid_idx-1,k_subgrid_idx, c2,oc2,cc2)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx,  j_subgrid_idx-1,k_subgrid_idx, c3,oc3,cc3)
        if (c1 .or. c3) then
           weight=1.0_dp; if(.not.c1 .or. .not.c2 .or. .not.c3) weight=0.5_dp
           dflux=(emfz%edge_e(i+2,j,k)+emfz%edge_e(i+2,j,k+1))*0.25_dp*weight*dtdx
@@ -4155,9 +4141,9 @@ contains
 
        else if (mod(work_idx, 3) == 1) then
                 ! 4 EMFx edges
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx,j_subgrid_idx,  k_subgrid_idx-1, c1,oc1,cc1)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx,j_subgrid_idx-1,k_subgrid_idx-1, c2,oc2,cc2)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx,j_subgrid_idx-1,k_subgrid_idx,   c3,oc3,cc3)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx,j_subgrid_idx,  k_subgrid_idx-1, c1,oc1,cc1)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx,j_subgrid_idx-1,k_subgrid_idx-1, c2,oc2,cc2)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx,j_subgrid_idx-1,k_subgrid_idx,   c3,oc3,cc3)
        if (c1 .or. c3) then
           weight=1.0_dp; if(.not.c1 .or. .not.c2 .or. .not.c3) weight=0.5_dp
           dflux=(emfx%edge_e(i,j,k)+emfx%edge_e(i+1,j,k))*0.25_dp*weight*dtdx
@@ -4165,9 +4151,9 @@ contains
           if(c2)then; info=atomicadd(bnew(cc2,5,oc2),dflux);  info=atomicadd(bnew(cc2,6,oc2),-dflux); endif
           if(c3)then; info=atomicadd(bnew(cc3,3,oc3),-dflux); info=atomicadd(bnew(cc3,5,oc3),-dflux); endif
        end if
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx,j_subgrid_idx-1,k_subgrid_idx,   c1,oc1,cc1)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx,j_subgrid_idx-1,k_subgrid_idx+1, c2,oc2,cc2)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx,j_subgrid_idx,  k_subgrid_idx+1, c3,oc3,cc3)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx,j_subgrid_idx-1,k_subgrid_idx,   c1,oc1,cc1)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx,j_subgrid_idx-1,k_subgrid_idx+1, c2,oc2,cc2)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx,j_subgrid_idx,  k_subgrid_idx+1, c3,oc3,cc3)
        if (c1 .or. c3) then
           weight=1.0_dp; if(.not.c1 .or. .not.c2 .or. .not.c3) weight=0.5_dp
           dflux=(emfx%edge_e(i,j,k+2)+emfx%edge_e(i+1,j,k+2))*0.25_dp*weight*dtdx
@@ -4175,9 +4161,9 @@ contains
           if(c2)then; info=atomicadd(bnew(cc2,3,oc2),-dflux); info=atomicadd(bnew(cc2,5,oc2),-dflux); endif
           if(c3)then; info=atomicadd(bnew(cc3,2,oc3),-dflux); info=atomicadd(bnew(cc3,3,oc3),dflux);  endif
        end if
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx,j_subgrid_idx,  k_subgrid_idx+1, c1,oc1,cc1)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx,j_subgrid_idx+1,k_subgrid_idx+1, c2,oc2,cc2)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx,j_subgrid_idx+1,k_subgrid_idx,   c3,oc3,cc3)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx,j_subgrid_idx,  k_subgrid_idx+1, c1,oc1,cc1)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx,j_subgrid_idx+1,k_subgrid_idx+1, c2,oc2,cc2)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx,j_subgrid_idx+1,k_subgrid_idx,   c3,oc3,cc3)
        if (c1 .or. c3) then
           weight=1.0_dp; if(.not.c1 .or. .not.c2 .or. .not.c3) weight=0.5_dp
           dflux=(emfx%edge_e(i,j+2,k+2)+emfx%edge_e(i+1,j+2,k+2))*0.25_dp*weight*dtdx
@@ -4185,9 +4171,9 @@ contains
           if(c2)then; info=atomicadd(bnew(cc2,2,oc2),-dflux); info=atomicadd(bnew(cc2,3,oc2),dflux);  endif
           if(c3)then; info=atomicadd(bnew(cc3,6,oc3),dflux);  info=atomicadd(bnew(cc3,2,oc3),dflux);  endif
        end if
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx,j_subgrid_idx+1,k_subgrid_idx,   c1,oc1,cc1)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx,j_subgrid_idx+1,k_subgrid_idx-1, c2,oc2,cc2)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx,j_subgrid_idx,  k_subgrid_idx-1, c3,oc3,cc3)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx,j_subgrid_idx+1,k_subgrid_idx,   c1,oc1,cc1)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx,j_subgrid_idx+1,k_subgrid_idx-1, c2,oc2,cc2)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx,j_subgrid_idx,  k_subgrid_idx-1, c3,oc3,cc3)
        if (c1 .or. c3) then
           weight=1.0_dp; if(.not.c1 .or. .not.c2 .or. .not.c3) weight=0.5_dp
           dflux=(emfx%edge_e(i,j+2,k)+emfx%edge_e(i+1,j+2,k))*0.25_dp*weight*dtdx
@@ -4198,9 +4184,9 @@ contains
 
        else
                 ! 4 EMFy edges
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx,  j_subgrid_idx,k_subgrid_idx-1, c1,oc1,cc1)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx-1,j_subgrid_idx,k_subgrid_idx-1, c2,oc2,cc2)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx-1,j_subgrid_idx,k_subgrid_idx,   c3,oc3,cc3)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx,  j_subgrid_idx,k_subgrid_idx-1, c1,oc1,cc1)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx-1,j_subgrid_idx,k_subgrid_idx-1, c2,oc2,cc2)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx-1,j_subgrid_idx,k_subgrid_idx,   c3,oc3,cc3)
        if (c1 .or. c3) then
           weight=1.0_dp; if(.not.c1 .or. .not.c2 .or. .not.c3) weight=0.5_dp
           dflux=(emfy%edge_e(i,j,k)+emfy%edge_e(i,j+1,k))*0.25_dp*weight*dtdx
@@ -4208,9 +4194,9 @@ contains
           if(c2)then; info=atomicadd(bnew(cc2,4,oc2),-dflux); info=atomicadd(bnew(cc2,6,oc2),dflux);  endif
           if(c3)then; info=atomicadd(bnew(cc3,3,oc3),dflux);  info=atomicadd(bnew(cc3,4,oc3),dflux);  endif
        end if
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx-1,j_subgrid_idx,k_subgrid_idx,   c1,oc1,cc1)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx-1,j_subgrid_idx,k_subgrid_idx+1, c2,oc2,cc2)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx,  j_subgrid_idx,k_subgrid_idx+1, c3,oc3,cc3)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx-1,j_subgrid_idx,k_subgrid_idx,   c1,oc1,cc1)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx-1,j_subgrid_idx,k_subgrid_idx+1, c2,oc2,cc2)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx,  j_subgrid_idx,k_subgrid_idx+1, c3,oc3,cc3)
        if (c1 .or. c3) then
           weight=1.0_dp; if(.not.c1 .or. .not.c2 .or. .not.c3) weight=0.5_dp
           dflux=(emfy%edge_e(i,j,k+2)+emfy%edge_e(i,j+1,k+2))*0.25_dp*weight*dtdx
@@ -4218,9 +4204,9 @@ contains
           if(c2)then; info=atomicadd(bnew(cc2,3,oc2),dflux);  info=atomicadd(bnew(cc2,4,oc2),dflux);  endif
           if(c3)then; info=atomicadd(bnew(cc3,1,oc3),dflux);  info=atomicadd(bnew(cc3,3,oc3),-dflux); endif
        end if
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx,  j_subgrid_idx,k_subgrid_idx+1, c1,oc1,cc1)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx+1,j_subgrid_idx,k_subgrid_idx+1, c2,oc2,cc2)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx+1,j_subgrid_idx,k_subgrid_idx,   c3,oc3,cc3)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx,  j_subgrid_idx,k_subgrid_idx+1, c1,oc1,cc1)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx+1,j_subgrid_idx,k_subgrid_idx+1, c2,oc2,cc2)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx+1,j_subgrid_idx,k_subgrid_idx,   c3,oc3,cc3)
        if (c1 .or. c3) then
           weight=1.0_dp; if(.not.c1 .or. .not.c2 .or. .not.c3) weight=0.5_dp
           dflux=(emfy%edge_e(i+2,j,k+2)+emfy%edge_e(i+2,j+1,k+2))*0.25_dp*weight*dtdx
@@ -4228,9 +4214,9 @@ contains
           if(c2)then; info=atomicadd(bnew(cc2,1,oc2),dflux);  info=atomicadd(bnew(cc2,3,oc2),-dflux); endif
           if(c3)then; info=atomicadd(bnew(cc3,6,oc3),-dflux); info=atomicadd(bnew(cc3,1,oc3),-dflux); endif
        end if
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx+1,j_subgrid_idx,k_subgrid_idx,   c1,oc1,cc1)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx+1,j_subgrid_idx,k_subgrid_idx-1, c2,oc2,cc2)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx,  j_subgrid_idx,k_subgrid_idx-1, c3,oc3,cc3)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx+1,j_subgrid_idx,k_subgrid_idx,   c1,oc1,cc1)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx+1,j_subgrid_idx,k_subgrid_idx-1, c2,oc2,cc2)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx,  j_subgrid_idx,k_subgrid_idx-1, c3,oc3,cc3)
        if (c1 .or. c3) then
           weight=1.0_dp; if(.not.c1 .or. .not.c2 .or. .not.c3) weight=0.5_dp
           dflux=(emfy%edge_e(i+2,j,k)+emfy%edge_e(i+2,j+1,k))*0.25_dp*weight*dtdx
@@ -4393,8 +4379,8 @@ contains
           info = atomicadd(unew(cell_idx,5,father_idx), energy_flux)
        endif
     endif
-    call coarse_emf_update(grid, bnew, father, nbor, emfx, emfy, emfz, &
-         & head_idx, block_idx, thread_idx, ngridmax, dtdx)
+    call coarse_emf_update(grid, bnew, father, nbor(:, head_idx + block_idx), emfx, emfy, emfz, &
+         & thread_idx, ngridmax, dtdx)
   end subroutine nimhd_coarse_cell_update
 
   ! Local resistivities of the split non-ideal MHD solver, given the conservative cell state uu
@@ -6441,6 +6427,9 @@ contains
 #else
     type(hydro_smem_t), shared :: smem(*)
 #endif
+    ! The subgrid's neighbor octs, read from global memory once per block rather than once per cell.
+    integer(kind=4), shared :: snbor(subgridsize)
+    integer :: w
     real(kind=dp) :: dtdx
     integer :: block_idx  ! The index of this block, corresponds to the subgrid to load
     integer :: thread_idx ! The index of this thread within the block
@@ -6456,6 +6445,10 @@ contains
 
     ! thread guard, probably not needed since num_blocks should always be equal to num_subgrids
     if (block_idx >= num_subgrids) return
+    do w = thread_idx, subgridsize - 1, blockDim%x
+       snbor(w+1) = nbor(w+1, head_idx + block_idx)
+    end do
+    call syncthreads()
 
 #ifdef MHD
     associate(local_subgrid => smem(1)%local_subgrid, &
@@ -6480,14 +6473,14 @@ contains
     ! =======================================================================
     ! Convert from conserved to primitive variables
     ! =======================================================================
-    call subgrid_conserved_2_primitive(grid, uold, bold, f, constant_gravity, nbor, &
+    call subgrid_conserved_2_primitive(grid, uold, bold, f, constant_gravity, snbor, &
 #if NVAR>5+NENER
          & scalar_subgrid, &
 #endif
 #ifdef MHD
          & bf, &
 #endif
-         & head_idx, block_idx, thread_idx, gamma, smallr, smallc2, dt, ilevel < levelmax, local_subgrid)
+         & thread_idx, gamma, smallr, smallc2, dt, ilevel < levelmax, local_subgrid)
 
     ! =======================================================================
     ! Perform tracing step and compute the interface states
@@ -6543,22 +6536,21 @@ contains
     ! =======================================================================
     ! Update the conserved variables at current level.
     ! =======================================================================
-    call conservative_update(unew, bnew, nbor, left_interfaces_x, left_interfaces_y, left_interfaces_z, &
+    call conservative_update(unew, bnew, snbor, left_interfaces_x, left_interfaces_y, left_interfaces_z, &
 #ifdef MHD
          & emfx, emfy, emfz, &
 #endif
-         & head_idx, block_idx, &
          & thread_idx, dtdx)
 
     ! =======================================================================
     ! Update the conserved variables at coarser level.
     ! =======================================================================
     if (ilevel > levelmin) then
-       call coarse_cell_update(grid, unew, bnew, father, nbor, left_interfaces_x, left_interfaces_y, left_interfaces_z, &
+       call coarse_cell_update(grid, unew, bnew, father, snbor, left_interfaces_x, left_interfaces_y, left_interfaces_z, &
 #ifdef MHD
             & emfx, emfy, emfz, &
 #endif
-            & head_idx, block_idx, thread_idx, ngridmax, dtdx)
+            & thread_idx, ngridmax, dtdx)
     endif
 
     end associate

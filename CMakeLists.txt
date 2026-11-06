@@ -587,8 +587,9 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "NVHPC")
         gpu/gpu_core_merger.cuf
         gpu/gpu_core_star.cuf
         gpu/gpu_phew.cuf
+        gpu/gpu_manager.cuf
     )
-    list(APPEND fortran_files ${gpu_cuf_files} gpu/gpu_manager.cuf)
+    list(APPEND fortran_files ${gpu_cuf_files})
     set_source_files_properties(${gpu_cuf_files} PROPERTIES LANGUAGE Fortran)
 
     # -------------------------------------------------------------------------
