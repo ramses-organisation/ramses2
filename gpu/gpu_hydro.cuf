@@ -1432,8 +1432,7 @@ contains
   !> @brief
   !> Convert a subgrid of conserved variables to primitive variables in shared memory
   !>
-  !> @param[in] head_idx : The head index of the octs at the current AMR level
-  !> @param[in] block_idx : The CUDA block index of the calling thread
+  !> @param[in] nbor : The neighbor octs of this subgrid
   !> @param[in] thread_idx : The index of calling thread within its block
   !> @param[in] gamma : The adiabatic index
   !> @param[out] local_subgrid : The local subgrid in shared memory to write the primitive variables to
