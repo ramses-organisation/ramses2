@@ -1466,6 +1466,30 @@ subroutine m_read_params(pst)
      write(*,*)'Error: output_peak_core is not supported on GPU'
      nml_ok=.false.
   endif
+  ! The GPU cooling has no cooling_ism branch
+  if(cooling_ism)then
+     write(*,*)'Error: cooling_ism is not supported on GPU'
+     nml_ok=.false.
+  endif
+  ! The GPU does not reset the ion fractions of derefined cells to equilibrium
+  if(neq_chem.and.upload_equilibrium_x)then
+     write(*,*)'Error: upload_equilibrium_x is not supported on GPU'
+     nml_ok=.false.
+  endif
+#ifdef DO_RTZ
+  ! The GPU has no RTZ chemistry
+  if(neq_chem)then
+     write(*,*)'Error: neq_chem with DO_RTZ is not supported on GPU'
+     nml_ok=.false.
+  endif
+#endif
+#ifdef DO_RT
+  ! The GPU keeps no RT photon state
+  if(rt.or.neq_chem)then
+     write(*,*)'Error: rt and neq_chem are not supported on GPU in a DO_RT build'
+     nml_ok=.false.
+  endif
+#endif
 #endif
 
   ! eta_ohm is a synonym of etamag
