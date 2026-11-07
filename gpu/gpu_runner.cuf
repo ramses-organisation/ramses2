@@ -1827,7 +1827,7 @@ contains
     integer(kind=4) :: head_cache, info
     integer(kind=4) :: num_blocks, num_threads, num_blocks_2
     integer(kind=4) :: threadsX_per_block, threadsY_per_block
-    integer(kind=4) :: new_ifree, old_ifree, new_head, new_tail, new_noct
+    integer(kind=4) :: new_ifree, old_ifree, ins_head, new_head, new_tail, new_noct
     integer(kind=4) :: ilev, ind, ibit, ibucket, skip_bit, noct_level
     ! Interpolation parameters for prolongation.
     integer(kind=4) :: interpol_var, interpol_type
@@ -1865,28 +1865,65 @@ contains
     ifree_d = sim%m%ifree
 
     ! Create new octs and put them at the end
-    head_idx = sim%m%head(ilevel)
     old_ifree = sim%m%ifree
-    num_octs = 0
-    do ilev = ilevel, sim%r%nlevelmax - 1
-       num_octs = num_octs + sim%m%noct(ilev)
-    end do
+    ins_head = old_ifree
     threadsX_per_block = 8
     threadsY_per_block = 16
-    num_blocks = (num_octs + threadsY_per_block - 1) / threadsY_per_block
-    if (num_octs > 0) then
+    if (interpol_type == 0) then
+       ! Injection: one launch refines all levels
+       head_idx = sim%m%head(ilevel)
+       num_octs = 0
+       do ilev = ilevel, sim%r%nlevelmax - 1
+          num_octs = num_octs + sim%m%noct(ilev)
+       end do
+       num_blocks = (num_octs + threadsY_per_block - 1) / threadsY_per_block
+       if (num_octs > 0) then
+#ifdef DO_RT
+          ! Reduced light speed of each level, for the photon densities of new octs
+          d_rt_c = sim%g%rt_c
+#endif
+          call refine_kernel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(grid, flag1, &
+               & uold, bold, f, phi, phi_old, &
+               & ifree_d, sim%m%ngridmax, head_idx, num_octs, &
+               & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
+#ifdef DO_RT
+               & rtuold, d_rt_c, &
+#endif
+               & interpol_var, interpol_type, smallr_d)
+       endif
+    else
+       ! Interpolation: refine level by level, coarse to fine
 #ifdef DO_RT
        ! Reduced light speed of each level, for the photon densities of new octs
        d_rt_c = sim%g%rt_c
 #endif
-       call refine_kernel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(grid, flag1, &
-            & uold, bold, f, phi, phi_old, &
-            & ifree_d, sim%m%ngridmax, head_idx, num_octs, &
-            & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
+       do ilev = ilevel, sim%r%nlevelmax - 1
+          head_idx = sim%m%head(ilev)
+          num_octs = sim%m%noct(ilev)
+          num_blocks = (num_octs + threadsY_per_block - 1) / threadsY_per_block
+          if (num_octs > 0) then
+             call refine_kernel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(grid, flag1, &
+                  & uold, bold, f, phi, phi_old, &
+                  & ifree_d, sim%m%ngridmax, head_idx, num_octs, &
+                  & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
 #ifdef DO_RT
-            & rtuold, d_rt_c, &
+                  & rtuold, d_rt_c, &
 #endif
-            & interpol_var, interpol_type, smallr_d)
+                  & interpol_var, interpol_type, smallr_d)
+
+             ! Insert the octs just created in the hash table, unless main memory is full
+             new_ifree = ifree_d
+             if (new_ifree - 1 > sim%r%ngridmax) exit
+             num_octs = new_ifree - ins_head
+             num_threads = 128
+             num_blocks = (num_octs + num_threads - 1) / num_threads
+             if (num_octs > 0) then
+                call insert_hash_kernel<<<num_blocks, num_threads>>>(grid, hash_key, hash_val, sim%m%hash_size, &
+                     & ckey_max, key_off, ins_head, num_octs)
+             end if
+             ins_head = new_ifree
+          endif
+       end do
     endif
 
     ! Copy back to host new free memory pointer ifree
@@ -1903,9 +1940,9 @@ contains
        stop
     endif
 
-    ! Insert new octs in hash table
-    head_idx = old_ifree
-    num_octs = new_ifree - old_ifree
+    ! Insert new octs not yet in the hash table
+    head_idx = ins_head
+    num_octs = new_ifree - ins_head
     num_threads = 128
     num_blocks = (num_octs + num_threads - 1) / num_threads
     if (num_octs > 0) then
