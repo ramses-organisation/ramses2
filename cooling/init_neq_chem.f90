@@ -6,6 +6,7 @@ contains
 !###########################################################
 subroutine init_neq_chem(r,g,tables)
   use amr_commons, only: run_t, global_t
+  use hydro_parameters, only: nion
 #ifdef DO_RTZ
   use rtz_cooling_module, only: rtz_set_model
 #else
@@ -24,6 +25,8 @@ subroutine init_neq_chem(r,g,tables)
   type(neq_cooling_t)::tables
 
   real(kind=8)::T2_sim
+  real(kind=8),dimension(1:nion)::xion_sim
+  real(kind=8)::xHII_sim
 
   if(g%myid==1)write(*,*)'Computing non-equilibrium chemistry model'
 
@@ -31,9 +34,11 @@ subroutine init_neq_chem(r,g,tables)
 
   if(r%cosmo)then
 #ifdef DO_RTZ
-     call rtz_set_model(r,tables,dble(g%h0/100.),dble(g%omega_b),dble(g%omega_m),dble(g%omega_l),dble(g%aexp_ini),T2_sim)
+     call rtz_set_model(r,tables,dble(g%h0/100.),dble(g%omega_b),dble(g%omega_m),dble(g%omega_l),dble(g%aexp_ini),T2_sim,xHII_sim)
+     g%xHII_start=xHII_sim
 #else
-     call neq_set_model(r,tables,dble(g%h0/100.),dble(g%omega_b),dble(g%omega_m),dble(g%omega_l),dble(g%aexp_ini),T2_sim)
+     call neq_set_model(r,tables,dble(g%h0/100.),dble(g%omega_b),dble(g%omega_m),dble(g%omega_l),dble(g%aexp_ini),T2_sim,xion_sim)
+     g%xion_start=xion_sim
 #endif
      g%T2_start=T2_sim
      if(r%nrestart==0)then
@@ -41,9 +46,9 @@ subroutine init_neq_chem(r,g,tables)
      end if
   else
 #ifdef DO_RTZ
-     call rtz_set_model(r,tables,dble(70./100.),dble(0.049),dble(0.3),dble(0.7),dble(r%aexp_ini),T2_sim)
+     call rtz_set_model(r,tables,dble(70./100.),dble(0.049),dble(0.3),dble(0.7),dble(r%aexp_ini),T2_sim,xHII_sim)
 #else
-     call neq_set_model(r,tables,dble(70./100.),dble(0.049),dble(0.3),dble(0.7),dble(r%aexp_ini),T2_sim)
+     call neq_set_model(r,tables,dble(70./100.),dble(0.049),dble(0.3),dble(0.7),dble(r%aexp_ini),T2_sim,xion_sim)
 #endif
   endif
 

@@ -36,7 +36,8 @@ module neq_cooling_module
 CONTAINS
 
 !XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-SUBROUTINE neq_set_model(r, tables, h, omegab, omega0, omegaL, astart_sim, T2_sim)
+SUBROUTINE neq_set_model(r, tables, h, omegab, omega0, omegaL, astart_sim, T2_sim, &
+     & xion_sim)
   ! Initialize cooling. All these parameters are unused at the moment and
   ! are only there for the original cooling-module.
   ! h (dble)            => H0/100
@@ -45,11 +46,13 @@ SUBROUTINE neq_set_model(r, tables, h, omegab, omega0, omegaL, astart_sim, T2_si
   ! omegaL (dble)       => Omega Lambda
   ! astart_sim (dble)   => Redshift at which we start the simulation
   ! T2_sim (dble)      <=  Starting temperature in simulation?
+  ! xion_sim (dble)    <=  Starting ionization fractions in simulation
   !-------------------------------------------------------------------------
 !  use UV_module
   type(run_t) :: r
   type(neq_cooling_t) :: tables
   real(kind=8) :: h, omegab, omega0, omegaL, astart_sim, T2_sim
+  real(kind=8),dimension(1:nion) :: xion_sim
   real(kind=8) :: astart=0.0001, aend, dasura, T2end=T2_min_fix, mu=1., ne
   !-------------------------------------------------------------------------
 
@@ -67,9 +70,10 @@ SUBROUTINE neq_set_model(r, tables, h, omegab, omega0, omegaL, astart_sim, T2_si
   call init_coolrates_tables(r, tables, astart_sim)
   call updateRTGroups_CoolConstants(r, tables)
 
+  xion_sim=0d0
   if(r%nrestart==0 .and. r%cosmo)                                        &
       call neq_evol_single_cell(r, tables, astart, aend, dasura,         &
-       &        h, omegab, omega0, omegaL, T2end, mu, ne, .false.)
+       &        h, omegab, omega0, omegaL, T2end, mu, ne, xion_sim, .false.)
   T2_sim=T2end
 
 END SUBROUTINE neq_set_model
@@ -1030,7 +1034,7 @@ END SUBROUTINE cmp_chem_eq
 
 !XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 SUBROUTINE neq_evol_single_cell(r, tables, astart, aend, dasura, &
-     & h, omegab, omega0, omegaL, T2end, mu, ne, if_write_result)
+     & h, omegab, omega0, omegaL, T2end, mu, ne, xend, if_write_result)
   !-------------------------------------------------------------------------
   ! Used for initialization of thermal state in cosmological simulations.
   !
@@ -1045,6 +1049,7 @@ SUBROUTINE neq_evol_single_cell(r, tables, astart, aend, dasura, &
   ! T2end  : Le T/mu en output
   ! mu     : le poids moleculaire en output
   ! ne     : le ne en output
+  ! xend   : les fractions d'ionisation en output
   ! if_write_result : .true. pour ecrire l'evolution de la temperature
   !          et de n_e sur l'ecran.
   !-------------------------------------------------------------------------
@@ -1053,6 +1058,7 @@ SUBROUTINE neq_evol_single_cell(r, tables, astart, aend, dasura, &
   type(run_t)::r
   type(neq_cooling_t)::tables
   real(kind=8)::astart,aend,T2end,h,omegab,omega0,omegaL,ne,dasura
+  real(kind=8),dimension(1:nion)::xend
   logical::if_write_result
   !-------------------------------------------------------------------------
   real(kind=8)::aexp, daexp, dt_cool, T2_com, nH_com
@@ -1113,6 +1119,7 @@ SUBROUTINE neq_evol_single_cell(r, tables, astart, aend, dasura, &
      if (if_write_result) write(*,'(4(1pe10.3))')aexp,nH(1),T2_com*mu/aexp**2,n_spec(1)/nH(1)
   end do
   T2end = T2(1)/(aexp-daexp)**2
+  xend(1:nion) = xion(1:nion,1)
   ne = (n_spec(3)+(n_spec(5)+2.*n_spec(6))*0.25*r%Y_He/r%X_H)
 
   end associate

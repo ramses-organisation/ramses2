@@ -29,7 +29,8 @@ module rtz_cooling_module
 
 CONTAINS
 
-SUBROUTINE rtz_set_model(r, tables, h, omegab, omega0, omegaL, astart_sim, T2_sim)
+SUBROUTINE rtz_set_model(r, tables, h, omegab, omega0, omegaL, astart_sim, T2_sim, &
+     & xHII_sim)
   ! Initialize cooling. All these parameters are unused at the moment and
   ! are only there for the original cooling-module.
   ! h (dble)            => H0/100
@@ -38,11 +39,13 @@ SUBROUTINE rtz_set_model(r, tables, h, omegab, omega0, omegaL, astart_sim, T2_si
   ! omegaL (dble)       => Omega Lambda
   ! astart_sim (dble)   => Redshift at which we start the simulation
   ! T2_sim (dble)      <=  Starting temperature in simulation?
+  ! xHII_sim (dble)    <=  Starting HII fraction in simulation
   !-------------------------------------------------------------------------
 !  use UV_module
   type(run_t) :: r
   type(neq_cooling_t) :: tables
   real(kind=8) :: h, omegab, omega0, omegaL, astart_sim, T2_sim
+  real(kind=8) :: xHII_sim
   real(kind=8) :: z_decoupling, z_start_sim
   real(kind=8) :: astart=0.0001, aend, dasura, T2end=T2_min_fix, mu=1., ne
   !-------------------------------------------------------------------------
@@ -59,6 +62,7 @@ SUBROUTINE rtz_set_model(r, tables, h, omegab, omega0, omegaL, astart_sim, T2_si
 
   call rtz_updateRTGroups_CoolConstants(r, tables)
 
+  xHII_sim=0d0
   if(r%nrestart==0 .and. r%cosmo) then
       ! Use approximate temperature evolution from
       ! https://arxiv.org/pdf/astro-ph/0608032
@@ -77,6 +81,14 @@ SUBROUTINE rtz_set_model(r, tables, h, omegab, omega0, omegaL, astart_sim, T2_si
       else
          T2_sim = 2.725 * (1.d0 + z_start_sim)
       end if
+
+      ! Residual ionization after recombination freeze-out
+      ! (Peebles 1993, p. 173; same as compute_J0min in cooling_module)
+      xHII_sim = 1.2d-5 * sqrt(omega0) / (h * omegab)
+
+      ! The fit gives T, convert to T/mu for neutral gas with residual HII
+      mu = 1.d0 / (r%X_H * (1.d0 + xHII_sim) + 0.25d0 * r%Y_He)
+      T2_sim = T2_sim / mu
   end if
 
 END SUBROUTINE rtz_set_model

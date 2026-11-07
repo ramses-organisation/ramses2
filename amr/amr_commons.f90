@@ -765,6 +765,8 @@ module amr_commons
      integer::nlevelmax_part
      real(kind=8)::aexp_ini=10.
      real(kind=8)::T2_start          ! Starting gas temperature
+     real(kind=8),dimension(1:nion)::xion_start=0d0 ! Starting ionization fractions
+     real(kind=8)::xHII_start=0d0    ! Starting HII fraction (RTZ)
      real(kind=8),dimension(1:MAXLEVEL)::dfact=1.0d0,astart
      real(kind=8),dimension(1:MAXLEVEL)::vfact=1.0d0
      real(kind=8),dimension(1:MAXLEVEL)::xoff1,xoff2,xoff3,dxini
