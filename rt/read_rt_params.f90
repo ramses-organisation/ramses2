@@ -242,6 +242,27 @@ subroutine m_read_rt_params(pst)
      call mdl_abort(s%mdl)
   endif
 
+#ifdef _CUDA
+  !--------------------------------------------------
+  ! Check the RT options supported on GPU
+  !--------------------------------------------------
+  ! The GPU does not advect photons
+  if(rt_advect)then
+     write(*,*)'Error: rt_advect=.true. is not supported on GPU'
+     call mdl_abort(s%mdl)
+  endif
+  ! The GPU has no stellar emission
+  if(s%r%star.and.rt_star)then
+     write(*,*)'Error: star=.true. with rt_star=.true. is not supported on GPU'
+     call mdl_abort(s%mdl)
+  endif
+  ! The GPU chemistry has no IR dust coupling and no radiation temperature
+  if(rt_isIR.or.rt_T_rad)then
+     write(*,*)'Error: rt_isIR and rt_T_rad are not supported on GPU'
+     call mdl_abort(s%mdl)
+  endif
+#endif
+
   !--------------------------------------------------
   ! Reduced light speed. First check if only one light speed fraction set
   ! and if so, set that same light speed fraction at all levels. If more

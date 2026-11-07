@@ -1,6 +1,9 @@
 module refine_device
   use amr_parameters, only: dp, ndim, twotondim, twondim, nhilbert
   use hydro_parameters, only: nvar, nener
+#ifdef DO_RT
+  use rt_parameters, only: nrtvar
+#endif
   use oct_commons, only: oct
   use gpu_utils
   use cudafor
@@ -123,6 +126,52 @@ attributes(device) subroutine compute_central_d(a, w)
   end do
 end subroutine compute_central_d
 
+! Positions xc of the 2**ndim child cell centers relative to the parent cell center.
+attributes(device) subroutine child_centers_d(xc)
+  implicit none
+  real(kind=dp) :: xc(1:8,1:3)
+  integer :: ind, ix, iy, iz
+
+  do ind = 1, twotondim
+     iz = (ind-1)/4
+     iy = (ind-1-4*iz)/2
+     ix = (ind-1-2*iy-4*iz)
+     if (ndim > 0) xc(ind,1) = (real(ix,kind=dp)-0.5_dp)
+     if (ndim > 1) xc(ind,2) = (real(iy,kind=dp)-0.5_dp)
+     if (ndim > 2) xc(ind,3) = (real(iz,kind=dp)-0.5_dp)
+  end do
+
+end subroutine child_centers_d
+
+! Interpolate one variable from its parent stencil a into the 2**ndim children u2,
+! with xc the child cell centers relative to the parent cell center.
+attributes(device) subroutine interpol_one_var_d(a, u2, xc, interpol_type)
+  implicit none
+  real(kind=dp) :: a(0:twondim)
+  real(kind=dp) :: u2(1:twotondim)
+  real(kind=dp) :: xc(1:8,1:3)
+  integer, value :: interpol_type
+  integer :: idim, ind
+  real(kind=dp) :: w(1:ndim)
+
+  ! Reset gradient
+  w(1:ndim) = 0.0_dp
+
+  ! Compute gradient with chosen limiter
+  if (interpol_type == 1) call compute_limiter_minmod_d(a, w)
+  if (interpol_type == 2) call compute_limiter_central_d(a, w)
+  if (interpol_type == 3) call compute_central_d(a, w)
+
+  ! Interpolate over children cells
+  do ind = 1, twotondim
+     u2(ind) = a(0)
+     do idim = 1, ndim
+        u2(ind) = u2(ind) + w(idim)*xc(ind,idim)
+     end do
+  end do
+
+end subroutine interpol_one_var_d
+
 ! Interpolate the parent stencil u1 (father cell and its 2*ndim neighbours)
 ! into the 2**ndim children u2, as interpol_hydro on the CPU.
 ! Written by Daniel Han (mini-ramses version October 2026).
@@ -135,21 +184,13 @@ attributes(device) subroutine interpol_hydro_d(u1, u2, interpol_var, interpol_ty
 #if NENER>0
   integer :: irad
 #endif
-  integer :: j, ivar, idim, ind, ix, iy, iz
+  integer :: j, ivar, idim, ind
   real(kind=dp) :: xc(1:8,1:3)
   real(kind=dp) :: a(0:twondim)
-  real(kind=dp) :: w(1:ndim)
   real(kind=dp) :: ekin, erad
 
   ! Set position of cell centers relative to grid center
-  do ind = 1, twotondim
-     iz = (ind-1)/4
-     iy = (ind-1-4*iz)/2
-     ix = (ind-1-2*iy-4*iz)
-     if (ndim > 0) xc(ind,1) = (real(ix,kind=dp)-0.5_dp)
-     if (ndim > 1) xc(ind,2) = (real(iy,kind=dp)-0.5_dp)
-     if (ndim > 2) xc(ind,3) = (real(iz,kind=dp)-0.5_dp)
-  end do
+  call child_centers_d(xc)
 
   ! If necessary, convert fathers total energy into internal energy
   if (interpol_var == 1) then
@@ -176,21 +217,8 @@ attributes(device) subroutine interpol_hydro_d(u1, u2, interpol_var, interpol_ty
         a(j) = u1(j,ivar)
      end do
 
-     ! Reset gradient
-     w(1:ndim) = 0.0_dp
-
-     ! Compute gradient with chosen limiter
-     if (interpol_type == 1) call compute_limiter_minmod_d(a, w)
-     if (interpol_type == 2) call compute_limiter_central_d(a, w)
-     if (interpol_type == 3) call compute_central_d(a, w)
-
      ! Interpolate over children cells
-     do ind = 1, twotondim
-        u2(ind,ivar) = a(0)
-        do idim = 1, ndim
-           u2(ind,ivar) = u2(ind,ivar) + w(idim)*xc(ind,idim)
-        end do
-     end do
+     call interpol_one_var_d(a, u2(:,ivar), xc, interpol_type)
 
   end do
   ! End loop over variables
@@ -571,7 +599,8 @@ end subroutine interpol_mhd_d
 ! Gather coarse parent stencil for prolongation (and face B for MHD).
 attributes(device) subroutine gather_twondim_parent_stencil( &
      & grid, uold, bold, hash_key, hash_val, hash_size, ckey_max, key_off, &
-     & box_ckey_min, box_ckey_max, periodic, ilev_child, chkey, central_idx, central_cell, u1 &
+     & box_ckey_min, box_ckey_max, periodic, ilev_child, chkey, central_idx, central_cell, u1, &
+     & igrid_nbor, ind_nbor &
 #ifdef MHD
      & , B1, B3, refined &
 #endif
@@ -592,6 +621,8 @@ attributes(device) subroutine gather_twondim_parent_stencil( &
   integer(kind=4), value :: central_idx, central_cell
   integer(kind=4) :: chkey(1:ndim)
   real(kind=dp) :: u1(0:twondim,1:nvar)
+  ! Parent oct (0 if missing) and parent cell of each stencil cell
+  integer :: igrid_nbor(0:twondim), ind_nbor(0:twondim)
 #ifdef MHD
   real(kind=dp) :: B1(0:twondim,1:6)
   real(kind=dp) :: B3(1:twondim,1:twotondim,1:6)
@@ -612,6 +643,8 @@ attributes(device) subroutine gather_twondim_parent_stencil( &
   ! miss and read element 0 (uninitialised) on a coarse-fine ghost edge.
   pcell = central_cell
   pidx  = central_idx
+  igrid_nbor(0) = pidx
+  ind_nbor(0) = pcell
   do ivar = 1, nvar
      u1(0,ivar) = uold(pcell,ivar,pidx)
   end do
@@ -653,6 +686,8 @@ attributes(device) subroutine gather_twondim_parent_stencil( &
      nx = int(ckey_max(ilev_par),kind=8); offset = key_off(ilev_par)
      key = offset + ix + iy*nx + iz*nx*nx
      pidx = hash_get(hash_key, hash_val, hash_size, key)
+     igrid_nbor(inbor) = pidx
+     ind_nbor(inbor) = pcell
      if (pidx > 0) then
         do ivar = 1, nvar
            u1(inbor,ivar) = uold(pcell,ivar,pidx)
@@ -715,6 +750,7 @@ attributes(global) subroutine nimhd_ghost_b_kernel(grid, uold, b, father, hash_k
   real(kind=dp) :: u1(0:twondim,1:nvar), B1(0:twondim,1:6), B2(1:twotondim,1:6)
   real(kind=dp) :: B3(1:twondim,1:twotondim,1:6)
   logical :: refined(1:twondim)
+  integer :: igrid_nbor(0:twondim), ind_nbor(0:twondim)
 
   cache_idx = threadIdx%x - 1 + (blockIdx%x - 1) * blockDim%x
   if (cache_idx >= num_octs) return
@@ -723,7 +759,7 @@ attributes(global) subroutine nimhd_ghost_b_kernel(grid, uold, b, father, hash_k
   cell_idx = 1 + (ckey(1) - 2*(ckey(1)/2)) + 2*(ckey(2) - 2*(ckey(2)/2)) + 4*(ckey(3) - 2*(ckey(3)/2))
   call gather_twondim_parent_stencil(grid, uold, b, hash_key, hash_val, hash_size, &
        & ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, grid(cache_idx)%lev, ckey, &
-       & father(cache_idx), cell_idx, u1, B1, B3, refined)
+       & father(cache_idx), cell_idx, u1, igrid_nbor, ind_nbor, B1, B3, refined)
   call interpol_mag_d(B1, B2, B3, refined, interpol_type)
   do ib = 1, 6
      do ind = 1, twotondim
@@ -736,6 +772,9 @@ end subroutine nimhd_ghost_b_kernel
   ! =========================================================================
   attributes(device) subroutine make_new_oct(grid, flag1, uold, bold, f, phi, phi_old, ifree, ngridmax, oct_idx, cell_idx, &
        & hash_key, hash_val, hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
+#ifdef DO_RT
+       & rtuold, rt_c, &
+#endif
        & interpol_var, interpol_type, smallr)
     use amr_parameters, only: ndim
     type(oct), device :: grid(*)
@@ -756,6 +795,10 @@ end subroutine nimhd_ghost_b_kernel
     integer(kind=4), device :: box_ckey_min(1:ndim,*)
     integer(kind=4), device :: box_ckey_max(1:ndim,*)
     logical, device :: periodic(1:3)
+#ifdef DO_RT
+    real(kind=dp), device :: rtuold(1:twotondim,1:nrtvar,*)
+    real(kind=dp), device :: rt_c(*)
+#endif
     integer(kind=4), value :: interpol_var, interpol_type
     real(kind=dp), value :: smallr
 
@@ -768,6 +811,11 @@ end subroutine nimhd_ghost_b_kernel
     real(kind=dp) :: b2(1:twotondim,1:6)
     real(kind=dp) :: b3(1:twondim,1:twotondim,1:6)
     logical :: refined(1:twondim)
+#endif
+    integer :: igrid_nbor(0:twondim), ind_nbor(0:twondim)
+#ifdef DO_RT
+    integer :: inbor
+    real(kind=dp) :: rtu1(0:twondim), rtu2(1:twotondim), xc(1:8,1:3)
 #endif
     integer(kind=4), dimension(1:ndim) :: ckey
     integer(kind=8) :: hkey
@@ -807,7 +855,8 @@ end subroutine nimhd_ghost_b_kernel
     ! hydro + face-B together (Balsara 2001), and scatter all nvar + 6 child
 
     call gather_twondim_parent_stencil(grid, uold, bold, hash_key, hash_val, hash_size, &
-         & ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, ilevel, ckey, oct_idx, cell_idx, u1, b1, b3, refined)
+         & ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, ilevel, ckey, oct_idx, cell_idx, u1, &
+         & igrid_nbor, ind_nbor, b1, b3, refined)
     call interpol_mhd_d(u1, u2, b1, b2, b3, refined, interpol_var, interpol_type, smallr)
     do ivar = 1, nvar
        do ind = 1, twotondim
@@ -826,14 +875,43 @@ end subroutine nimhd_ghost_b_kernel
        do ivar = 1, nvar
           u1(0:twondim,ivar) = uold(cell_idx,ivar,oct_idx)
        end do
+       igrid_nbor(:) = oct_idx
+       ind_nbor(:) = cell_idx
     else
        call gather_twondim_parent_stencil(grid, uold, bold, hash_key, hash_val, hash_size, &
-            & ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, ilevel, ckey, oct_idx, cell_idx, u1)
+            & ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, ilevel, ckey, oct_idx, cell_idx, u1, &
+            & igrid_nbor, ind_nbor)
     end if
     call interpol_hydro_d(u1, u2, interpol_var, interpol_type, smallr)
     do ivar = 1, nvar
        do ind = 1, twotondim
           uold(ind,ivar,child_idx) = u2(ind,ivar)
+       end do
+    end do
+#endif
+#endif
+
+#ifdef HYDRO
+#ifdef DO_RT
+    ! Set position of cell centers relative to grid center
+    call child_centers_d(xc)
+
+    ! RT prolongation, one variable at a time, from the parent cells of the hydro stencil
+    do ivar = 1, nrtvar
+       do inbor = 0, twondim
+          if (igrid_nbor(inbor) > 0) then
+             rtu1(inbor) = rtuold(ind_nbor(inbor),ivar,igrid_nbor(inbor))
+          else
+             rtu1(inbor) = rtu1(0)
+          end if
+       end do
+       call interpol_one_var_d(rtu1, rtu2, xc, interpol_type)
+       do ind = 1, twotondim
+          rtuold(ind,ivar,child_idx) = rtu2(ind)
+          ! Rescale according to speed of light difference
+          if (mod(ivar,ndim+1) == 1) then
+             rtuold(ind,ivar,child_idx) = (rtuold(ind,ivar,child_idx) * rt_c(ilevel-1)) / rt_c(ilevel)
+          end if
        end do
     end do
 #endif
@@ -856,6 +934,9 @@ end subroutine nimhd_ghost_b_kernel
   ! =========================================================================
   attributes(global) subroutine refine_kernel(grid, flag1, uold, bold, f, phi, phi_old, ifree, ngridmax, head_idx, num_octs, &
        & hash_key, hash_val, hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
+#ifdef DO_RT
+       & rtuold, rt_c, &
+#endif
        & interpol_var, interpol_type, smallr)
     type(oct), device :: grid(*)
     integer, device :: flag1(1:twotondim,*)
@@ -877,6 +958,10 @@ end subroutine nimhd_ghost_b_kernel
     integer(kind=4), device :: box_ckey_min(1:ndim,*)
     integer(kind=4), device :: box_ckey_max(1:ndim,*)
     logical, device :: periodic(1:3)
+#ifdef DO_RT
+    real(kind=dp), device :: rtuold(1:twotondim,1:nrtvar,*)
+    real(kind=dp), device :: rt_c(*)
+#endif
     integer(kind=4), intent(in), value :: interpol_var, interpol_type
     real(kind=dp), intent(in), value :: smallr
 
@@ -901,6 +986,9 @@ end subroutine nimhd_ghost_b_kernel
     if (flagged .and. .not. refined) then
        call make_new_oct(grid, flag1, uold, bold, f, phi, phi_old, ifree, ngridmax, oct_idx, cell_idx, &
             & hash_key, hash_val, hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
+#ifdef DO_RT
+            & rtuold, rt_c, &
+#endif
             & interpol_var, interpol_type, smallr)
        grid(oct_idx)%refined(cell_idx) = .true.
     endif
@@ -1762,6 +1850,68 @@ end subroutine nimhd_ghost_b_kernel
   end subroutine sort_scatter_hydro_impl
   ! =========================================================================
 
+#ifdef DO_RT
+  ! =========================================================================
+  ! Gather RT variables ivar0+1..ivar0+nv into the scratch unew in sorted order.
+  attributes(global) subroutine sort_gather_rt(unew, rtuold, ivar0, nv, swap_global, head_idx, num_octs)
+    real(kind=dp), device :: unew(1:twotondim,1:nvar,*)
+    real(kind=dp), device :: rtuold(1:twotondim,1:nrtvar,*)
+    integer(kind=4), intent(in), value :: ivar0, nv
+    integer(kind=4), device :: swap_global(*)
+    integer(kind=4), intent(in), value :: head_idx
+    integer(kind=4), intent(in), value :: num_octs
+
+    integer :: oct_idx, cell_idx, block_idx, old_oct_idx, ivar
+
+    ! Compute block idx
+    block_idx = blockIdx%x - 1
+
+    ! Compute oct idx
+    oct_idx = block_idx * blockDim%y + threadIdx%y - 1
+    if (oct_idx >= num_octs) return
+    oct_idx = head_idx + oct_idx
+
+    ! Compute cell idx
+    cell_idx = threadIdx%x
+
+    old_oct_idx = swap_global(oct_idx)
+    do ivar = 1, nv
+       unew(cell_idx, ivar, oct_idx) = rtuold(cell_idx, ivar0+ivar, old_oct_idx)
+    end do
+
+  end subroutine sort_gather_rt
+  ! =========================================================================
+
+  ! =========================================================================
+  ! Copy the sorted RT variables ivar0+1..ivar0+nv back from unew.
+  attributes(global) subroutine sort_scatter_rt(rtuold, unew, ivar0, nv, head_idx, num_octs)
+    real(kind=dp), device :: rtuold(1:twotondim,1:nrtvar,*)
+    real(kind=dp), device :: unew(1:twotondim,1:nvar,*)
+    integer(kind=4), intent(in), value :: ivar0, nv
+    integer(kind=4), intent(in), value :: head_idx
+    integer(kind=4), intent(in), value :: num_octs
+
+    integer :: oct_idx, cell_idx, block_idx, ivar
+
+    ! Compute block idx
+    block_idx = blockIdx%x - 1
+
+    ! Compute oct idx
+    oct_idx = block_idx * blockDim%y + threadIdx%y - 1
+    if (oct_idx >= num_octs) return
+    oct_idx = head_idx + oct_idx
+
+    ! Compute cell idx
+    cell_idx = threadIdx%x
+
+    do ivar = 1, nv
+       rtuold(cell_idx, ivar0+ivar, oct_idx) = unew(cell_idx, ivar, oct_idx)
+    end do
+
+  end subroutine sort_scatter_rt
+  ! =========================================================================
+#endif
+
   ! =========================================================================
   attributes(global) subroutine sort_gather_force(nref, f, idim, swap_global, head_idx, num_octs)
     real(kind=dp), device :: nref(1:twotondim,*)
@@ -2336,6 +2486,7 @@ end subroutine nimhd_ghost_b_kernel
     real(kind=dp) :: b3(1:twondim,1:twotondim,1:6)
     logical :: refined(1:twondim)
 #endif
+    integer :: igrid_nbor(0:twondim), ind_nbor(0:twondim)
 
     ! Compute thread and block idx
     thread_idx = threadIdx%x - 1
@@ -2420,7 +2571,8 @@ end subroutine nimhd_ghost_b_kernel
     ! cache (ghost) octs.  ilevel is now the parent level, so the cache oct's own
     ! (child) level is ilevel+1 and its Cartesian key is ckey.
     call gather_twondim_parent_stencil(grid, uold, bold, hash_key, hash_val, hash_size, &
-         & ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, ilevel+1, ckey, parent_idx, cell_idx, u1, b1, b3, refined)
+         & ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, ilevel+1, ckey, parent_idx, cell_idx, u1, &
+         & igrid_nbor, ind_nbor, b1, b3, refined)
     call interpol_mhd_d(u1, u2, b1, b2, b3, refined, interpol_var, interpol_type, smallr)
     do ivar = 1, nvar
        do ind = 1, twotondim
@@ -2441,7 +2593,8 @@ end subroutine nimhd_ghost_b_kernel
        end do
     else
        call gather_twondim_parent_stencil(grid, uold, bold, hash_key, hash_val, hash_size, &
-            & ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, ilevel+1, ckey, parent_idx, cell_idx, u1)
+            & ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, ilevel+1, ckey, parent_idx, cell_idx, u1, &
+            & igrid_nbor, ind_nbor)
     end if
     call interpol_hydro_d(u1, u2, interpol_var, interpol_type, smallr)
     do ivar = 1, nvar
@@ -2500,6 +2653,7 @@ end subroutine nimhd_ghost_b_kernel
     real(kind=dp) :: b3(1:twondim,1:twotondim,1:6)
     logical :: refined(1:twondim)
 #endif
+    integer :: igrid_nbor(0:twondim), ind_nbor(0:twondim)
 
     ! Compute cache oct idx
     cache_idx = threadIdx%x - 1 + (blockIdx%x - 1) * blockDim%x
@@ -2518,7 +2672,7 @@ end subroutine nimhd_ghost_b_kernel
     ! divB-preserving MHD prolongation
     call gather_twondim_parent_stencil(grid, uold, bold, hash_key, hash_val, hash_size, &
          & ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, grid(cache_idx)%lev, ckey, &
-         & parent_idx, cell_idx, u1, b1, b3, refined)
+         & parent_idx, cell_idx, u1, igrid_nbor, ind_nbor, b1, b3, refined)
     call interpol_mhd_d(u1, u2, b1, b2, b3, refined, interpol_var, interpol_type, smallr)
     do ivar = 1, nvar
        do ind = 1, twotondim
@@ -2540,7 +2694,7 @@ end subroutine nimhd_ghost_b_kernel
     else
        call gather_twondim_parent_stencil(grid, uold, bold, hash_key, hash_val, hash_size, &
             & ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, grid(cache_idx)%lev, ckey, &
-            & parent_idx, cell_idx, u1)
+            & parent_idx, cell_idx, u1, igrid_nbor, ind_nbor)
     end if
     call interpol_hydro_d(u1, u2, interpol_var, interpol_type, smallr)
     do ivar = 1, nvar

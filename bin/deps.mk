@@ -187,7 +187,7 @@ adaptive_loop.o: gpu_manager.o
 amr_step.o: gpu_manager.o
 clump_finder.o: gpu_clump.o gpu_manager.o
 clump_merger.o: gpu_clump.o
-cooling_fine.o: gpu_cooling.o gpu_runner.o
+cooling_fine.o: gpu_cooling.o gpu_neq_cooling.o gpu_runner.o
 core_evolution.o: gpu_core.o
 core_formation.o: gpu_phew.o
 core_merger.o: gpu_core_merger.o
@@ -207,15 +207,16 @@ gpu_feedback.o: amr_parameters.o gpu_utils.o hydro_parameters.o oct_commons.o
 gpu_flag.o: amr_parameters.o gpu_feedback.o gpu_utils.o hydro_parameters.o oct_commons.o
 gpu_hilbert.o: amr_parameters.o hilbert.o
 gpu_hydro.o: amr_parameters.o gpu_utils.o hydro_parameters.o oct_commons.o
-gpu_manager.o: amr_parameters.o gpu_refine.o gpu_runner.o gpu_utils.o hydro_parameters.o mdl.o mdl_commons.o ramses_commons.o turb_commons.o
+gpu_manager.o: amr_parameters.o gpu_refine.o gpu_runner.o gpu_utils.o hydro_parameters.o mdl.o mdl_commons.o ramses_commons.o rt_parameters.o turb_commons.o
 gpu_mg.o: amr_parameters.o gpu_utils.o hydro_parameters.o oct_commons.o
 gpu_mpi.o: amr_parameters.o cache.o cache_commons.o gpu_hydro.o gpu_utils.o hash.o hydro_commons.o hydro_parameters.o marshal.o mdl.o nbors_utils.o oct_commons.o ramses_commons.o
 gpu_nbor.o: amr_parameters.o gpu_utils.o oct_commons.o
+gpu_neq_cooling.o: amr_commons.o amr_parameters.o constants.o coolrates_module.o gpu_runner.o gpu_utils.o hydro_parameters.o oct_commons.o ramses_commons.o rt_parameters.o
 gpu_part.o: amr_parameters.o cub_module_radix_sort_f.o gpu_refine.o gpu_runner.o gpu_sink.o gpu_utils.o oct_commons.o ramses_commons.o
 gpu_phew.o: amr_parameters.o constants.o cub_module_radix_sort_f.o gpu_clump.o gpu_part.o gpu_runner.o gpu_utils.o hydro_parameters.o oct_commons.o ramses_commons.o
-gpu_refine.o: amr_parameters.o gpu_utils.o hydro_parameters.o oct_commons.o
+gpu_refine.o: amr_parameters.o gpu_utils.o hydro_parameters.o oct_commons.o rt_parameters.o
 gpu_rho.o: amr_parameters.o gpu_utils.o hydro_parameters.o oct_commons.o
-gpu_runner.o: amr_parameters.o cache.o cache_commons.o constants.o cub_inclusive_scan_f.o cub_module_radix_sort_f.o gpu_cooling.o gpu_feedback.o gpu_flag.o gpu_hydro.o gpu_mg.o gpu_refine.o gpu_rho.o gpu_star.o gpu_turb.o gpu_utils.o hydro_parameters.o oct_commons.o ramses_commons.o turb_commons.o
+gpu_runner.o: amr_parameters.o cache.o cache_commons.o constants.o cub_inclusive_scan_f.o cub_module_radix_sort_f.o gpu_cooling.o gpu_feedback.o gpu_flag.o gpu_hydro.o gpu_mg.o gpu_refine.o gpu_rho.o gpu_star.o gpu_turb.o gpu_utils.o hydro_parameters.o oct_commons.o ramses_commons.o rt_parameters.o turb_commons.o
 gpu_scan.o: amr_parameters.o
 gpu_sink.o: amr_parameters.o constants.o gpu_feedback.o gpu_runner.o gpu_utils.o hydro_parameters.o oct_commons.o ramses_commons.o
 gpu_star.o: amr_parameters.o gpu_utils.o hydro_parameters.o oct_commons.o
@@ -233,6 +234,7 @@ output_clump.o: gpu_clump.o
 phi_fine_cg.o: gpu_runner.o
 refine_utils.o: gpu_runner.o
 rho_fine.o: gpu_part.o gpu_runner.o
+rt_init_flow_fine.o: gpu_neq_cooling.o
 sink_evolution.o: gpu_sink.o
 sink_formation.o: gpu_clump.o
 sink_mechanical.o: gpu_sink.o

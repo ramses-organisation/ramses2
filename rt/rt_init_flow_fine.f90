@@ -65,6 +65,9 @@ recursive subroutine r_rt_neq_updates(pst, nstep_coarse, input_size)
   use rtz_cooling_module, only: rtz_updateRTGroups_CoolConstants
 #else
   use neq_cooling_module, only: updateRTGroups_CoolConstants, update_metal_cooling
+#ifdef _CUDA
+  use neq_cooling_device, only: gpu_upload_neq_tables
+#endif
 #endif
   use ramses_commons, only: pst_t
   use output_rt_module, only: output_photon_emission_stats
@@ -115,6 +118,13 @@ recursive subroutine r_rt_neq_updates(pst, nstep_coarse, input_size)
 
      if(r%rt_advect .and. r%rt_emission_stats .and. r%rt_star) &
         call output_photon_emission_stats(r,g)
+
+#ifdef _CUDA
+#ifndef DO_RTZ
+     ! Copy the updated tables to the GPU chemistry
+     if(r%neq_chem) call gpu_upload_neq_tables(s)
+#endif
+#endif
 
   endif
 
