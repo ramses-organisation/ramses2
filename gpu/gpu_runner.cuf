@@ -1,5 +1,8 @@
 module gpu_runner
   use amr_parameters, only: ndim, twotondim, threetondim, dp, i8b
+#ifdef DO_RT
+  use amr_parameters, only: MAXLEVEL
+#endif
   use hydro_parameters, only: nvar
   use oct_commons, only: oct
   use gpu_utils
@@ -33,6 +36,12 @@ module gpu_runner
   !> Scratch arrays for the split non-ideal MHD substeps
   real(kind=dp), device, allocatable, dimension(:,:,:) :: b_roll2, b_my0, b_y0, b_cf, eta_nimhd
   real(kind=dp), device, allocatable, dimension(:,:) :: e_acc, e_acc0
+
+#ifdef DO_RT
+  !> Arrays to hold the RT photon variables on the device
+  real(kind=dp), device, allocatable, dimension(:,:,:) :: rtuold
+  real(kind=dp), device, dimension(1:MAXLEVEL) :: d_rt_c ! Reduced light speed of each level
+#endif
 
   !> Arrays to hold Turbulent acceleration fields and spectra on the device,
   !> the last ones in slot iturb_last and the next ones in slot 3-iturb_last
@@ -1806,6 +1815,9 @@ contains
     use cub_inclusive_scan_mod
     use cub_module, only: radix_sort
     use iso_fortran_env
+#ifdef DO_RT
+    use rt_parameters, only: nrtvar
+#endif
     implicit none
     type(ramses_t), intent(inout) :: sim
     integer, intent(in) :: ilevel
@@ -1827,6 +1839,9 @@ contains
     integer(kind=8), pointer, device, dimension(:) :: hkeys_in, hkeys_out
     integer(kind=8) :: noct_max, hkey_size
     integer(kind=4) :: nrnd, nthr, nblk
+#ifdef DO_RT
+    integer(kind=4) :: iv, nv
+#endif
 
     character(len=64) :: descr
 
@@ -1860,10 +1875,17 @@ contains
     threadsY_per_block = 16
     num_blocks = (num_octs + threadsY_per_block - 1) / threadsY_per_block
     if (num_octs > 0) then
+#ifdef DO_RT
+       ! Reduced light speed of each level, for the photon densities of new octs
+       d_rt_c = sim%g%rt_c
+#endif
        call refine_kernel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(grid, flag1, &
             & uold, bold, f, phi, phi_old, &
             & ifree_d, sim%m%ngridmax, head_idx, num_octs, &
             & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
+#ifdef DO_RT
+            & rtuold, d_rt_c, &
+#endif
             & interpol_var, interpol_type, smallr_d)
     endif
 
@@ -2060,7 +2082,7 @@ contains
     threadsY_per_block = 16
     num_blocks_2 = (num_octs + threadsY_per_block - 1) / threadsY_per_block
 
-    ! Out-of-place sort of grid, flag1, uold and grav variables using swap table
+    ! Out-of-place sort of grid, flag1, uold, rtuold and grav variables using swap table
     if (num_octs > 0) then
        call nvtxStartRange("scatter_gather", color=2)!yellow
 #if defined(FUSE_SCATTER_GATHER)
@@ -2077,6 +2099,16 @@ contains
        info = cudaMemcpy(uold(1,1,head_idx), unew(1,1,head_idx), twotondim*nvar*int(num_octs,8))
 #ifdef MHD
        info = cudaMemcpy(bold(1,1,head_idx), bnew(1,1,head_idx), twotondim*6*int(num_octs,8))
+#endif
+#ifdef DO_RT
+       ! Sort rtuold through unew, nvar variables at a time
+       do iv = 0, nrtvar-1, nvar
+          nv = min(nvar, nrtvar-iv)
+          call sort_gather_rt<<<num_blocks_2, dim3(threadsX_per_block,threadsY_per_block,1)>>>(unew, rtuold, &
+               & iv, nv, swap_global, head_idx, num_octs)
+          call sort_scatter_rt<<<num_blocks_2, dim3(threadsX_per_block,threadsY_per_block,1)>>>(rtuold, unew, &
+               & iv, nv, head_idx, num_octs)
+       end do
 #endif
 #endif
 #ifdef GRAV

@@ -37,6 +37,9 @@ recursive subroutine r_set_grid_device(pst)
      bold = pst%s%m%bold
 #endif
 #endif
+#ifdef DO_RT
+     rtuold = pst%s%m%rtuold
+#endif
 #ifdef GRAV
      f = pst%s%m%f
      phi = pst%s%m%phi
@@ -184,6 +187,9 @@ recursive subroutine r_transfer_grid_host(pst)
 #ifdef MHD
      pst%s%m%bold = bold
 #endif
+#endif
+#ifdef DO_RT
+     pst%s%m%rtuold = rtuold
 #endif
 #ifdef GRAV
      pst%s%m%f = f
@@ -511,6 +517,9 @@ subroutine gpu_allocate_amr(sim)
 #ifdef HYDRO
   use hydro_parameters, ONLY: nvar
 #endif
+#ifdef DO_RT
+  use rt_parameters, ONLY: nrtvar
+#endif
 #ifdef TURB
   use turb_commons, ONLY: TURB_GS
 #endif
@@ -578,6 +587,9 @@ subroutine gpu_allocate_amr(sim)
         error stop
      endif
   endif
+#endif
+#ifdef DO_RT
+  allocate(rtuold(1:twotondim,1:nrtvar,1:sim%m%ngridmax+sim%m%ncachemax))
 #endif
 #ifdef TURB
   allocate(afield_d    (1:ndim,0:TURB_GS-1,0:TURB_GS-1,0:TURB_GS-1,1:2))
