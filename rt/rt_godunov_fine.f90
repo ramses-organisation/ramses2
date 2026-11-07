@@ -282,7 +282,7 @@ subroutine rt_godfine1(s,ind_grid,ilevel,h)
   integer(kind=8),dimension(0:ndim)::hash_nbor
   integer,dimension(0:twondim)::icell_nbor
   integer,dimension(0:twondim)::igrid_nbor
-  real(kind=8)::dx,oneontwotondim,rt_c_diff
+  real(kind=8)::dx,oneontwotondim,rt_c_diff,face_flux
   real(kind=8),dimension(0:twondim  ,1:nrtvar)::u1
   real(kind=8),dimension(1:twotondim,1:nrtvar)::u2
   logical::okx,oky,okz,oknbor
@@ -690,34 +690,37 @@ subroutine rt_godfine1(s,ind_grid,ilevel,h)
                  ! Get parent cell index
                  igrid=h%gridloc(i1,j1,k1)
                  icell=h%cellloc(i1,j1,k1)
-                 ! Loop over inner cell left faces
-                 do k2=k2min,k2max-k0
-                    do j2=j2min,j2max-j0
-                       do i2=i2min,i2max-i0
-                          i3=1; j3=1; k3=1
-                          i3=1+2*(i1+i0-1)+i2
+                 ! Sum the fluxes of the inner cell left faces, then update once
+                 do ivar=1,nrtvar
+                    ! For VSLA, when updating coarser level, rescale radiation flux
+                    ! to the expression which would be seen from there.
+                    rt_c_diff = g%rt_c(ilevel-1)/g%rt_c(ilevel)
+                    if (mod(ivar,ndim+1)==1) then
+                       rt_c_diff=1.d0
+                    end if
+                    face_flux=0.0d0
+                    do k2=k2min,k2max-k0
+                       do j2=j2min,j2max-j0
+                          do i2=i2min,i2max-i0
+                             i3=1; j3=1; k3=1
+                             i3=1+2*(i1+i0-1)+i2
 #if NDIM>1
-                          j3=1+2*(j1+j0-1)+j2
+                             j3=1+2*(j1+j0-1)+j2
 #endif
 #if NDIM>2
-                          k3=1+2*(k1+k0-1)+k2
+                             k3=1+2*(k1+k0-1)+k2
 #endif
-                          ! Conservative update of new state variables
-                          do ivar=1,nrtvar
-                             ! For VSLA, when updating coarser level, rescale radiation flux
-                             ! to the expression which would be seen from there.
-                             rt_c_diff = g%rt_c(ilevel-1)/g%rt_c(ilevel)
-                             if (mod(ivar,ndim+1)==1) then
-                                rt_c_diff=1.d0
-                             end if
 #ifdef DO_RT
-                             m%rtunew(icell,ivar,igrid)=m%rtunew(icell,ivar,igrid) &
-                                  & -h%rtflux(i3,j3,k3,ivar,idim)              &
-                                  & * oneontwotondim * rt_c_diff
+                             face_flux=face_flux+h%rtflux(i3,j3,k3,ivar,idim)
 #endif
                           end do
                        end do
                     end do
+                    ! Conservative update of new state variables
+#ifdef DO_RT
+                    m%rtunew(icell,ivar,igrid)=m%rtunew(icell,ivar,igrid) &
+                         & -face_flux * oneontwotondim * rt_c_diff
+#endif
                  end do
               endif
            end do
@@ -746,33 +749,36 @@ subroutine rt_godfine1(s,ind_grid,ilevel,h)
                  ! Get parent cell index
                  igrid=h%gridloc(i1,j1,k1)
                  icell=h%cellloc(i1,j1,k1)
-                 ! Loop over inner cell right faces
-                 do k2=k2min+k0,k2max
-                    do j2=j2min+j0,j2max
-                       do i2=i2min+i0,i2max
-                          i3=1; j3=1; k3=1
-                          i3=1+2*(i1-i0-1)+i2
+                 ! Sum the fluxes of the inner cell right faces, then update once
+                 do ivar=1,nrtvar
+                    ! Rescale for VSLA, as above
+                    rt_c_diff = g%rt_c(ilevel-1)/g%rt_c(ilevel)
+                    if (mod(ivar,ndim+1)==1) then
+                       rt_c_diff=1.d0
+                    end if
+                    face_flux=0.0d0
+                    do k2=k2min+k0,k2max
+                       do j2=j2min+j0,j2max
+                          do i2=i2min+i0,i2max
+                             i3=1; j3=1; k3=1
+                             i3=1+2*(i1-i0-1)+i2
 #if NDIM>1
-                          j3=1+2*(j1-j0-1)+j2
+                             j3=1+2*(j1-j0-1)+j2
 #endif
 #if NDIM>2
-                          k3=1+2*(k1-k0-1)+k2
+                             k3=1+2*(k1-k0-1)+k2
 #endif
-                          ! Conservative update of new state variables
-                          do ivar=1,nrtvar
-                             ! Rescale for VSLA, as above
-                             rt_c_diff = g%rt_c(ilevel-1)/g%rt_c(ilevel)
-                             if (mod(ivar,ndim+1)==1) then
-                                rt_c_diff=1.d0
-                             end if
 #ifdef DO_RT
-                             m%rtunew(icell,ivar,igrid)=m%rtunew(icell,ivar,igrid) &
-                                  & +h%rtflux(i3+i0,j3+j0,k3+k0,ivar,idim)     &
-                                  & *oneontwotondim * rt_c_diff
+                             face_flux=face_flux+h%rtflux(i3+i0,j3+j0,k3+k0,ivar,idim)
 #endif
                           end do
                        end do
                     end do
+                    ! Conservative update of new state variables
+#ifdef DO_RT
+                    m%rtunew(icell,ivar,igrid)=m%rtunew(icell,ivar,igrid) &
+                         & +face_flux * oneontwotondim * rt_c_diff
+#endif
                  end do
                  ! End loop over faces
               endif
