@@ -4532,7 +4532,7 @@ contains
     real(kind=dp), value :: floor_d, floor_p
     logical :: ok
 
-    real(kind=8) :: err_lft, err_rgt, error
+    real(kind=dp) :: err_lft, err_rgt, error
 
     ok = .false.
 
@@ -4553,6 +4553,83 @@ contains
   end subroutine hydro_crit
   ! =========================================================================
 
+  ! =========================================================================
+  !> Velocity gradient criterion of hydro_refine on the states of the side cells
+  !> and the velocity um and sound speed cm of the middle cell
+  attributes(device) subroutine velocity_crit(cons_lft, cons_rgt, prim_lft, prim_rgt, um, cm, ok, &
+       & gamma, induction, err_grad_u, floor_u)
+    type(conserved_t) :: cons_lft, cons_rgt
+    type(primitive_t) :: prim_lft, prim_rgt
+    real(kind=dp) :: um(1:3)
+    real(kind=dp), value :: cm
+    logical :: ok
+    real(kind=dp), value :: gamma, err_grad_u, floor_u
+    logical, value :: induction
+
+    real(kind=dp) :: vg, vm, vd, cg, cd, error, inv_g, inv_d
+    integer :: idim
+
+    ok = .false.
+
+    ! Reciprocal densities of the side cells, as in conserved_2_primitive
+    inv_g = 1.0_dp / prim_lft%density
+    inv_d = 1.0_dp / prim_rgt%density
+
+    ! Sound speeds of the side cells, zero with induction
+    cg = 0.0_dp; cd = 0.0_dp
+    if (.not. induction) then
+       cg = sqrt(max(gamma*prim_lft%pressure/prim_lft%density, floor_u**2))
+       cd = sqrt(max(gamma*prim_rgt%pressure/prim_rgt%density, floor_u**2))
+    endif
+
+    ! Each velocity component
+    do idim = 1, 3
+       if (idim == 1) then
+          vg = cons_lft%momentum_x*inv_g; vm = um(1); vd = cons_rgt%momentum_x*inv_d
+       else if (idim == 2) then
+          vg = cons_lft%momentum_y*inv_g; vm = um(2); vd = cons_rgt%momentum_y*inv_d
+       else
+          vg = cons_lft%momentum_z*inv_g; vm = um(3); vd = cons_rgt%momentum_z*inv_d
+       endif
+       error = 2.0_dp*max( &
+            & abs((vd-vm)/(cd+cm+abs(vd)+abs(vm)+floor_u)), &
+            & abs((vm-vg)/(cm+cg+abs(vm)+abs(vg)+floor_u)) )
+       if (error > err_grad_u) ok = .true.
+    end do
+
+  end subroutine velocity_crit
+  ! =========================================================================
+
+  ! =========================================================================
+  !> xHII and xHI gradient criteria of hydro_refine on the ion fraction of three cells
+  attributes(device) subroutine xion_crit(x_lft, x_mid, x_rgt, ok, &
+       & err_grad_xHII, floor_xHII, err_grad_xHI, floor_xHI)
+    real(kind=dp), value :: x_lft, x_mid, x_rgt
+    logical :: ok
+    real(kind=dp), value :: err_grad_xHII, floor_xHII
+    real(kind=dp), value :: err_grad_xHI, floor_xHI
+
+    real(kind=dp) :: error
+
+    ok = .false.
+
+    if (err_grad_xHII >= 0.0_dp) then
+       error = 2.0_dp*max( &
+            & abs((x_rgt-x_mid)/(x_rgt+x_mid+floor_xHII)), &
+            & abs((x_mid-x_lft)/(x_mid+x_lft+floor_xHII)) )
+       if (error > err_grad_xHII) ok = .true.
+    endif
+
+    if (err_grad_xHI >= 0.0_dp) then
+       error = 2.0_dp*max( &
+            & abs((x_mid-x_rgt)/(2.0_dp-x_rgt-x_mid+floor_xHI)), &
+            & abs((x_lft-x_mid)/(2.0_dp-x_mid-x_lft+floor_xHI)) )
+       if (error > err_grad_xHI) ok = .true.
+    endif
+
+  end subroutine xion_crit
+  ! =========================================================================
+
 #ifdef MHD
   attributes(device) subroutine hydro_crit_mhd(bc_lft, bc_mid, bc_rgt, ok, &
        & err_grad_b2, floor_b2, err_grad_A, floor_A, err_grad_B, floor_B, err_grad_C, floor_C)
@@ -4563,8 +4640,8 @@ contains
     real(kind=dp), value :: err_grad_C, floor_C
     logical :: ok
 
-    real(kind=8) :: emagg, emagm, emagd
-    real(kind=8) :: pg, pm, pd, vg, vm, vd, cg, cm, cd, error
+    real(kind=dp) :: emagg, emagm, emagd
+    real(kind=dp) :: pg, pm, pd, vg, vm, vd, cg, cm, cd, error
     integer :: idim
 
     ok = .false.
@@ -4622,7 +4699,8 @@ contains
 #ifdef MHD
        & err_grad_b2, floor_b2, err_grad_A, floor_A, err_grad_B, floor_B, err_grad_C, floor_C, &
 #endif
-       & gamma, smallr, smallc2, err_grad_d, err_grad_p, floor_d, floor_p)
+       & gamma, smallr, smallc2, err_grad_d, err_grad_p, floor_d, floor_p, &
+       & induction, do_u, err_grad_u, floor_u, do_xion, iIons, err_grad_xHII, floor_xHII, err_grad_xHI, floor_xHI)
     type(oct), device :: grid(*)
     real(kind=dp), device :: uold(1:twotondim,1:nvar,*)
     real(kind=dp), device :: bold(1:twotondim,1:6,*)
@@ -4633,6 +4711,11 @@ contains
     real(kind=dp), intent(in), value :: gamma, smallr, smallc2
     real(kind=dp), intent(in), value :: err_grad_d, floor_d
     real(kind=dp), intent(in), value :: err_grad_p, floor_p
+    logical, intent(in), value :: induction, do_u, do_xion
+    real(kind=dp), intent(in), value :: err_grad_u, floor_u
+    integer(kind=4), intent(in), value :: iIons
+    real(kind=dp), intent(in), value :: err_grad_xHII, floor_xHII
+    real(kind=dp), intent(in), value :: err_grad_xHI, floor_xHI
 #ifdef MHD
     real(kind=dp), intent(in), value :: err_grad_b2, floor_b2
     real(kind=dp), intent(in), value :: err_grad_A, floor_A
@@ -4642,8 +4725,12 @@ contains
     integer :: cell_idx, oct_idx, block_idx, source_idx, subgrid_idx
     integer :: i, j, k, il, jl, kl, ir, jr, kr
     integer :: icell, inbor, idim, ind_nbor
+#if NENER>0
+    integer :: irad
+#endif
     type(primitive_t) :: prim_lft, prim_mid, prim_rgt
     type(conserved_t) :: cons_lft, cons_mid, cons_rgt
+    real(kind=dp) :: x_lft, x_mid, x_rgt, u_mid(1:3), c_mid
     logical :: ok
 #ifdef MHD
     real(kind=dp) :: bc_lft(1:3), bc_mid(1:3), bc_rgt(1:3)
@@ -4680,6 +4767,12 @@ contains
     cons_mid%momentum_y = uold(cell_idx, 3, oct_idx)
     cons_mid%momentum_z = uold(cell_idx, 4, oct_idx)
     cons_mid%energy     = uold(cell_idx, 5, oct_idx)
+#if NENER>0
+    ! Remove the non-thermal energies, as hydro_refine does
+    do irad = 1, nener
+       cons_mid%energy = cons_mid%energy - uold(cell_idx, 5+irad, oct_idx)
+    end do
+#endif
 #ifdef MHD
     cons_mid%Bx = 0.5_dp*(bold(cell_idx,1,oct_idx)+bold(cell_idx,4,oct_idx))
     cons_mid%By = 0.5_dp*(bold(cell_idx,2,oct_idx)+bold(cell_idx,5,oct_idx))
@@ -4689,6 +4782,16 @@ contains
     bc_mid(3) = cons_mid%Bz
 #endif
     prim_mid = conserved_2_primitive(cons_mid, gamma, smallr, smallc2)
+    if (do_xion) x_mid = uold(cell_idx, iIons, oct_idx) / prim_mid%density
+
+    ! Velocity and sound speed (zero with induction) of the middle cell, for the velocity criterion
+    if (do_u) then
+       u_mid(1) = cons_mid%momentum_x * (1.0_dp / prim_mid%density)
+       u_mid(2) = cons_mid%momentum_y * (1.0_dp / prim_mid%density)
+       u_mid(3) = cons_mid%momentum_z * (1.0_dp / prim_mid%density)
+       c_mid = 0.0_dp
+       if (.not. induction) c_mid = sqrt(max(gamma*prim_mid%pressure/prim_mid%density, floor_u**2))
+    endif
 
     ! Loop over dimensions
     do idim = 1, ndim
@@ -4715,6 +4818,11 @@ contains
        cons_lft%momentum_y = uold(icell, 3, source_idx)
        cons_lft%momentum_z = uold(icell, 4, source_idx)
        cons_lft%energy     = uold(icell, 5, source_idx)
+#if NENER>0
+       do irad = 1, nener
+          cons_lft%energy = cons_lft%energy - uold(icell, 5+irad, source_idx)
+       end do
+#endif
 #ifdef MHD
        cons_lft%Bx = 0.5_dp*(bold(icell,1,source_idx)+bold(icell,4,source_idx))
        cons_lft%By = 0.5_dp*(bold(icell,2,source_idx)+bold(icell,5,source_idx))
@@ -4724,6 +4832,7 @@ contains
        bc_lft(3) = cons_lft%Bz
 #endif
        prim_lft = conserved_2_primitive(cons_lft, gamma, smallr, smallc2)
+       if (do_xion) x_lft = uold(icell, iIons, source_idx) / prim_lft%density
 
        ! Right cell
        icell = hhh(cell_idx, 2 * (idim-1) + 2)
@@ -4734,6 +4843,11 @@ contains
        cons_rgt%momentum_y = uold(icell, 3, source_idx)
        cons_rgt%momentum_z = uold(icell, 4, source_idx)
        cons_rgt%energy     = uold(icell, 5, source_idx)
+#if NENER>0
+       do irad = 1, nener
+          cons_rgt%energy = cons_rgt%energy - uold(icell, 5+irad, source_idx)
+       end do
+#endif
 #ifdef MHD
        cons_rgt%Bx = 0.5_dp*(bold(icell,1,source_idx)+bold(icell,4,source_idx))
        cons_rgt%By = 0.5_dp*(bold(icell,2,source_idx)+bold(icell,5,source_idx))
@@ -4743,12 +4857,26 @@ contains
        bc_rgt(3) = cons_rgt%Bz
 #endif
        prim_rgt = conserved_2_primitive(cons_rgt, gamma, smallr, smallc2)
+       if (do_xion) x_rgt = uold(icell, iIons, source_idx) / prim_rgt%density
 
        ! Check refinement criteria
        call hydro_crit(prim_lft, prim_mid, prim_rgt, ok, err_grad_d, err_grad_p, floor_d, floor_p)
 
        ! If satisfied set flag1 to 1
        if (ok) flag1(cell_idx, oct_idx) = 1
+
+       ! Velocity criterion
+       if (do_u) then
+          call velocity_crit(cons_lft, cons_rgt, prim_lft, prim_rgt, u_mid, c_mid, ok, &
+               & gamma, induction, err_grad_u, floor_u)
+          if (ok) flag1(cell_idx, oct_idx) = 1
+       endif
+
+       ! Ion fraction criteria
+       if (do_xion) then
+          call xion_crit(x_lft, x_mid, x_rgt, ok, err_grad_xHII, floor_xHII, err_grad_xHI, floor_xHI)
+          if (ok) flag1(cell_idx, oct_idx) = 1
+       endif
 
 #ifdef MHD
        ! MHD refinement on magnetic energy and B-component gradients.

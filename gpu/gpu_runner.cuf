@@ -2355,6 +2355,9 @@ contains
     integer :: threadsX_per_block, threadsY_per_block, num_threads, num_blocks
     real(kind=dp) :: gamma, err_grad_d, err_grad_p, floor_d, floor_p
     real(kind=dp) :: smallr, smallc2
+    real(kind=dp) :: err_grad_u, floor_u, err_grad_xHII, floor_xHII, err_grad_xHI, floor_xHI
+    integer(kind=4) :: iIons
+    logical :: do_u, do_xion
 #ifdef MHD
     real(kind=dp) :: err_grad_b2, floor_b2, err_grad_A, floor_A
     real(kind=dp) :: err_grad_B, floor_B, err_grad_C, floor_C
@@ -2375,6 +2378,22 @@ contains
     err_grad_p = sim%r%err_grad_p
     floor_d = sim%r%floor_d
     floor_p = sim%r%floor_p
+    err_grad_u = sim%r%err_grad_u
+    floor_u = sim%r%floor_u
+    ! The ion fraction criteria act only with neq_chem, as in hydro_refine
+    err_grad_xHII = -1.0_dp
+    err_grad_xHI = -1.0_dp
+    iIons = 0
+    if (sim%r%neq_chem) then
+       err_grad_xHII = sim%r%err_grad_xHII
+       err_grad_xHI = sim%r%err_grad_xHI
+       iIons = sim%r%iIons
+    endif
+    floor_xHII = sim%r%floor_xHII
+    floor_xHI = sim%r%floor_xHI
+    ! The velocity and ion fraction tests run only with thresholds >= 0
+    do_u = err_grad_u >= 0.0_dp
+    do_xion = err_grad_xHII >= 0.0_dp .or. err_grad_xHI >= 0.0_dp
 #ifdef MHD
     err_grad_b2 = sim%r%err_grad_b2
     floor_b2 = sim%r%floor_b2
@@ -2423,7 +2442,8 @@ contains
 #ifdef MHD
                & err_grad_b2, floor_b2, err_grad_A, floor_A, err_grad_B, floor_B, err_grad_C, floor_C, &
 #endif
-               & gamma, smallr, smallc2, err_grad_d, err_grad_p, floor_d, floor_p)
+               & gamma, smallr, smallc2, err_grad_d, err_grad_p, floor_d, floor_p, &
+               & sim%r%induction, do_u, err_grad_u, floor_u, do_xion, iIons, err_grad_xHII, floor_xHII, err_grad_xHI, floor_xHI)
           call nvtxEndRange()
        endif
     endif
