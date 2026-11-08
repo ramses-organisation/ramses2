@@ -1,4 +1,7 @@
 module rt_godunov_fine_module
+#if defined(_CUDA) && defined(DO_RT)
+  use gpu_runner, only: gpu_rt_godunov, gpu_rt_set_rtunew, gpu_rt_set_rtuold
+#endif
 contains
 !###########################################################
 !###########################################################
@@ -20,7 +23,11 @@ recursive subroutine r_rt_godunov_fine(pst,ilevel,input_size)
      call r_rt_godunov_fine(pst%pLower,ilevel,input_size)
      call mdl_get_reply(pst%s%mdl,rID,0)
   else
+#if defined(_CUDA) && defined(DO_RT)
+     call gpu_rt_godunov(pst%s,ilevel)
+#else
      call rt_godunov_fine(pst%s,ilevel)
+#endif
   endif
 
 end subroutine r_rt_godunov_fine
@@ -128,6 +135,13 @@ recursive subroutine r_set_rtunew(pst,ilevel,input_size)
      call r_set_rtunew(pst%pLower,ilevel,input_size)
      call mdl_get_reply(pst%s%mdl,rID,0)
   else
+#if defined(_CUDA) && defined(DO_RT)
+     ! rtunew lives on the device when the photons are advected
+     if(pst%s%r%rt_advect)then
+        call gpu_rt_set_rtunew(pst%s,ilevel)
+        return
+     endif
+#endif
      call set_rtunew(pst%s%m,ilevel)
   endif
 
@@ -175,7 +189,11 @@ recursive subroutine r_set_rtuold(pst,ilevel,input_size)
      call r_set_rtuold(pst%pLower,ilevel,input_size)
      call mdl_get_reply(pst%s%mdl,rID,0)
   else
+#if defined(_CUDA) && defined(DO_RT)
+     call gpu_rt_set_rtuold(pst%s,ilevel)
+#else
      call set_rtuold(pst%s%r, pst%s%g, pst%s%m, ilevel)
+#endif
   endif
 
 end subroutine r_set_rtuold

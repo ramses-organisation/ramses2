@@ -590,6 +590,11 @@ subroutine gpu_allocate_amr(sim)
 #endif
 #ifdef DO_RT
   allocate(rtuold(1:twotondim,1:nrtvar,1:sim%m%ngridmax+sim%m%ncachemax))
+  allocate(rtunew(1:twotondim,1:nrtvar,1:sim%m%ngridmax))
+  if(sim%r%rt_advect)then
+     allocate(rt_dep_val(1:2*ndim,1:nrtvar,1:sim%m%ncachemax))
+     allocate(rt_dep_src(1:2*ndim,1:sim%m%ncachemax))
+  endif
 #endif
 #ifdef TURB
   allocate(afield_d    (1:ndim,0:TURB_GS-1,0:TURB_GS-1,0:TURB_GS-1,1:2))

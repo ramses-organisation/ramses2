@@ -1,0 +1,650 @@
+!> Photon transport kernels: the hyperbolic RT step of rt_step (rt_godunov_fine, set_rtuold, the source
+!> regions, the photon state of ghost octs and the restriction of the RT variables), on one rank.
+module rt_device
+#ifdef DO_RT
+  use amr_parameters, only: dp, ndim, twotondim, twondim
+  use hydro_parameters, only: nvar
+  use rt_parameters, only: nrtvar, nrtgrp, smallNp
+  use oct_commons, only: oct
+  use gpu_utils
+  use cudafor
+  implicit none
+
+  !> Faces between the cells of an oct and between them and their face neighbors
+  integer, parameter :: nface = 12*ndim
+
+  !> Source regions on the device: kind (1 square, 2 point, 0 none) and photon group
+  integer(kind=4), device, allocatable, dimension(:,:) :: rt_src_int
+  !> and photon density, flux fractions (u, v, w), center (x, y, z), lengths (x, y, z), exponent
+  real(kind=8), device, allocatable, dimension(:,:) :: rt_src_real
+
+contains
+
+  include 'gpu_hash.cuf'
+  include 'gpu_cell.cuf'
+#include "gpu_interpol.cuf"
+
+  ! =========================================================================
+  !> Flux tensor of one cell for one photon group, as cmp_flux_tensors in 3D:
+  !> u holds the photon density and flux, ierr is 1 for a negative photon density
+  attributes(device) subroutine cmp_flux_tensor_cell_d(u, F, rt_c, ierr)
+    implicit none
+    real(kind=dp) :: u(1:ndim+1)
+    real(kind=dp) :: F(1:ndim+1,1:ndim)
+    real(kind=dp), value :: rt_c
+    integer :: ierr
+
+    real(kind=dp) :: pflux(1:ndim), uvec(1:ndim)
+    real(kind=dp) :: Np, Np_c_sq, pflux_sq, chi, iterm, oterm
+    integer :: p, q
+
+    ierr = 0
+    Np = u(1)                                ! Photon density in cell
+    do q = 1, ndim
+       pflux(q) = u(1+q)                     ! Photon flux vector
+    end do
+    if (Np < 0.0_dp) then
+       ierr = 1
+       return
+    end if
+    do q = 1, ndim
+       F(1,q) = pflux(q)                     ! First column is photon flux
+       do p = 2, ndim+1
+          F(p,q) = 0.0_dp                    ! Rest is Eddington tensor
+       end do
+    end do
+    Np_c_sq = Np * rt_c**2 * Np
+    if (Np_c_sq == 0.0_dp) return            ! Zero density => no pressure
+
+    pflux_sq = 0.0_dp                        ! Sq. photon flux magnitude
+    do q = 1, ndim
+       pflux_sq = pflux_sq + pflux(q)**2
+    end do
+    do q = 1, ndim
+       uvec(q) = 0.0_dp                      ! Flux unit vector
+    end do
+    if (pflux_sq > 0.0_dp) then
+       do q = 1, ndim
+          uvec(q) = pflux(q)/sqrt(pflux_sq)
+       end do
+    end if
+    pflux_sq = pflux_sq/Np_c_sq              ! Reduced flux, squared
+
+    ! Levermore 1984 Eddington factor
+    chi = max(4.0_dp-3.0_dp*pflux_sq, 0.0_dp)
+    chi = (3.0_dp+4.0_dp*pflux_sq)/(5.0_dp+2.0_dp*sqrt(chi))
+    iterm = (1.0_dp-chi)/2.0_dp              ! Identity term in tensor
+    ! Three times chi as a sum, rounded once, then one subtracted
+    oterm = (chi+chi+chi-1.0_dp)/2.0_dp      ! Outer product term
+    do p = 1, ndim
+       do q = 1, ndim
+          F(p+1,q) = oterm * uvec(p) * uvec(q)
+       end do
+       F(p+1,p) = F(p+1,p) + iterm
+    end do
+
+    do q = 1, ndim
+       do p = 2, ndim+1
+          F(p,q) = F(p,q) * rt_c**2 * Np
+       end do
+    end do
+
+  end subroutine cmp_flux_tensor_cell_d
+  ! =========================================================================
+
+  ! =========================================================================
+  !> Intercell flux of one RT variable, as cmp_face (eq. 30 in Aubert & Teyssier 2008)
+  attributes(device) function cmp_face_d(fdn, fup, udn, uup, rt_c) result(face)
+    implicit none
+    real(kind=dp), value :: fdn, fup, udn, uup, rt_c
+    real(kind=dp) :: face
+
+    face = ( fdn + fup - rt_c*( uup-udn )) / 2.0_dp
+
+  end function cmp_face_d
+  ! =========================================================================
+
+  ! =========================================================================
+  !> Cell (i,j,k) of face iface of the oct's cells and its direction idim:
+  !> the face is the lower one of the cell, i,j,k in 1:3 along idim and in 1:2 across
+  attributes(device) subroutine face_cell_d(iface, idim, i, j, k)
+    implicit none
+    integer, value :: iface
+    integer :: idim, i, j, k
+    integer :: m, n, a, b
+
+    idim = (iface-1)/12 + 1
+    m = mod(iface-1, 12)
+    n = 1 + mod(m, 3)
+    a = 1 + mod(m/3, 2)
+    b = 1 + m/6
+    if (idim == 1) then
+       i = n; j = a; k = b
+    else if (idim == 2) then
+       i = a; j = n; k = b
+    else
+       i = a; j = b; k = n
+    end if
+
+  end subroutine face_cell_d
+  ! =========================================================================
+
+  ! =========================================================================
+  !> Fluxes across the faces of the oct's cells for one photon group, as rt_unsplit,
+  !> the faces shared out over the threads of the block (tid, stride)
+  attributes(device) subroutine rt_unsplit_faces_d(uin, cflx, flux, rt_c, dtdx, tid, stride)
+    implicit none
+    real(kind=dp) :: uin(0:3,0:3,0:3,1:ndim+1)
+    real(kind=dp) :: cflx(0:3,0:3,0:3,1:ndim+1,1:ndim)
+    real(kind=dp) :: flux(1:3,1:3,1:3,1:ndim+1,1:ndim)
+    real(kind=dp), value :: rt_c, dtdx
+    integer, value :: tid, stride
+    integer :: iface, idim, i, j, k, id, jd, kd, ivar
+
+    do iface = tid, nface, stride
+       call face_cell_d(iface, idim, i, j, k)
+       ! Cell below the face
+       id = i; jd = j; kd = k
+       if (idim == 1) id = i - 1
+       if (idim == 2) jd = j - 1
+       if (idim == 3) kd = k - 1
+       do ivar = 1, ndim+1
+          flux(i,j,k,ivar,idim) = cmp_face_d(cflx(id,jd,kd,ivar,idim), cflx(i,j,k,ivar,idim), &
+               & uin(id,jd,kd,ivar), uin(i,j,k,ivar), rt_c) * dtdx
+       end do
+    end do
+
+  end subroutine rt_unsplit_faces_d
+  ! =========================================================================
+
+  ! =========================================================================
+  !> Photon transport of the octs of one level, as rt_godfine1: one block of 64 threads per oct, one photon
+  !> group at a time. With do_deposit, the flux across each face to a ghost oct is staged for rt_deposit_kernel.
+  attributes(global) subroutine rt_transport_kernel(grid, nbor, rtuold, rtunew, rt_dep_val, rt_dep_src, &
+       & head_idx, num_octs, ngridmax, rt_c, rt_c_coarse, dt, dx, reset_at_refined, do_deposit, rt_fail)
+    implicit none
+    type(oct), device :: grid(*)
+    integer(kind=4), device :: nbor(1:subgridsize,*)
+    real(kind=dp), device :: rtuold(1:twotondim,1:nrtvar,*)
+    real(kind=dp), device :: rtunew(1:twotondim,1:nrtvar,*)
+    real(kind=dp), device :: rt_dep_val(1:twondim,1:nrtvar,*)
+    integer(kind=4), device :: rt_dep_src(1:twondim,*)
+    integer(kind=4), intent(in), value :: head_idx, num_octs, ngridmax
+    real(kind=dp), intent(in), value :: rt_c, rt_c_coarse, dt, dx
+    logical, intent(in), value :: reset_at_refined, do_deposit
+    integer(kind=4), device :: rt_fail
+
+    ! The oct's cells and their face neighbors (the cells of 0:3 with at most one index 0 or 3),
+    ! their flux tensors and the fluxes across the faces of the oct's cells, for one photon group
+    real(kind=dp), shared :: uin(0:3,0:3,0:3,1:ndim+1)
+    real(kind=dp), shared :: cflx(0:3,0:3,0:3,1:ndim+1,1:ndim)
+    real(kind=dp), shared :: flux(1:3,1:3,1:3,1:ndim+1,1:ndim)
+    logical, shared :: okloc(0:3,0:3,0:3)
+
+    real(kind=dp), parameter :: oneontwotondim = 1.0_dp / real(twotondim, kind=dp)
+    real(kind=dp) :: u(1:ndim+1), F(1:ndim+1,1:ndim)
+    real(kind=dp) :: dtdx, acc, rt_c_diff, val
+    integer :: t, nthr, slot, subgrid_idx, oct_idx, i, j, k, io, jo, ko
+    integer :: ci, cj, ck, nedge, src, cell, ierr
+    integer :: igrp, iP0, ivar, idim, iface, i3, j3, k3, i0, j0, k0, ind_son, a, b
+    integer :: ghost, fghost, gdim, gside, gvar, gn
+    logical :: in_stencil
+
+    ! One block per oct
+    if (blockIdx%x > num_octs) return
+    t = threadIdx%x
+    nthr = blockDim%x
+    dtdx = dt/dx
+
+    ! Compute subgrid idx
+    slot = head_idx + blockIdx%x - 1
+    subgrid_idx = (slot - 1) / nsubgridtondim + 1
+
+    ! Compute oct idx within subgrid
+    slot = (slot - 1) - (subgrid_idx - 1) * nsubgridtondim
+    k = slot / nsubgridsq
+    j = (slot - k * nsubgridsq) / nsubgrid
+    i = slot - j * nsubgrid - k * nsubgridsq
+    i = i + 1; j = j + 1; k = k + 1
+
+    ! Compute true oct idx
+    oct_idx = nbor(1 + i + nsubgridp2 * j + nsubgridp2sq * k, subgrid_idx)
+
+    ! Stencil cell of this thread, and its oct and cell
+    ci = mod(t-1, 4)
+    cj = mod((t-1)/4, 4)
+    ck = (t-1)/16
+    nedge = 0
+    if (mod(ci,3) == 0) nedge = nedge + 1
+    if (mod(cj,3) == 0) nedge = nedge + 1
+    if (mod(ck,3) == 0) nedge = nedge + 1
+    in_stencil = (t <= 64) .and. (nedge < 2)
+    if (in_stencil) then
+       io = (ci+1)/2 - 1
+       jo = (cj+1)/2 - 1
+       ko = (ck+1)/2 - 1
+       cell = 1 + (ci-2*io-1) + 2*(cj-2*jo-1) + 4*(ck-2*ko-1)
+       src = nbor(1 + (i+io) + nsubgridp2 * (j+jo) + nsubgridp2sq * (k+ko), subgrid_idx)
+       ! A ghost oct stands for a missing oct: its cells are not refined at this level
+       okloc(ci,cj,ck) = .false.
+       if (src <= ngridmax) okloc(ci,cj,ck) = grid(src)%refined(cell)
+    end if
+
+    ! Coarse deposit: the face of the oct and the RT variable of this thread, and the ghost oct
+    ! across that face
+    ghost = 0
+    if (do_deposit .and. t > twotondim*(ndim+1) .and. t <= (twotondim+twondim)*(ndim+1)) then
+       iface = (t - twotondim*(ndim+1) - 1)/(ndim+1) + 1
+       gvar = mod(t - twotondim*(ndim+1) - 1, ndim+1) + 1
+       gdim = (iface+1)/2
+       ! Lower face (gside 1) or upper face (gside -1), and its index along gdim in flux
+       gside = 2*mod(iface,2) - 1
+       gn = 2 - gside
+       io = 0; jo = 0; ko = 0
+       if (gdim == 1) io = -gside
+       if (gdim == 2) jo = -gside
+       if (gdim == 3) ko = -gside
+       ghost = nbor(1 + (i+io) + nsubgridp2 * (j+jo) + nsubgridp2sq * (k+ko), subgrid_idx)
+       if (ghost > ngridmax) then
+          ! The oct lies on the upper side of a ghost oct across its lower face, and conversely
+          fghost = 2*gdim - 1
+          if (gside == 1) fghost = 2*gdim
+          if (gvar == 1) rt_dep_src(fghost,ghost-ngridmax) = oct_idx
+       end if
+    end if
+
+    do igrp = 1, nrtgrp
+       iP0 = 1 + (igrp-1)*(ndim+1)
+
+       ! Gather the stencil cells and compute their flux tensors
+       if (in_stencil) then
+          do ivar = 1, ndim+1
+             u(ivar) = rtuold(cell,iP0+ivar-1,src)
+             uin(ci,cj,ck,ivar) = u(ivar)
+          end do
+          call cmp_flux_tensor_cell_d(u, F, rt_c, ierr)
+          if (ierr /= 0) rt_fail = 1
+          do idim = 1, ndim
+             do ivar = 1, ndim+1
+                cflx(ci,cj,ck,ivar,idim) = F(ivar,idim)
+             end do
+          end do
+       end if
+       call syncthreads()
+
+       ! Compute fluxes using the M1 closure and the GLF flux
+       call rt_unsplit_faces_d(uin, cflx, flux, rt_c, dtdx, t, nthr)
+       call syncthreads()
+
+       ! Reset fluxes at refined interfaces
+       if (reset_at_refined) then
+          do iface = t, nface, nthr
+             call face_cell_d(iface, idim, i3, j3, k3)
+             i0 = 0; j0 = 0; k0 = 0
+             if (idim == 1) i0 = 1
+             if (idim == 2) j0 = 1
+             if (idim == 3) k0 = 1
+             if (okloc(i3-i0,j3-j0,k3-k0) .or. okloc(i3,j3,k3)) then
+                do ivar = 1, ndim+1
+                   flux(i3,j3,k3,ivar,idim) = 0.0_dp
+                end do
+             end if
+          end do
+          call syncthreads()
+       end if
+
+       ! Conservative update of the unrefined cells of the oct
+       if (t <= twotondim*(ndim+1)) then
+          ind_son = 1 + mod(t-1, twotondim)
+          ivar = 1 + (t-1)/twotondim
+          i3 = 1 + mod(ind_son-1, 2)
+          j3 = 1 + mod((ind_son-1)/2, 2)
+          k3 = 1 + (ind_son-1)/4
+          if (.not. okloc(i3,j3,k3)) then
+             val = rtunew(ind_son,iP0+ivar-1,oct_idx)
+             do idim = 1, ndim
+                i0 = 0; j0 = 0; k0 = 0
+                if (idim == 1) i0 = 1
+                if (idim == 2) j0 = 1
+                if (idim == 3) k0 = 1
+                val = val + (flux(i3,j3,k3,ivar,idim) - flux(i3+i0,j3+j0,k3+k0,ivar,idim))
+             end do
+             rtunew(ind_son,iP0+ivar-1,oct_idx) = val
+          end if
+       end if
+
+       ! Stage the flux across the face to the ghost oct, summed over the four fine faces in the
+       ! order of the coarse update of rt_godfine1, for the parent cell of the ghost oct
+       if (ghost > ngridmax) then
+          acc = 0.0_dp
+          do b = 1, 2
+             do a = 1, 2
+                if (gdim == 1) acc = acc + flux(gn,a,b,gvar,1)
+                if (gdim == 2) acc = acc + flux(a,gn,b,gvar,2)
+                if (gdim == 3) acc = acc + flux(a,b,gn,gvar,3)
+             end do
+          end do
+          ! Rescale the photon flux to the light speed of the coarser level
+          rt_c_diff = rt_c_coarse/rt_c
+          if (gvar == 1) rt_c_diff = 1.0_dp
+          rt_dep_val(fghost,iP0+gvar-1,ghost-ngridmax) = acc * oneontwotondim * rt_c_diff
+       end if
+
+       ! The next photon group overwrites the shared arrays
+       call syncthreads()
+    end do
+
+  end subroutine rt_transport_kernel
+  ! =========================================================================
+
+  ! =========================================================================
+  !> Coarse update of rt_godfine1 from the fluxes staged in the ghost octs of one level: one thread per
+  !> ghost oct, its parent cell updated by its writers in ascending oct order, the order of the CPU oct loop
+  attributes(global) subroutine rt_deposit_kernel(grid, father, rtunew, rt_dep_val, rt_dep_src, &
+       & head_idx, num_octs, ngridmax, rt_fail)
+    implicit none
+    type(oct), device :: grid(*)
+    integer(kind=4), device :: father(*)
+    real(kind=dp), device :: rtunew(1:twotondim,1:nrtvar,*)
+    real(kind=dp), device :: rt_dep_val(1:twondim,1:nrtvar,*)
+    integer(kind=4), device :: rt_dep_src(1:twondim,*)
+    integer(kind=4), intent(in), value :: head_idx, num_octs, ngridmax
+    integer(kind=4), device :: rt_fail
+
+    integer :: cache_idx, islot, father_idx, cell_idx, ivar, iface, n, a, b, w, pos
+    integer :: face(1:twondim), writer(1:twondim)
+
+    ! Compute cache oct idx
+    cache_idx = threadIdx%x - 1 + (blockIdx%x - 1) * blockDim%x
+    if (cache_idx >= num_octs) return
+    cache_idx = head_idx + cache_idx
+    islot = cache_idx - ngridmax
+
+    ! Staged faces in ascending writer order (insertion sort)
+    n = 0
+    do iface = 1, twondim
+       w = rt_dep_src(iface,islot)
+       if (w > 0) then
+          pos = n + 1
+          do b = n, 1, -1
+             if (writer(b) > w) then
+                writer(b+1) = writer(b)
+                face(b+1) = face(b)
+                pos = b
+             end if
+          end do
+          writer(pos) = w
+          face(pos) = iface
+          n = n + 1
+       end if
+    end do
+    if (n == 0) return
+
+    ! Get parent oct and parent cell idx
+    father_idx = father(cache_idx)
+    ! A ghost parent oct has no rtunew: the parent cell is missing, as in rt_godfine1
+    if (father_idx > ngridmax) then
+       rt_fail = 2
+       return
+    end if
+    cell_idx = parent_cell_idx(grid(cache_idx)%ckey, grid(father_idx)%ckey)
+
+    do a = 1, n
+       iface = face(a)
+       if (mod(iface,2) == 0) then
+          ! The writer lies on the upper side: its lower face
+          do ivar = 1, nrtvar
+             rtunew(cell_idx,ivar,father_idx) = rtunew(cell_idx,ivar,father_idx) - rt_dep_val(iface,ivar,islot)
+          end do
+       else
+          ! The writer lies on the lower side: its upper face
+          do ivar = 1, nrtvar
+             rtunew(cell_idx,ivar,father_idx) = rtunew(cell_idx,ivar,father_idx) + rt_dep_val(iface,ivar,islot)
+          end do
+       end if
+    end do
+
+  end subroutine rt_deposit_kernel
+  ! =========================================================================
+
+  ! =========================================================================
+  !> Set rtuold to rtunew in every cell of one level and apply the photon conservation fix of set_rtuold
+  attributes(global) subroutine rt_set_rtuold_kernel(rtuold, rtunew, head_idx, num_octs, rt_c)
+    implicit none
+    real(kind=dp), device :: rtuold(1:twotondim,1:nrtvar,*)
+    real(kind=dp), device :: rtunew(1:twotondim,1:nrtvar,*)
+    integer(kind=4), intent(in), value :: head_idx, num_octs
+    real(kind=dp), intent(in), value :: rt_c
+
+    integer :: block_idx, oct_idx, cell_idx, ivar, ig, iN, idim
+    real(kind=dp) :: Npc, fred, fsq
+
+    block_idx = blockIdx%x - 1
+
+    ! Compute the oct idx
+    oct_idx = block_idx * blockDim%y + threadIdx%y - 1
+    if (oct_idx >= num_octs) return
+    oct_idx = head_idx + oct_idx
+
+    ! Compute the cell idx
+    cell_idx = threadIdx%x
+
+    do ivar = 1, nrtvar
+       rtuold(cell_idx,ivar,oct_idx) = rtunew(cell_idx,ivar,oct_idx)
+    end do
+
+    ! Make a photon conservation fix (prevent light explosions)
+    do ig = 1, nrtgrp
+       iN = 1 + (ig-1)*(ndim+1)
+       ! No negative photon densities
+       rtuold(cell_idx,iN,oct_idx) = max(rtuold(cell_idx,iN,oct_idx), real(smallNp, kind=dp))
+       Npc = rtuold(cell_idx,iN,oct_idx)*rt_c
+       ! Reduced flux, should always be .le. 1
+       fsq = 0.0_dp
+       do idim = 1, ndim
+          fsq = fsq + rtuold(cell_idx,iN+idim,oct_idx)**2
+       end do
+       fred = sqrt(fsq)/Npc
+       if (fred > 1.0_dp) then
+          do idim = 1, ndim
+             rtuold(cell_idx,iN+idim,oct_idx) = rtuold(cell_idx,iN+idim,oct_idx)/fred
+          end do
+       end if
+    end do
+
+  end subroutine rt_set_rtuold_kernel
+  ! =========================================================================
+
+  ! =========================================================================
+  !> Photon source regions of rt_source_regions_sweep in every cell of one level, refined cells included,
+  !> computed in real(kind=8) as on the host and written to rtunew
+  attributes(global) subroutine rt_sources_kernel(grid, rtunew, head_idx, num_octs, nsource, &
+       & dx, skip1, skip2, skip3, rt_c, scale_np, scale_fp, vol, dt_cgs)
+    implicit none
+    type(oct), device :: grid(*)
+    real(kind=dp), device :: rtunew(1:twotondim,1:nrtvar,*)
+    integer(kind=4), intent(in), value :: head_idx, num_octs, nsource
+    real(kind=8), intent(in), value :: dx, skip1, skip2, skip3, rt_c
+    real(kind=8), intent(in), value :: scale_np, scale_fp, vol, dt_cgs
+
+    integer :: block_idx, oct_idx, cell_idx, k, ig
+    real(kind=8) :: x(1:3), xn, yn, zn, en, rad, weight, n_src
+
+    block_idx = blockIdx%x - 1
+
+    ! Compute the oct idx
+    oct_idx = block_idx * blockDim%y + threadIdx%y - 1
+    if (oct_idx >= num_octs) return
+    oct_idx = head_idx + oct_idx
+
+    ! Compute the cell idx
+    cell_idx = threadIdx%x
+
+    ! Cell center position in code units
+    x(1) = (real(2*grid(oct_idx)%ckey(1) + mod(cell_idx-1, 2), kind=8) + 0.5d0)*dx - skip1
+    x(2) = (real(2*grid(oct_idx)%ckey(2) + mod((cell_idx-1)/2, 2), kind=8) + 0.5d0)*dx - skip2
+    x(3) = (real(2*grid(oct_idx)%ckey(3) + mod((cell_idx-1)/4, 2), kind=8) + 0.5d0)*dx - skip3
+
+    ! Loop over source regions
+    do k = 1, nsource
+       ig = 1 + (rt_src_int(2,k)-1)*(ndim+1)
+       n_src = rt_src_real(1,k)
+
+       ! For "square" regions only
+       if (rt_src_int(1,k) == 1) then
+          ! Exponent of chosen norm
+          en = rt_src_real(11,k)
+          ! Compute position in normalized coordinates
+          xn = 2.0d0*abs(x(1)-rt_src_real(5,k))/rt_src_real(8,k)
+          yn = 2.0d0*abs(x(2)-rt_src_real(6,k))/rt_src_real(9,k)
+          zn = 2.0d0*abs(x(3)-rt_src_real(7,k))/rt_src_real(10,k)
+          ! Compute cell "radius" relative to region center
+          if (en < 10.0d0) then
+             rad = (xn**en+yn**en+zn**en)**(1.0d0/en)
+          else
+             rad = max(xn,yn,zn)
+          end if
+          ! If cell lies within region
+          if (rad < 1.0d0) then
+             rtunew(cell_idx,ig,oct_idx) = n_src/rt_c/scale_fp
+             ! The input flux is the fraction Fp/(c*Np) (Max 1 magnitude)
+             rtunew(cell_idx,ig+1,oct_idx) = rt_src_real(2,k)*n_src/scale_fp
+             rtunew(cell_idx,ig+2,oct_idx) = rt_src_real(3,k)*n_src/scale_fp
+             rtunew(cell_idx,ig+3,oct_idx) = rt_src_real(4,k)*n_src/scale_fp
+          end if
+       end if
+
+       ! For "point" regions only
+       if (rt_src_int(1,k) == 2) then
+          ! Compute CIC weights relative to region center
+          xn = max(1.0d0-abs(x(1)-rt_src_real(5,k))/dx, 0.0d0)
+          yn = max(1.0d0-abs(x(2)-rt_src_real(6,k))/dx, 0.0d0)
+          zn = max(1.0d0-abs(x(3)-rt_src_real(7,k))/dx, 0.0d0)
+          weight = xn*yn*zn
+          if (weight > 0.0d0) then
+             ! Convert photon number to photon number density
+             rtunew(cell_idx,ig,oct_idx) = rtunew(cell_idx,ig,oct_idx) &
+                  & + n_src/scale_np*weight/vol*dt_cgs
+             ! The input flux is the fraction Fp/(c*Np) (Max 1 magnitude)
+             rtunew(cell_idx,ig+1,oct_idx) = rtunew(cell_idx,ig+1,oct_idx) &
+                  & + rt_src_real(2,k)*n_src/scale_np*weight/vol*rt_c*dt_cgs
+             rtunew(cell_idx,ig+2,oct_idx) = rtunew(cell_idx,ig+2,oct_idx) &
+                  & + rt_src_real(3,k)*n_src/scale_np*weight/vol*rt_c*dt_cgs
+             rtunew(cell_idx,ig+3,oct_idx) = rtunew(cell_idx,ig+3,oct_idx) &
+                  & + rt_src_real(4,k)*n_src/scale_np*weight/vol*rt_c*dt_cgs
+          end if
+       end if
+    end do
+
+  end subroutine rt_sources_kernel
+  ! =========================================================================
+
+  ! =========================================================================
+  !> Refresh the RT variables of the ghost octs of one level from the parent cells of the hydro stencil,
+  !> as make_new_oct fills new octs. One thread per oct.
+  attributes(global) subroutine rt_refresh_cache_kernel(grid, uold, bold, rtuold, father, &
+       & hash_key, hash_val, hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
+       & head_idx, num_octs, interpol_type, rt_c)
+    implicit none
+    type(oct), device :: grid(*)
+    real(kind=dp), device :: uold(1:twotondim,1:nvar,*)
+    real(kind=dp), device :: bold(1:twotondim,1:6,*)
+    real(kind=dp), device :: rtuold(1:twotondim,1:nrtvar,*)
+    integer(kind=4), device :: father(*)
+    integer(kind=8), device :: hash_key(*)
+    integer(kind=4), device :: hash_val(*)
+    integer(kind=4), intent(in), value :: hash_size
+    integer(kind=4), device :: ckey_max(*)
+    integer(kind=8), device :: key_off(*)
+    integer(kind=4), device :: box_ckey_min(1:ndim,*)
+    integer(kind=4), device :: box_ckey_max(1:ndim,*)
+    logical, device :: periodic(1:3)
+    integer(kind=4), intent(in), value :: head_idx, num_octs, interpol_type
+    real(kind=dp), device :: rt_c(*)
+
+    integer :: cache_idx, parent_idx, cell_idx
+    integer, dimension(1:ndim) :: ckey
+    ! Parent stencil: the hydro values come with the indices and are not used
+    real(kind=dp) :: u1(0:twondim,1:nvar)
+#ifdef MHD
+    real(kind=dp) :: b1(0:twondim,1:6)
+    real(kind=dp) :: b3(1:twondim,1:twotondim,1:6)
+    logical :: refined(1:twondim)
+#endif
+    integer :: igrid_nbor(0:twondim), ind_nbor(0:twondim)
+
+    ! Compute cache oct idx
+    cache_idx = threadIdx%x - 1 + (blockIdx%x - 1) * blockDim%x
+    if (cache_idx >= num_octs) return
+    cache_idx = head_idx + cache_idx
+
+    ! Get parent oct and parent cell idx
+    parent_idx = father(cache_idx)
+    ckey(1:ndim) = grid(cache_idx)%ckey(1:ndim)
+    cell_idx = parent_cell_idx(ckey, grid(parent_idx)%ckey)
+
+    ! Parent cells of the hydro stencil (the parent cell alone for injection)
+#ifdef MHD
+    call gather_twondim_parent_stencil(grid, uold, bold, hash_key, hash_val, hash_size, &
+         & ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, grid(cache_idx)%lev, ckey, &
+         & parent_idx, cell_idx, u1, igrid_nbor, ind_nbor, b1, b3, refined)
+#else
+    if (interpol_type == 0) then
+       igrid_nbor(:) = parent_idx
+       ind_nbor(:) = cell_idx
+    else
+       call gather_twondim_parent_stencil(grid, uold, bold, hash_key, hash_val, hash_size, &
+            & ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, grid(cache_idx)%lev, ckey, &
+            & parent_idx, cell_idx, u1, igrid_nbor, ind_nbor)
+    end if
+#endif
+    call interpol_rt_d(rtuold, igrid_nbor, ind_nbor, interpol_type, rt_c, grid(cache_idx)%lev, cache_idx)
+
+  end subroutine rt_refresh_cache_kernel
+  ! =========================================================================
+
+  ! =========================================================================
+  !> Restriction of the RT variables of the octs of one level into their parent cells, as rt_upload_fine.
+  !> One thread per oct.
+  attributes(global) subroutine rt_upload_kernel(grid, father, rtuold, head_idx, num_octs, c_fine, c_coarse)
+    implicit none
+    type(oct), device :: grid(*)
+    integer(kind=4), device :: father(*)
+    real(kind=dp), device :: rtuold(1:twotondim,1:nrtvar,*)
+    integer(kind=4), intent(in), value :: head_idx, num_octs
+    real(kind=dp), intent(in), value :: c_fine, c_coarse
+
+    integer :: tid, bid, oct_idx, father_idx, cell_idx, ivar, ind
+    real(kind=dp) :: average
+
+    ! Thread and block id
+    tid = threadIdx%x - 1
+    bid = blockIdx%x - 1
+
+    ! Compute the oct idx
+    oct_idx = tid + bid * blockDim%x
+    if (oct_idx >= num_octs) return
+    oct_idx = head_idx + oct_idx
+
+    ! Compute the parent cell idx
+    father_idx = father(oct_idx)
+    cell_idx = parent_cell_idx(grid(oct_idx)%ckey, grid(father_idx)%ckey)
+
+    do ivar = 1, nrtvar
+       ! Average children variables
+       average = 0.0_dp
+       do ind = 1, twotondim
+          average = average + rtuold(ind, ivar, oct_idx)
+       end do
+       rtuold(cell_idx, ivar, father_idx) = average / real(twotondim, kind=dp)
+       ! Rescale according to light speed difference between levels
+       if (mod(ivar, ndim+1) == 1) then
+          rtuold(cell_idx, ivar, father_idx) = (rtuold(cell_idx, ivar, father_idx) * c_fine) / c_coarse
+       end if
+    end do
+
+  end subroutine rt_upload_kernel
+  ! =========================================================================
+
+#endif
+end module rt_device

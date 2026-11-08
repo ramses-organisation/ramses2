@@ -1496,11 +1496,13 @@ subroutine m_read_params(pst)
      write(*,*)'Error: rt on more than one rank is not supported on GPU'
      nml_ok=.false.
   endif
-  ! The GPU cooling updates the photon variables only with neq_chem
-  if(rt.and.isothermal.and..not.neq_chem)then
-     write(*,*)'Error: rt with isothermal but without neq_chem is not supported on GPU'
+#ifndef HYDRO
+  ! Builds without HYDRO leave out the photon sort of gpu_refine and the photon fill of new octs
+  if(rt)then
+     write(*,*)'Error: rt in a build without HYDRO=1 is not supported on GPU'
      nml_ok=.false.
   endif
+#endif
 #endif
 #endif
 

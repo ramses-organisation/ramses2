@@ -246,9 +246,9 @@ subroutine m_read_rt_params(pst)
   !--------------------------------------------------
   ! Check the RT options supported on GPU
   !--------------------------------------------------
-  ! The GPU does not advect photons
-  if(rt_advect)then
-     write(*,*)'Error: rt_advect=.true. is not supported on GPU'
+  ! The GPU chemistry does not absorb the advected photons
+  if(rt_advect.and.s%r%neq_chem)then
+     write(*,*)'Error: rt_advect=.true. with neq_chem=.true. is not supported on GPU'
      call mdl_abort(s%mdl)
   endif
   ! The GPU has no stellar emission
@@ -259,6 +259,11 @@ subroutine m_read_rt_params(pst)
   ! The GPU chemistry has no IR dust coupling and no radiation temperature
   if(rt_isIR.or.rt_T_rad)then
      write(*,*)'Error: rt_isIR and rt_T_rad are not supported on GPU'
+     call mdl_abort(s%mdl)
+  endif
+  ! Without rt_advect the GPU cooling runs, and it updates the photon variables only with neq_chem
+  if(s%r%isothermal.and..not.s%r%neq_chem.and..not.rt_advect)then
+     write(*,*)'Error: rt with isothermal and rt_advect=.false. but without neq_chem is not supported on GPU'
      call mdl_abort(s%mdl)
   endif
 #endif

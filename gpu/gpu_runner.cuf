@@ -39,8 +39,11 @@ module gpu_runner
 
 #ifdef DO_RT
   !> Arrays to hold the RT photon variables on the device
-  real(kind=dp), device, allocatable, dimension(:,:,:) :: rtuold
+  real(kind=dp), device, allocatable, dimension(:,:,:) :: rtuold, rtunew
   real(kind=dp), device, dimension(1:MAXLEVEL) :: d_rt_c ! Reduced light speed of each level
+  !> Coarse photon fluxes staged in the ghost octs by face, and the octs that wrote them
+  real(kind=dp), device, allocatable, dimension(:,:,:) :: rt_dep_val
+  integer(kind=4), device, allocatable, dimension(:,:) :: rt_dep_src
 #endif
 
   !> Arrays to hold Turbulent acceleration fields and spectra on the device,
@@ -918,6 +921,30 @@ contains
   end subroutine gpu_godunov
 
   !> @brief
+  !> Range of the ghost octs of level ilevel in cache memory, and the launch size of one thread per oct.
+  !>
+  !> @detail
+  !> Ghost octs exist only above levelmin: num_octs is 0 at levelmin.
+  !>
+  subroutine cache_oct_range(sim, ilevel, head_idx, num_octs, num_threads, num_blocks)
+    use ramses_commons, only: ramses_t
+    type(ramses_t), intent(in) :: sim
+    integer, intent(in) :: ilevel
+    integer(kind=4), intent(out) :: head_idx, num_octs
+    integer, intent(out) :: num_threads, num_blocks
+
+    head_idx = sim%m%ngridmax + 1
+    num_octs = 0
+    if (ilevel > sim%r%levelmin) then
+       head_idx = sim%m%ngridmax + sim%m%head_cache(ilevel)
+       num_octs = sim%m%noct_cache(ilevel)
+    end if
+    num_threads = 128
+    num_blocks = (num_octs + num_threads - 1) / num_threads
+
+  end subroutine cache_oct_range
+
+  !> @brief
   !> Refresh the ghost octs of level ilevel in cache memory from their parent cells.
   !>
   !> @detail
@@ -934,15 +961,9 @@ contains
     integer(kind=4) :: head_idx, num_octs
     integer :: num_threads, num_blocks
 
-    ! Ghost octs exist only above levelmin
-    if (ilevel <= sim%r%levelmin) return
-
-    head_idx = sim%m%ngridmax + sim%m%head_cache(ilevel)
-    num_octs = sim%m%noct_cache(ilevel)
+    call cache_oct_range(sim, ilevel, head_idx, num_octs, num_threads, num_blocks)
     if (num_octs <= 0) return
 
-    num_threads = 128
-    num_blocks = (num_octs + num_threads - 1) / num_threads
     call nvtxStartRange("GPU refresh cache", color=2)!yellow
     call refresh_cache_octs_kernel<<<num_blocks, num_threads>>>(grid, uold, bold, f, father, &
          & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
@@ -1406,6 +1427,266 @@ contains
     endif
 
   end subroutine gpu_upload
+
+#ifdef DO_RT
+  !> @brief
+  !> Photon transport of level ilevel on a GPU, as rt_godunov_fine
+  !>
+  !> @detail
+  !> Without subcycles, the fluxes across coarse-fine faces are staged in the ghost octs and
+  !> added to their parent cells in the order of the CPU oct loop.
+  !>
+  !> @param[in] sim : The simulation object
+  !> @param[in] ilevel : The refinement level to update
+  !>
+  subroutine gpu_rt_godunov(sim, ilevel)
+    use nvtx
+    use amr_parameters, only: twondim
+    use rt_device, only: rt_refresh_cache_kernel, rt_transport_kernel, rt_deposit_kernel
+    use ramses_commons, only: ramses_t
+    type(ramses_t), intent(inout) :: sim
+    integer, intent(in) :: ilevel
+
+    integer(kind=4) :: head_idx, num_octs, head_cache, num_cache
+    integer :: num_threads, num_blocks, istat
+    integer(kind=4), device :: rt_fail_d
+    integer(kind=4) :: rt_fail
+    real(kind=dp) :: rt_c, rt_c_coarse, dt, dx
+    logical :: reset_at_refined, do_deposit
+
+    head_idx = sim%m%head(ilevel)
+    num_octs = sim%m%noct(ilevel)
+    if (num_octs <= 0) return
+
+    ! Light speed of the level and of the coarser level, and time step
+    rt_c = sim%g%rt_c(ilevel)
+    rt_c_coarse = sim%g%rt_c(max(1,ilevel-1))
+    dt = sim%g%dtnew(ilevel)
+    dx = sim%r%boxlen/2**ilevel
+
+    ! Without subcycles, fluxes at refined faces are reset and coarse-fine fluxes deposited
+    reset_at_refined = (sim%r%rt_nsubcycle == 1)
+    do_deposit = reset_at_refined .and. ilevel > sim%r%levelmin
+
+    ! Ghost octs of the level, which must see the current photon variables of the coarser level
+    call cache_oct_range(sim, ilevel, head_cache, num_cache, num_threads, num_blocks)
+    if (num_cache > 0) then
+       ! Reduced light speed of each level, for the photon densities of the ghost octs
+       d_rt_c = sim%g%rt_c
+       call nvtxStartRange("GPU RT refresh cache", color=2)!yellow
+       call rt_refresh_cache_kernel<<<num_blocks, num_threads>>>(grid, uold, bold, rtuold, father, &
+            & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
+            & head_cache, num_cache, sim%r%interpol_type, d_rt_c)
+       call GPU_Error_Check(__FILE__, __LINE__)
+       call nvtxEndRange()
+    end if
+
+    call nvtxStartRange("GPU RT transport", color=0)!green
+    ! No coarse flux staged yet in the ghost octs of the level
+    if (do_deposit .and. num_cache > 0) then
+       istat = cudaMemset(rt_dep_src(1,head_cache-sim%m%ngridmax), 0, twondim*int(num_cache,8))
+       call GPU_Error_Check(__FILE__, __LINE__)
+    end if
+    rt_fail_d = 0
+    call rt_transport_kernel<<<num_octs, 64>>>(grid, nbor, rtuold, rtunew, rt_dep_val, rt_dep_src, &
+         & head_idx, num_octs, sim%m%ngridmax, rt_c, rt_c_coarse, dt, dx, reset_at_refined, do_deposit, rt_fail_d)
+    call GPU_Error_Check(__FILE__, __LINE__)
+    call nvtxEndRange()
+
+    if (do_deposit .and. num_cache > 0) then
+       call nvtxStartRange("GPU RT coarse deposit", color=0)!green
+       call rt_deposit_kernel<<<num_blocks, num_threads>>>(grid, father, rtunew, rt_dep_val, rt_dep_src, &
+            & head_cache, num_cache, sim%m%ngridmax, rt_fail_d)
+       call GPU_Error_Check(__FILE__, __LINE__)
+       call nvtxEndRange()
+    end if
+
+    ! A negative photon density or a missing parent cell is flagged on the device, report it here
+    rt_fail = rt_fail_d
+    if (rt_fail == 1) then
+       write(*,*)'Error: negative photon density in the GPU RT transport'
+       error stop
+    endif
+    if (rt_fail == 2) then
+       write(*,*)'Error: missing parent cell in the GPU RT transport'
+       error stop
+    endif
+
+  end subroutine gpu_rt_godunov
+
+  !> @brief
+  !> Set rtunew equal to rtuold on a GPU, as set_rtunew
+  !>
+  !> @detail
+  !> @param[in] sim : The simulation object
+  !> @param[in] ilevel : The refinement level to update
+  !>
+  subroutine gpu_rt_set_rtunew(sim, ilevel)
+    use nvtx
+    use rt_parameters, only: nrtvar
+    use ramses_commons, only: ramses_t
+    type(ramses_t), intent(inout) :: sim
+    integer, intent(in) :: ilevel
+
+    integer(kind=4) :: head_idx, num_octs
+    integer :: info
+
+    head_idx = sim%m%head(ilevel)
+    num_octs = sim%m%noct(ilevel)
+    if (num_octs > 0) then
+       call nvtxStartRange("GPU RT set_rtunew", color=0)!green
+       info = cudaMemcpy(rtunew(1,1,head_idx), rtuold(1,1,head_idx), twotondim*nrtvar*int(num_octs,8))
+       call GPU_Error_Check(__FILE__, __LINE__)
+       call nvtxEndRange()
+    end if
+
+  end subroutine gpu_rt_set_rtunew
+
+  !> @brief
+  !> Set rtuold equal to rtunew with the photon conservation fix on a GPU, as set_rtuold
+  !>
+  !> @detail
+  !> @param[in] sim : The simulation object
+  !> @param[in] ilevel : The refinement level to update
+  !>
+  subroutine gpu_rt_set_rtuold(sim, ilevel)
+    use nvtx
+    use rt_device, only: rt_set_rtuold_kernel
+    use ramses_commons, only: ramses_t
+    type(ramses_t), intent(inout) :: sim
+    integer, intent(in) :: ilevel
+
+    integer(kind=4) :: head_idx, num_octs
+    integer :: threadsX_per_block, threadsY_per_block, num_blocks
+
+    ! The chemistry sets rtuold with rt_smooth
+    if (sim%r%neq_chem .and. sim%r%rt_smooth) return
+
+    head_idx = sim%m%head(ilevel)
+    num_octs = sim%m%noct(ilevel)
+    threadsX_per_block = 8
+    threadsY_per_block = 16
+    num_blocks = (num_octs + threadsY_per_block - 1) / threadsY_per_block
+    if (num_octs > 0) then
+       call nvtxStartRange("GPU RT set_rtuold", color=0)!green
+       call rt_set_rtuold_kernel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(rtuold, rtunew, &
+            & head_idx, num_octs, real(sim%g%rt_c(ilevel),kind=dp))
+       call GPU_Error_Check(__FILE__, __LINE__)
+       call nvtxEndRange()
+    end if
+
+  end subroutine gpu_rt_set_rtuold
+
+  !> @brief
+  !> Photon source regions of level ilevel on a GPU, as rt_input_source_regions
+  !>
+  !> @detail
+  !> The source regions are copied to the device at every call.
+  !>
+  !> @param[in] sim : The simulation object
+  !> @param[in] ilevel : The refinement level to update
+  !>
+  subroutine gpu_rt_sources(sim, ilevel)
+    use nvtx
+    use rt_parameters, only: nrtgrp, smallNp
+    use rt_device, only: rt_sources_kernel, rt_src_int, rt_src_real
+    use ramses_commons, only: ramses_t
+    type(ramses_t), intent(inout) :: sim
+    integer, intent(in) :: ilevel
+
+    integer(kind=4) :: head_idx, num_octs, nsource
+    integer :: threadsX_per_block, threadsY_per_block, num_blocks, k
+    integer(kind=4), allocatable, dimension(:,:) :: src_int
+    real(kind=8), allocatable, dimension(:,:) :: src_real
+    real(kind=8) :: scale_nH, scale_T2, scale_l, scale_d, scale_t, scale_v
+    real(kind=8) :: scale_np, scale_fp, dx, dx_cgs, dt_cgs, vol
+
+    head_idx = sim%m%head(ilevel)
+    num_octs = sim%m%noct(ilevel)
+    nsource = sim%r%rt_nsource
+    if (num_octs <= 0 .or. nsource <= 0) return
+
+    ! Source region parameters in the layout of the device table
+    allocate(src_int(1:2,1:nsource), src_real(1:11,1:nsource))
+    do k = 1, nsource
+       src_int(1,k) = 0
+       if (sim%r%rt_source_type(k) == 'square') src_int(1,k) = 1
+       if (sim%r%rt_source_type(k) == 'point') src_int(1,k) = 2
+       if (sim%r%rt_src_group(k) <= 0 .or. sim%r%rt_src_group(k) > nrtgrp) src_int(1,k) = 0
+       src_int(2,k) = sim%r%rt_src_group(k)
+       src_real(1,k) = max(sim%r%rt_n_source(k), smallNp)
+       src_real(2,k) = sim%r%rt_u_source(k)
+       src_real(3,k) = sim%r%rt_v_source(k)
+       src_real(4,k) = sim%r%rt_w_source(k)
+       src_real(5,k) = sim%r%rt_src_x_center(k)
+       src_real(6,k) = sim%r%rt_src_y_center(k)
+       src_real(7,k) = sim%r%rt_src_z_center(k)
+       src_real(8,k) = sim%r%rt_src_length_x(k)
+       src_real(9,k) = sim%r%rt_src_length_y(k)
+       src_real(10,k) = sim%r%rt_src_length_z(k)
+       src_real(11,k) = sim%r%rt_exp_source(k)
+    end do
+    ! New device arrays at the first call and when the number of regions changes
+    if (allocated(rt_src_int)) then
+       if (size(rt_src_int,2) /= nsource) deallocate(rt_src_int, rt_src_real)
+    end if
+    if (.not. allocated(rt_src_int)) allocate(rt_src_int(1:2,1:nsource), rt_src_real(1:11,1:nsource))
+    rt_src_int = src_int
+    rt_src_real = src_real
+    deallocate(src_int, src_real)
+
+    ! Units are needed for point source regions
+    call units(sim%r,sim%g,scale_l,scale_t,scale_d,scale_v,scale_nH,scale_T2)
+    call rt_units(sim%r,sim%g,scale_np,scale_fp)
+    dx = sim%r%boxlen/2**ilevel
+    dx_cgs = dx*scale_l
+    dt_cgs = sim%g%dtnew(ilevel)*scale_t
+    vol = dx_cgs**ndim
+
+    threadsX_per_block = 8
+    threadsY_per_block = 16
+    num_blocks = (num_octs + threadsY_per_block - 1) / threadsY_per_block
+    call nvtxStartRange("GPU RT sources", color=0)!green
+    call rt_sources_kernel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(grid, rtunew, &
+         & head_idx, num_octs, nsource, dx, sim%m%skip(1), sim%m%skip(2), sim%m%skip(3), sim%g%rt_c(ilevel), &
+         & scale_np, scale_fp, vol, dt_cgs)
+    call GPU_Error_Check(__FILE__, __LINE__)
+    call nvtxEndRange()
+
+  end subroutine gpu_rt_sources
+
+  !> @brief
+  !> Restriction of fine cells RT variables into the coarse level on a GPU, as rt_upload_fine
+  !>
+  !> @detail
+  !> @param[in] sim : The simulation object
+  !> @param[in] ilevel : The refinement level to update
+  !>
+  subroutine gpu_rt_upload_fine(sim, ilevel)
+    use nvtx
+    use rt_device, only: rt_upload_kernel
+    use ramses_commons, only: ramses_t
+    type(ramses_t), intent(inout) :: sim
+    integer, intent(in) :: ilevel
+
+    integer(kind=4) :: head_idx, num_octs
+    integer(kind=4) :: num_threads, num_blocks
+
+    head_idx = sim%m%head(ilevel+1)
+    num_octs = sim%m%noct(ilevel+1)
+    num_threads = 256
+    num_blocks = (num_octs + num_threads - 1) / num_threads
+
+    if (num_octs > 0) then
+       call nvtxStartRange("GPU RT upload", color=0)!green
+       call rt_upload_kernel<<<num_blocks, num_threads>>>(grid, father, rtuold, head_idx, num_octs, &
+            & real(sim%g%rt_c(ilevel+1),kind=dp), real(sim%g%rt_c(ilevel),kind=dp))
+       call GPU_Error_Check(__FILE__, __LINE__)
+       call nvtxEndRange()
+    endif
+
+  end subroutine gpu_rt_upload_fine
+#endif
 
   !> @brief
   !> Cooling and polytrope routine
