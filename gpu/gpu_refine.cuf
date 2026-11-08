@@ -2476,7 +2476,6 @@ end subroutine nimhd_ghost_b_kernel
     integer(kind=8) :: hkey, parent_key, offset, ix, iy, iz, nx
     integer :: oct_idx, subgrid_idx, thread_idx, block_idx, cache_idx, parent_idx, cell_idx
     integer :: ind, i, j, k, ilevel, idim, ivar
-    integer :: igrid_dbg, nfound
     integer, dimension(1:ndim) :: ckey
     ! Prolongation scratch for parent stencil and children.
     real(kind=dp) :: u1(0:twondim,1:nvar)
@@ -2560,27 +2559,6 @@ end subroutine nimhd_ghost_b_kernel
     ! Get parent oct index in memory (always exists)
     parent_idx = hash_get(hash_key, hash_val, hash_size, parent_key)
     father(cache_idx) = parent_idx
-
-    ! DEBUG nexpand=0: the parent should always exist. If the hash misses,
-    ! scan all octs to tell a hash bug (oct found) from a broken 2:1 balance.
-    if (parent_idx <= 0) then
-       nfound = 0
-       do igrid_dbg = 1, ngridmax + ncachemax
-          if (grid(igrid_dbg)%lev == ilevel .and. &
-               & grid(igrid_dbg)%ckey(1) == ix .and. &
-               & grid(igrid_dbg)%ckey(2) == iy .and. &
-               & grid(igrid_dbg)%ckey(3) == iz) then
-             nfound = nfound + 1
-             print *, 'make_cache_octs: parent oct FOUND by scan at idx=', igrid_dbg, &
-                  & ' (cache if >', ngridmax, ', live cache if <', ngridmax + ifree_cache, ')'
-          end if
-       end do
-       print *, 'make_cache_octs: missing parent, hash_get=', parent_idx, ' nfound=', nfound, &
-            & ' ghost lev=', ilevel+1, ' ckey=', ckey(1), ckey(2), ckey(3), &
-            & ' src oct=', oct_idx, ' lev=', grid(oct_idx)%lev, ' ckey=', grid(oct_idx)%ckey(1), &
-            & grid(oct_idx)%ckey(2), grid(oct_idx)%ckey(3), ' ind=', input_ind
-       return
-    end if
 
     ! Get parent cell index
     i = ckey(1) - 2*ix
