@@ -73,10 +73,6 @@ BUILDDATE = $(shell date +"%D-%T")
 BUILDCOMMAND = ${MAKE} ${MAKEFLAGS}
 DEFINES += -DNDIM=$(NDIM) -DNVAR=$(NVAR)
 DEFINES += $(EXTRA_DEFINES)
-GPU_SM := $(shell echo '$(CUDA_ARCH)' | sed -nE 's/^sm_([0-9]+)[af]?$$/\1/p')
-ifneq ($(GPU_SM),)
-DEFINES += -DGPU_SM=$(GPU_SM)
-endif
 #############################################################################
 # RTZ options
 ifeq ($(DO_RTZ),1)
@@ -202,6 +198,11 @@ ifeq ($(COMPILER),NVHPC)
    endif
    ifneq ($(CUB_SCAN_REFINE),0)
       DEFINES += -DCUB_SCAN_REFINE
+   endif
+   # GPU_SM (e.g. 90 for sm_90) lets the source pick per-architecture tuning
+   GPU_SM := $(shell echo '$(CUDA_ARCH)' | sed -nE 's/^sm_([0-9]+)[af]?$$/\1/p')
+   ifneq ($(GPU_SM),)
+      DEFINES += -DGPU_SM=$(GPU_SM)
    endif
    CUDALIBS = nvtx,curand
    ifeq ($(TURB),1)
