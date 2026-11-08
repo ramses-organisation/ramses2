@@ -5,6 +5,7 @@ module neq_cooling_device
   use hydro_parameters, only: nvar, nion, nener
 #ifdef DO_RT
   use rt_parameters, only: nrtgrp, nrtvar, smallnp
+  use constants, only: one_over_clight
 #endif
   use oct_commons, only: oct
   use amr_commons, only: run_t
@@ -18,6 +19,10 @@ module neq_cooling_device
   real(kind=8),parameter::T2_min_fix=1d-2
   real(kind=8),parameter::T_min=0.1, T_frac=0.1
   real(kind=8),parameter::x_min=1d-20, x_fm=1d-6, x_frac=0.1
+#ifdef DO_RT
+  real(kind=8),parameter::Np_min=1d-13, Np_frac=0.2
+  real(kind=8),parameter::Fp_frac=0.5
+#endif
 
   !> Table index and interpolation factors of a temperature
   type rate_index_t
@@ -56,7 +61,7 @@ contains
   !> Sub-steps of the chemistry of one cell over dt, as neq_solve_cooling does for each of its cells
   attributes(device) subroutine neq_solve_cell(r, tables, T2c, xionc, nHc, Zsolarc, &
 #ifdef DO_RT
-       & Npc, Fpc, p_gasc, ilevel, &
+       & Npc, Fpc, p_gasc, dNpdtc, dFpdtc, ilevel, &
 #endif
        & one_over_T_FRAC, one_over_x_FRAC, dt, tleft, ddtc, loopcnt)
     implicit none
@@ -66,8 +71,8 @@ contains
     real(kind=8),dimension(1:nion):: xionc
 #ifdef DO_RT
     real(kind=8),dimension(1:ndim):: p_gasc
-    real(kind=8),dimension(1:nrtgrp):: Npc
-    real(kind=8),dimension(1:ndim, 1:nrtgrp):: Fpc
+    real(kind=8),dimension(1:nrtgrp):: Npc, dNpdtc
+    real(kind=8),dimension(1:ndim, 1:nrtgrp):: Fpc, dFpdtc
     integer::ilevel
 #endif
     real(kind=8):: one_over_x_FRAC, one_over_T_FRAC
@@ -127,7 +132,7 @@ contains
        loopcnt=loopcnt+1
        call cool_step_cell(r, tables, T2c, xionc, nHc, Zsolarc, ddtc, &
 #ifdef DO_RT
-            & Npc, Fpc, p_gasc, ilevel, dNp, dFp, dp_gas, &
+            & Npc, Fpc, p_gasc, dNpdtc, dFpdtc, ilevel, dNp, dFp, dp_gas, &
 #endif
             & one_over_T_FRAC, one_over_x_FRAC, dT2, dXion, dt_ok, dt_rec)
        if(loopcnt .gt. 100000) exit
@@ -155,7 +160,7 @@ contains
   !> Change of the state of one cell in a sub-step ddtc, as cool_step in neq_solve_cooling
   attributes(device) subroutine cool_step_cell(r, tables, T2c, xionc, nHc, Zsolarc, ddtc, &
 #ifdef DO_RT
-       & Npc, Fpc, p_gasc, ilevel, dNp, dFp, dp_gas, &
+       & Npc, Fpc, p_gasc, dNpdtc, dFpdtc, ilevel, dNp, dFp, dp_gas, &
 #endif
        & one_over_T_FRAC, one_over_x_FRAC, dT2, dXion, dt_ok, dt_rec)
     implicit none
@@ -165,8 +170,8 @@ contains
     real(kind=8),dimension(1:nion):: xionc
 #ifdef DO_RT
     real(kind=8),dimension(1:ndim):: p_gasc
-    real(kind=8),dimension(1:nrtgrp):: Npc
-    real(kind=8),dimension(1:ndim, 1:nrtgrp):: Fpc
+    real(kind=8),dimension(1:nrtgrp):: Npc, dNpdtc
+    real(kind=8),dimension(1:ndim, 1:nrtgrp):: Fpc, dFpdtc
     integer::ilevel
     real(kind=8),dimension(1:ndim):: dp_gas
     real(kind=8),dimension(nrtgrp):: dNp
@@ -185,7 +190,16 @@ contains
     real(kind=8):: Crate, dCdT2, X_nHkb, rate, dRate, cr, de
     real(kind=8):: photoRate, metal_tot, metal_prime, ss_factor, f_dust
 #ifdef DO_RT
+    integer:: igroup, idim
+    real(kind=8),dimension(ndim):: dmom
+    real(kind=8),dimension(nrtgrp):: phAbs, dustAbs
+    real(kind=8),dimension(nrtgrp):: group_egy_erg
+    real(kind=8):: rt_c_cgs, one_over_rt_c_cgs
+    real(kind=8):: one_over_Np_FRAC, one_over_Fp_FRAC
+    real(kind=8):: G0, eff_peh
+    real(kind=8):: fluxMag, mom_fact
     real(kind=8):: cdex
+    real(kind=8):: rho
 #endif
     real(kind=8):: ncr, prime
     type(rate_index_t):: idxT              ! Table index and factors of TK
@@ -233,10 +247,119 @@ contains
     ss_factor = 1d0                  ! UV background self_shielding factor
     if(r%self_shielding) ss_factor = exp(-nHc/1d-2)
 
+#ifdef DO_RT
+    ! UPDATE PHOTON DENSITY AND FLUX *************************************
+    if(r%rt_advect) then
+       rt_c_cgs = tables%rt_c_cgs(ilevel)
+       one_over_rt_c_cgs = 1d0 / tables%rt_c_cgs(ilevel)
+       one_over_Np_FRAC = 1d0 / Np_FRAC
+       one_over_Fp_FRAC = 1d0 / Fp_FRAC
+       group_egy_erg(1:nrtgrp) = r%group_egy(1:nrtgrp) * eV2erg
+       rho = nHc / r%X_H * mH
+                                  ! Set dust absorption rates [s-1]:
+       dustAbs(:) =r%kappaAbs(:) *rho*Zsolarc*f_dust*rt_c_cgs
+
+       ! ABSORPTION OF PHOTONS BY GAS
+       do igroup=1,nrtgrp       ! ----------------Ionization absorption
+          phAbs(igroup) = SUM(nN(:)*tables%signc(igroup,:,ilevel)*r%ssh2(igroup)) ! s-1
+       end do
+       ! IR, optical and UV depletion by dust absorption: ----------------
+       do igroup=1,nrtgrp
+          phAbs(igroup) = phAbs(igroup) + dustAbs(igroup)
+       end do
+
+       if(r%iPEH_group .gt. 0) then
+          ! Photoelectric absorption: PEH heating rate over the Habing flux,
+          ! from Bakes and Tielens 1994 and Wolfire 2003
+          G0 = group_egy_erg(r%iPEH_group)                               &
+             * dNp(r%iPEH_group) * rt_c_cgs / 1.6d-3
+          eff_peh = 4.87d-2                                              &
+                  / (1d0 + 4d-3 * (G0*sqrt(TK)/ne*2.)**0.73)             &
+                  + 3.65d-2 * (TK/1d4)**0.7                              &
+                  / (1d0 + 2d-4 * (G0 * sqrt(TK) / ne*2. ))
+          phAbs(r%iPEH_group) = phAbs(r%iPEH_group)                      &
+                            + 8.125d-22 * eff_peh * rt_c_cgs *nHc        &
+                            * Zsolarc * f_dust
+       endif
+
+       dmom(1:ndim)=0d0
+       do igroup=1,nrtgrp     ! ----------------- Do the update of N and F
+          dNp(igroup)= MAX(smallNp,                                      &
+                        (ddtc*dNpdtc(igroup)+dNp(igroup))                &
+                        / (1d0+ddtc*phAbs(igroup)))
+
+          dUU = ABS(dNp(igroup)-Npc(igroup))                             &
+                /(Npc(igroup)+Np_MIN) * one_over_Np_FRAC
+          if(dUU .gt. 1d0) then
+             RETURN                                        ! ddtc too big
+          endif
+          fracMax=MAX(fracMax,dUU)      ! To check if ddt can be increased
+
+          do idim=1,ndim
+             dFp(idim,igroup) = &
+                  (ddtc*dFpdtc(idim,igroup)+dFp(idim,igroup))            &
+                  /(1d0+ddtc*phAbs(igroup))
+          end do
+          call reduce_flux(dFp(:,igroup),dNp(igroup)*rt_c_cgs)
+
+          do idim=1,ndim
+             dUU = ABS(dFp(idim,igroup)-Fpc(idim,igroup))                &
+                  / (ABS(Fpc(idim,igroup))+Np_MIN*rt_c_cgs)              &
+                  * one_over_Fp_FRAC
+             if(dUU .gt. 1d0) then
+                RETURN                                     ! ddtc too big
+             endif
+             fracMax=MAX(fracMax,dUU)   ! To check if ddt can be increased
+          end do
+
+       end do
+
+       do igroup=1,nrtgrp ! -------Momentum transfer from photons to gas:
+          mom_fact = ddtc * phAbs(igroup) &
+               * group_egy_erg(igroup) * one_over_clight
+
+          if(r%rt_isoPress) then
+             ! rt_isoPress: assume f=1, where f is reduced flux.
+             fluxMag=sqrt(sum((dFp(:,igroup))**2))
+             if(fluxMag .gt. 0d0) then
+                mom_fact = mom_fact * dNp(igroup) / fluxMag
+             else
+                mom_fact = 0d0
+             endif
+          else
+             mom_fact = mom_fact * one_over_rt_c_cgs
+          end if
+
+          do idim = 1, ndim
+             dmom(idim) = dmom(idim) + dFp(idim,igroup) * mom_fact
+          end do
+       end do
+       dp_gas = dp_gas + dmom * r%rt_pressBoost      ! update gas momentum
+    endif !if(rt)
+#endif
+
     ! UPDATE TEMPERATURE *************************************************
+#ifdef DO_RT
+    if(.not. r%neq_isTconst .and. .not. r%rt_T_rad) then
+#else
     if(.not. r%neq_isTconst) then
+#endif
        Hrate = 0.                           !  Heating rate [erg cm-3 s-1]
        if(r%haardt_madau) Hrate = Hrate + SUM(nN(:)*tables%UVrates(:,2)) * ss_factor
+#ifdef DO_RT
+       if(r%rt_advect) then
+          do igroup=1,nrtgrp                            !  Photoheating
+             Hrate = Hrate + dNp(igroup) * SUM(nN(:)                     &
+                   * tables%PHrate(igroup,:,ilevel))
+          end do
+       endif
+       if(r%iPEH_group .gt. 0 .and. r%rt_advect) then
+                              ! Photoelectric heating Bakes & Tielens 1994
+                                        ! and Wolfire 2003, [erg cm-3 s-1]
+          Hrate = Hrate + 1.3d-24 * eff_peh * G0 * nHc                   &
+                * Zsolarc * f_dust
+       endif
+#endif
        if(r%isH2) then
 #ifdef DO_RT
                                               ! UV pumping, Baczynski 2015
@@ -762,7 +885,7 @@ contains
   attributes(device) subroutine neq_cool_cell(r, tables, uold, bold, icell, ioct, &
        & scale_nH, scale_T2, dtcool, nH_eos, X_cool, &
 #ifdef DO_RT
-       & rtuold, ilevel, scale_d, scale_v, scale_Np, scale_Fp, &
+       & rtuold, rtunew, do_smooth, ilevel, scale_d, scale_v, scale_Np, scale_Fp, &
 #endif
        & loopcnt)
     implicit none
@@ -774,6 +897,8 @@ contains
     real(kind=8) :: scale_nH, scale_T2, dtcool, nH_eos, X_cool
 #ifdef DO_RT
     real(kind=dp) :: rtuold(1:twotondim,1:nrtvar,*)
+    real(kind=dp) :: rtunew(1:twotondim,1:nrtvar,*)
+    logical :: do_smooth
     integer :: ilevel
     real(kind=8) :: scale_d, scale_v, scale_Np, scale_Fp
 #endif
@@ -788,9 +913,10 @@ contains
 #endif
 #ifdef DO_RT
     integer::ig, iNp
-    real(kind=8),dimension(nrtgrp)::Np
-    real(kind=8),dimension(ndim, nrtgrp)::Fp
-    real(kind=8),dimension(ndim)::p_gas
+    real(kind=8),dimension(nrtgrp)::Np, dNpdt
+    real(kind=8),dimension(ndim, nrtgrp)::Fp, dFpdt
+    real(kind=8),dimension(ndim)::p_gas, Fpnew
+    real(kind=8)::Npnew
 #endif
 
     ! Compute rho
@@ -877,12 +1003,29 @@ contains
     ! Compute thermal temperature by subtracting the polytrope
     T2 = min(max(T2-T2min,T2_min_fix),dble(r%T2max))
 
+#ifdef DO_RT
+    ! Photon density and flux increments per second
+    dNpdt(1:nrtgrp) = 0d0
+    dFpdt(1:ndim,1:nrtgrp) = 0d0
+
+    ! Smooth RT update
+    if(do_smooth) then
+       do ig=1,nrtgrp
+          iNp=1+(ig-1)*(ndim+1)
+          Npnew = scale_Np * rtunew(icell,iNp,ioct)
+          Fpnew = scale_Fp * rtunew(icell,iNp+1:iNp+ndim,ioct)
+          dNpdt(ig) = dNpdt(ig) + (Npnew - Np(ig)) / dtcool
+          dFpdt(:,ig) = dFpdt(:,ig) + (Fpnew - Fp(:,ig)) / dtcool
+       end do
+    end if
+#endif
+
     ! Compute net cooling at constant nH
     one_over_T_FRAC = 1d0 / T_FRAC
     one_over_x_FRAC = 1d0 / x_FRAC
     call neq_solve_cell(r, tables, T2, xion, nH, Zsolar, &
 #ifdef DO_RT
-         & Np, Fp, p_gas, ilevel, &
+         & Np, Fp, p_gas, dNpdt, dFpdt, ilevel, &
 #endif
          & one_over_T_FRAC, one_over_x_FRAC, dtcool, tleft, ddt, loopcnt)
 
@@ -940,7 +1083,7 @@ contains
   attributes(global) subroutine neq_cool_kernel(uold, bold, grid, head_idx, num_octs, &
        & scale_nH, scale_T2, dtcool, nH_eos, X_cool, &
 #ifdef DO_RT
-       & rtuold, ilevel, scale_d, scale_v, scale_Np, scale_Fp, &
+       & rtuold, rtunew, do_smooth, ilevel, scale_d, scale_v, scale_Np, scale_Fp, &
 #endif
        & runaway)
     implicit none
@@ -951,6 +1094,8 @@ contains
     real(kind=8), value :: scale_nH, scale_T2, dtcool, nH_eos, X_cool
 #ifdef DO_RT
     real(kind=dp), device :: rtuold(1:twotondim,1:nrtvar,*)
+    real(kind=dp), device :: rtunew(1:twotondim,1:nrtvar,*)
+    logical, value :: do_smooth
     integer(kind=4), value :: ilevel
     real(kind=8), value :: scale_d, scale_v, scale_Np, scale_Fp
 #endif
@@ -974,7 +1119,7 @@ contains
     call neq_cool_cell(neq_run_d, neq_tables_d, uold, bold, cell_idx, oct_idx, &
          & scale_nH, scale_T2, dtcool, nH_eos, X_cool, &
 #ifdef DO_RT
-         & rtuold, ilevel, scale_d, scale_v, scale_Np, scale_Fp, &
+         & rtuold, rtunew, do_smooth, ilevel, scale_d, scale_v, scale_Np, scale_Fp, &
 #endif
          & loopcnt)
 
@@ -995,7 +1140,7 @@ contains
     use gpu_utils, only: GPU_Error_Check
     use gpu_runner, only: uold, bold, grid
 #ifdef DO_RT
-    use gpu_runner, only: rtuold
+    use gpu_runner, only: rtuold, rtunew
 #endif
     implicit none
     type(ramses_t), intent(inout) :: sim
@@ -1009,12 +1154,16 @@ contains
     real(kind=8) :: dtcool, nH_eos, nCOM
 #ifdef DO_RT
     real(kind=8) :: scale_Np, scale_Fp
+    logical :: do_smooth
 #endif
 
     ! Conversion factor from user units to cgs units
     call units(sim%r,sim%g,scale_l,scale_t,scale_d,scale_v,scale_nH,scale_T2)
 #ifdef DO_RT
     call rt_units(sim%r,sim%g,scale_Np,scale_Fp)
+
+    ! The rt_smooth terms, only with rt_advect
+    do_smooth = sim%r%rt_advect .and. sim%r%rt_smooth
 #endif
 
     ! Ensure the rate tables live on the device
@@ -1045,7 +1194,7 @@ contains
             & uold, bold, grid, head_idx, num_octs, scale_nH, scale_T2,                &
             & dtcool, nH_eos, sim%cool%X,                                              &
 #ifdef DO_RT
-            & rtuold, ilevel, scale_d, scale_v, scale_Np, scale_Fp,                    &
+            & rtuold, rtunew, do_smooth, ilevel, scale_d, scale_v, scale_Np, scale_Fp, &
 #endif
             & runaway_d)
        call GPU_Error_Check(__FILE__, __LINE__)
