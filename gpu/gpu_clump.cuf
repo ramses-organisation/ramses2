@@ -452,6 +452,7 @@ contains
        grid_x = (num_octs + block_y - 1) / block_y
        grid_dim = dim3(grid_x, 1, 1)
        call save_nref_kernel<<<grid_dim, block_dim>>>(rho, nref, head_idx, num_octs)
+       call GPU_Error_Check(__FILE__, __LINE__)
     endif
 
     do ilevel = sim%r%levelmin + 1, sim%r%nlevelmax
@@ -461,6 +462,7 @@ contains
           grid_x = (num_octs + block_y - 1) / block_y
           grid_dim = dim3(grid_x, 1, 1)
           call smooth_rho_kernel<<<grid_dim, block_dim>>>(rho, nref, grid, father, head_idx, num_octs)
+          call GPU_Error_Check(__FILE__, __LINE__)
        endif
     enddo
   end subroutine gpu_smooth_rho
@@ -586,6 +588,7 @@ contains
     grid_x = (num_octs + block_y - 1) / block_y
     grid_dim = dim3(grid_x, 1, 1)
     call flag_test_cells_kernel<<<grid_dim, block_dim>>>(prefix_sum, rho, grid, threshold, head_idx, num_octs)
+    call GPU_Error_Check(__FILE__, __LINE__)
 
     ! 2. Compute inclusive prefix scan over octs
     call gpu_scan(prefix_sum, 1, num_octs, total_test_d)
@@ -600,6 +603,7 @@ contains
     ! 3. Scatter to compacted arrays in a single launch
     call scatter_test_cells_kernel<<<grid_dim, block_dim>>>(grid_d, cell_d, level_d, dens_d, &
          & prefix_sum, rho, grid, threshold, head_idx, num_octs)
+    call GPU_Error_Check(__FILE__, __LINE__)
   end subroutine gpu_collect_test
 
   ! =========================================================================
@@ -803,6 +807,7 @@ contains
          & grid_d, cell_d, level_d, nbor_grid_d, nbor_cell_d, is_peak_d, &
          & rho, grid, periodic, box_ckey_min, box_ckey_max, &
          & hash_key, hash_val, sim%m%hash_size, ntest, sim%m%ngridmax)
+    call GPU_Error_Check(__FILE__, __LINE__)
 
     ! Compute prefix scan to count total peaks
     is_peak_scan_d = is_peak_d
@@ -953,9 +958,11 @@ contains
     ! 1. Store test cell indices in flag1 temporarily for parent lookup
     flag1 = 0
     call map_indices_kernel<<<grid_size, block_size>>>(flag1, grid_d, cell_d, ntest)
+    call GPU_Error_Check(__FILE__, __LINE__)
 
     ! 2. Initialize parent array
     call init_parent_kernel<<<grid_size, block_size>>>(parent_d, grid_d, cell_d, nbor_grid_d, nbor_cell_d, flag1, ntest)
+    call GPU_Error_Check(__FILE__, __LINE__)
 
     ! 3. Pointer-jumping loop to flatten tree paths
     nmove_h = 1
@@ -963,6 +970,7 @@ contains
     do while (nmove_h > 0)
        nmove_d = 0
        call pointer_jump_kernel<<<grid_size, block_size>>>(parent_d, nmove_d, ntest)
+       call GPU_Error_Check(__FILE__, __LINE__)
        nmove_h = nmove_d
        istep = istep + 1
     end do
@@ -973,6 +981,7 @@ contains
     call map_final_labels_kernel<<<grid_size, block_size>>>( &
          & flag1, peak_grid_d, peak_cell_d, peak_level_d, max_dens_d, &
          & parent_d, grid_d, cell_d, level_d, rho, is_peak_scan_d, ntest)
+    call GPU_Error_Check(__FILE__, __LINE__)
   end subroutine gpu_collect_patch
 
   ! =========================================================================
@@ -1162,6 +1171,7 @@ contains
     ! Initialize saddle density to threshold, saddle neighbor to 0 and edge key to huge
     call init_saddle_arrays_kernel<<<grid_size_peaks, block_size>>>( &
          & saddle_dens_d, saddle_nbor_d, saddle_edge_d, real(sim%c%density_threshold, kind=dp), npeak)
+    call GPU_Error_Check(__FILE__, __LINE__)
 
     ! 56 threads per test cell, so block size 224 (4 cells per block)
     grid_size = (ntest + 3) / 4
@@ -1173,6 +1183,7 @@ contains
             & flag1, grid_d, cell_d, level_d, saddle_dens_d, saddle_nbor_d, saddle_edge_d, &
             & rho, grid, periodic, box_ckey_min, box_ckey_max, real(sim%c%density_threshold, kind=dp), &
             & hash_key, hash_val, sim%m%hash_size, ntest, sim%m%ngridmax, ipass)
+       call GPU_Error_Check(__FILE__, __LINE__)
     end do
   end subroutine gpu_collect_saddle
 
@@ -1522,6 +1533,7 @@ contains
     call init_merge_kernel<<<grid_size_peaks, block_size>>>( &
          & new_peak_d, tidal_dens_d, lev_peak_d, alive_d, max_dens_d, relevance_d, &
          & real(sim%c%relevance_threshold, kind=dp), real(sim%c%saddle_threshold, kind=dp), npeak, action_code)
+    call GPU_Error_Check(__FILE__, __LINE__)
 
     ! 2. Outer loop: Merge hierarchy depth
     nzero_h = npeak
@@ -1540,6 +1552,7 @@ contains
                & new_peak_d, tidal_dens_d, alive_d, max_dens_d, saddle_dens_d, saddle_nbor_d, &
                & real(sim%c%relevance_threshold, kind=dp), real(sim%c%saddle_threshold, kind=dp), &
                & npeak, action_code, nmove_d)
+          call GPU_Error_Check(__FILE__, __LINE__)
           nmove_h = nmove_d
           iter = iter + 1
        end do
@@ -1547,12 +1560,14 @@ contains
        ! 2.3 Update cells to peak associations (flag1)
        if (ntest > 0) then
           call update_flag1_kernel<<<grid_size_test, block_size>>>(flag1, grid_d, cell_d, new_peak_d, ntest)
+          call GPU_Error_Check(__FILE__, __LINE__)
        endif
 
        ! 2.4 Update alive status of merged peaks
        nzero_d = 0
        call update_alive_kernel<<<grid_size_peaks, block_size>>>( &
             & new_peak_d, alive_d, lev_peak_d, idepth, npeak, nzero_d)
+       call GPU_Error_Check(__FILE__, __LINE__)
        nzero_h = nzero_d
        idepth = idepth + 1
     end do
@@ -1560,6 +1575,7 @@ contains
     ! Count surviving peaks
     nalive_d = 0
     call count_alive_kernel<<<grid_size_peaks, block_size>>>(alive_d, npeak, nalive_d)
+    call GPU_Error_Check(__FILE__, __LINE__)
     nsurvive_h = nalive_d
     if (sim%g%myid == 1) then
        if (action == 'relevance') write(*,'(" Found",I12,"  relevant peaks")')nsurvive_h
@@ -1572,28 +1588,37 @@ contains
     if (action == 'relevance') then
        do ilev = idepth - 2, 0, -1
           call propagate_merge_level_kernel<<<grid_size_peaks, block_size>>>(new_peak_d, lev_peak_d, ilev, npeak)
+          call GPU_Error_Check(__FILE__, __LINE__)
        end do
        call compute_relevance_kernel<<<grid_size_peaks, block_size>>>(relevance_d, max_dens_d, &
             & saddle_dens_d, alive_d, npeak)
+       call GPU_Error_Check(__FILE__, __LINE__)
     endif
 
     if (action == 'saddleden') then
        call init_halo_index_kernel<<<grid_size_peaks, block_size>>>(ind_halo_d, new_peak_d, npeak)
+       call GPU_Error_Check(__FILE__, __LINE__)
        do ilev = idepth - 2, 0, -1
           call propagate_halo_level_kernel<<<grid_size_peaks, block_size>>>(ind_halo_d, lev_peak_d, ilev, npeak)
+          call GPU_Error_Check(__FILE__, __LINE__)
        end do
        call set_halo_level_kernel<<<grid_size_peaks, block_size>>>(lev_peak_d, ind_halo_d, idepth, npeak)
+       call GPU_Error_Check(__FILE__, __LINE__)
 
        ! Compute halo mass
        call init_halo_mass_kernel<<<grid_size_peaks, block_size>>>(halo_mass_d, npeak)
+       call GPU_Error_Check(__FILE__, __LINE__)
        call accumulate_halo_mass_kernel<<<grid_size_peaks, block_size>>>(halo_mass_d, ind_halo_d, clump_mass_d, npeak)
+       call GPU_Error_Check(__FILE__, __LINE__)
        call assign_halo_mass_kernel<<<grid_size_peaks, block_size>>>(halo_mass_d, ind_halo_d, npeak)
+       call GPU_Error_Check(__FILE__, __LINE__)
 
        ! Compute hierarchical clump properties
        do ilev = 0, idepth - 2
           call hierarchical_properties_kernel<<<grid_size_peaks, block_size>>>( &
                & new_peak_d, lev_peak_d, clump_mass_d, clump_vol_d, n_cells_d, min_dens_d, halo_mass_d, &
                & real(sim%c%fraction_threshold, kind=dp), ilev, idepth, npeak)
+          call GPU_Error_Check(__FILE__, __LINE__)
        end do
     endif
   end subroutine gpu_merge_clumps
@@ -1740,15 +1765,18 @@ contains
          & peak_pos_d, peak_vel_d, peak_acc_d, peak_com_d, peak_grid_d, peak_cell_d, peak_level_d, &
          & min_dens_d, n_cells_d, clump_mass_d, clump_vol_d, npart_d, &
          & uold, f, grid, sim%r%boxlen, d_skip, npeak, rtype)
+    call GPU_Error_Check(__FILE__, __LINE__)
 
     ! 2. Accumulate properties from cells
     call accumulate_clump_properties_kernel<<<grid_size_test, block_size>>>( &
          & flag1, flag2, grid_d, cell_d, level_d, n_cells_d, min_dens_d, clump_mass_d, clump_vol_d, &
          & rho, nref, sim%r%boxlen, ntest)
+    call GPU_Error_Check(__FILE__, __LINE__)
 
     ! 3. Finalize clump properties
     call finalize_clump_properties_kernel<<<grid_size_peaks, block_size>>>( &
          & clump_rad_d, clump_mass_d, tidal_dens_d, npeak)
+    call GPU_Error_Check(__FILE__, __LINE__)
   end subroutine gpu_compute_clump_properties
 
   ! =========================================================================
@@ -1889,6 +1917,7 @@ contains
     ! 1. Reset particle-based peak properties
     call init_particle_properties_kernel<<<grid_size_peaks, block_size>>>( &
          & peak_com_d, peak_vel_d, particle_mass_d, npart_d, npeak)
+    call GPU_Error_Check(__FILE__, __LINE__)
 
     ! 2. Accumulate particle contributions
     if (ptype == 1 .and. sim%p%npart > 0) then
@@ -1901,6 +1930,7 @@ contains
                & peak_com_d, peak_vel_d, particle_mass_d, npart_d, periodic, box_size, &
                & hash_key, hash_val, sim%m%hash_size, real(sim%r%boxlen, kind=dp), &
                & ilevel, sim%p%headp(ilevel), num_parts, int(sim%r%npartmax, kind=8))
+          call GPU_Error_Check(__FILE__, __LINE__)
        end do
     else if (ptype == 2 .and. sim%star%npart > 0) then
        do ilevel = sim%r%levelmin, sim%r%nlevelmax
@@ -1912,12 +1942,14 @@ contains
                & peak_com_d, peak_vel_d, particle_mass_d, npart_d, periodic, box_size, &
                & hash_key, hash_val, sim%m%hash_size, real(sim%r%boxlen, kind=dp), &
                & ilevel, sim%star%headp(ilevel), num_parts, int(sim%r%nstarmax, kind=8))
+          call GPU_Error_Check(__FILE__, __LINE__)
        end do
     endif
 
     ! 3. Compute specific quantities and wrap center of mass
     call finalize_particle_properties_kernel<<<grid_size_peaks, block_size>>>( &
          & peak_com_d, peak_vel_d, peak_pos_d, particle_mass_d, periodic, box_size, npeak)
+    call GPU_Error_Check(__FILE__, __LINE__)
   end subroutine gpu_particle_clump_properties
 
   ! =========================================================================
@@ -2080,6 +2112,7 @@ contains
     ! 1. Reset mass profiles, potentials and particle counts
     call reset_mass_bin_kernel<<<grid_size_peaks, block_size>>>(mass_bin_d, phi_clump_d, npart_d, &
          & .true., sim%c%npeak)
+    call GPU_Error_Check(__FILE__, __LINE__)
 
     ! 2. Loop over merging hierarchy levels
     if (sim%p%npart > 0) then
@@ -2090,6 +2123,7 @@ contains
                & mass_bin_d, npart_d, periodic, real(sim%r%box_size(1), kind=dp), &
                & real(sim%r%box_size(2), kind=dp), real(sim%r%box_size(3), kind=dp), &
                & ilevel, sim%p%npart, int(sim%r%npartmax, kind=8))
+          call GPU_Error_Check(__FILE__, __LINE__)
        end do
     endif
 
@@ -2098,6 +2132,7 @@ contains
          & mass_bin_d, phi_clump_d, clump_rad_d, clump_mass_d, relevance_d, &
          & real(sim%c%mass_threshold, kind=dp), real(sim%c%relevance_threshold, kind=dp), &
          & real(grav, kind=dp), sim%c%npeak)
+    call GPU_Error_Check(__FILE__, __LINE__)
   end subroutine gpu_particle_potential
 
   ! =========================================================================
@@ -2213,6 +2248,7 @@ contains
             & peak_pos_d, peak_vel_d, phi_clump_d, real(sim%c%mass_threshold, kind=dp), periodic, &
             & real(sim%r%box_size(1), kind=dp), real(sim%r%box_size(2), kind=dp), &
             & real(sim%r%box_size(3), kind=dp), ilevel, sim%p%npart, int(sim%r%npartmax, kind=8))
+       call GPU_Error_Check(__FILE__, __LINE__)
     end do
   end subroutine gpu_particle_unbind
 
@@ -2295,6 +2331,7 @@ contains
     ! 1. Reset mass profiles and particle counts (keep the potential)
     call reset_mass_bin_kernel<<<grid_size_peaks, block_size>>>(mass_bin_d, phi_clump_d, npart_d, &
          & .false., sim%c%npeak)
+    call GPU_Error_Check(__FILE__, __LINE__)
 
     ! 2. Bin particles around their final peak
     if (sim%p%npart > 0) then
@@ -2303,12 +2340,14 @@ contains
             & xp, mp, pid, clump_rad_d, peak_pos_d, mass_bin_d, npart_d, periodic, &
             & real(sim%r%box_size(1), kind=dp), real(sim%r%box_size(2), kind=dp), &
             & real(sim%r%box_size(3), kind=dp), sim%p%npart, int(sim%r%npartmax, kind=8))
+       call GPU_Error_Check(__FILE__, __LINE__)
     endif
 
     ! 3. Cumulative mass profiles
     call cumulate_mass_kernel<<<grid_size_peaks, block_size>>>( &
          & mass_bin_d, clump_mass_d, relevance_d, real(sim%c%mass_threshold, kind=dp), &
          & real(sim%c%relevance_threshold, kind=dp), sim%c%npeak)
+    call GPU_Error_Check(__FILE__, __LINE__)
   end subroutine gpu_mass_profile
 
   ! =========================================================================
@@ -2459,42 +2498,52 @@ contains
     ! 1. Final clump indices: inclusive scan of kept peaks, 0 for dropped ones
     call keep_clump_kernel<<<grid_size_peaks, block_size>>>(ind_final_d, clump_mass_d, relevance_d, &
          & npart_d, mass_threshold, relevance_threshold, part_clump, sim%c%npeak)
+    call GPU_Error_Check(__FILE__, __LINE__)
     call gpu_scan(ind_final_d, 1, sim%c%npeak)
     call drop_clump_kernel<<<grid_size_peaks, block_size>>>(ind_final_d, clump_mass_d, relevance_d, &
          & npart_d, mass_threshold, relevance_threshold, part_clump, sim%c%npeak)
+    call GPU_Error_Check(__FILE__, __LINE__)
 
     ! 2. Change other important peak indices
     if (do_halo) then
        call remap_peak_index_kernel<<<grid_size_peaks, block_size>>>(new_peak_d, ind_halo_d, ind_final_d, &
             & .true., sim%c%npeak)
+       call GPU_Error_Check(__FILE__, __LINE__)
     else
        call remap_peak_index_kernel<<<grid_size_peaks, block_size>>>(new_peak_d, new_peak_d, ind_final_d, &
             & .false., sim%c%npeak)
+       call GPU_Error_Check(__FILE__, __LINE__)
     endif
 
     ! 3. Modify particle peak ids accordingly
     if (sim%r%part .and. sim%p%npart > 0) then
        grid_size_part = (sim%p%npart + block_size - 1) / block_size
        call trim_particles_kernel<<<grid_size_part, block_size>>>(pid, ind_final_d, sim%p%npart)
+       call GPU_Error_Check(__FILE__, __LINE__)
     endif
     if (sim%r%star .and. sim%star%npart > 0) then
        grid_size_part = (sim%star%npart + block_size - 1) / block_size
        call trim_particles_kernel<<<grid_size_part, block_size>>>(star_pid, ind_final_d, sim%star%npart)
+       call GPU_Error_Check(__FILE__, __LINE__)
     endif
     if (sim%r%sink .and. sim%sink%npart > 0) then
        grid_size_part = (sim%sink%npart + block_size - 1) / block_size
        call trim_particles_kernel<<<grid_size_part, block_size>>>(sink_pid, ind_final_d, sim%sink%npart)
+       call GPU_Error_Check(__FILE__, __LINE__)
     endif
     if (sim%r%tree .and. sim%tree%npart > 0) then
        grid_size_part = (sim%tree%npart + block_size - 1) / block_size
        call trim_particles_kernel<<<grid_size_part, block_size>>>(tree_pid, ind_final_d, sim%tree%npart)
+       call GPU_Error_Check(__FILE__, __LINE__)
     endif
 
     ! 4. Modify flag2 (and flag1 if halos) accordingly
     if (sim%c%ntest > 0) then
        call trim_flag_kernel<<<grid_size_test, block_size>>>(flag2, grid_d, cell_d, ind_final_d, sim%c%ntest)
+       call GPU_Error_Check(__FILE__, __LINE__)
        if (do_halo) then
           call trim_flag_kernel<<<grid_size_test, block_size>>>(flag1, grid_d, cell_d, ind_final_d, sim%c%ntest)
+          call GPU_Error_Check(__FILE__, __LINE__)
        endif
     endif
   end subroutine gpu_trim_clumps
@@ -2823,6 +2872,7 @@ contains
        call particle_id_kernel<<<grid_size, block_size>>>(xp_d, id_d, flag, &
             & hash_key, hash_val, sim%m%hash_size, real(sim%r%boxlen, kind=dp), &
             & ilevel, p%headp(ilevel), num_parts, leading)
+       call GPU_Error_Check(__FILE__, __LINE__)
     end do
   end subroutine launch_particle_id
 
@@ -2965,6 +3015,7 @@ contains
     if (reset_sink_pos .and. sim%sink%npart > 0) then
        dtnew_part_d = sim%g%dtnew
        call gpu_sink_recenter_kernel<<<grid_size_sinks, block_size>>>(sim%sink%npart, dtnew_part_d)
+       call GPU_Error_Check(__FILE__, __LINE__)
     endif
 
     ! 2. Count sink particles in each halo
@@ -2974,11 +3025,13 @@ contains
        ! Count sinks in each peak
        if (sim%sink%npart > 0) then
           call gpu_count_sinks_kernel<<<grid_size_sinks, block_size>>>(sim%sink%npart)
+          call GPU_Error_Check(__FILE__, __LINE__)
        endif
        ! Count sinks hierarchically in each halo (if saddle threshold is active)
        if (sim%c%saddle_threshold > 0.0d0) then
           do ilev = 0, sim%c%merge_levelmax
              call gpu_hierarchical_sink_count_kernel<<<grid_size_peaks, block_size>>>(sim%c%npeak, ilev)
+             call GPU_Error_Check(__FILE__, __LINE__)
           end do
        endif
     endif
@@ -3163,6 +3216,7 @@ contains
                & real(grav, kind=dp), real(sim%r%boxlen, kind=dp), &
                & real(sim%r%box_size(1), kind=dp), real(sim%r%box_size(2), kind=dp), &
                & real(sim%r%box_size(3), kind=dp))
+          call GPU_Error_Check(__FILE__, __LINE__)
        endif
     endif
 
@@ -3170,6 +3224,7 @@ contains
     if (sim%tree%npart > 0) then
        call tree_merge_kernel<<<grid_size_trees, block_size>>>(sim%tree%npart, &
             & real(sim%g%texp, kind=dp))
+       call GPU_Error_Check(__FILE__, __LINE__)
     endif
 
     ! 3. Count tree particles in each peak, then hierarchically in each halo
@@ -3177,10 +3232,12 @@ contains
        ntree_d = 0
        if (sim%tree%npart > 0) then
           call gpu_count_trees_kernel<<<grid_size_trees, block_size>>>(sim%tree%npart)
+          call GPU_Error_Check(__FILE__, __LINE__)
        endif
        if (sim%c%saddle_threshold > 0.0d0) then
           do ilev = 0, sim%c%merge_levelmax
              call gpu_hierarchical_tree_count_kernel<<<grid_size_peaks, block_size>>>(sim%c%npeak, ilev)
+             call GPU_Error_Check(__FILE__, __LINE__)
           end do
        endif
     endif

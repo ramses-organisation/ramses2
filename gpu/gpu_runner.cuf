@@ -217,6 +217,7 @@ contains
         & , fturb &
 #endif
         & )
+    call GPU_Error_Check(__FILE__, __LINE__)
     call nvtxEndRange()
 
     ! move results to host
@@ -339,6 +340,7 @@ contains
         & , fturb &
 #endif
         & )
+    call GPU_Error_Check(__FILE__, __LINE__)
 
     ! Step 2: hierarchical reduce, up to three passes (mirrors gpu_scan)
     if (n0 <= block_size_r) then
@@ -346,25 +348,31 @@ contains
        call cmpdt_reduce_kernel<<<1, block_size_r>>>( &
             A_mass, A_ekin, A_eint, A_emag, A_dt, n0, &
             dummy, dummy, dummy, dummy, dummy, d_data, .true.)
+       call GPU_Error_Check(__FILE__, __LINE__)
     else if (g0 <= block_size_r) then
        ! Two passes: A -> B (g0 outputs), then B -> data_out
        call cmpdt_reduce_kernel<<<g0, block_size_r>>>( &
             A_mass, A_ekin, A_eint, A_emag, A_dt, n0, &
             B_mass, B_ekin, B_eint, B_emag, B_dt, d_dummy, .false.)
+       call GPU_Error_Check(__FILE__, __LINE__)
        call cmpdt_reduce_kernel<<<1, block_size_r>>>( &
             B_mass, B_ekin, B_eint, B_emag, B_dt, g0, &
             dummy, dummy, dummy, dummy, dummy, d_data, .true.)
+       call GPU_Error_Check(__FILE__, __LINE__)
     else if (g0 <= block_size_r*block_size_r) then
        ! Three passes: A -> B, B -> C (g1 outputs), C -> data_out
        call cmpdt_reduce_kernel<<<g0, block_size_r>>>( &
             A_mass, A_ekin, A_eint, A_emag, A_dt, n0, &
             B_mass, B_ekin, B_eint, B_emag, B_dt, d_dummy, .false.)
+       call GPU_Error_Check(__FILE__, __LINE__)
        call cmpdt_reduce_kernel<<<g1, block_size_r>>>( &
             B_mass, B_ekin, B_eint, B_emag, B_dt, g0, &
             C_mass, C_ekin, C_eint, C_emag, C_dt, d_dummy, .false.)
+       call GPU_Error_Check(__FILE__, __LINE__)
        call cmpdt_reduce_kernel<<<1, block_size_r>>>( &
             C_mass, C_ekin, C_eint, C_emag, C_dt, g1, &
             dummy, dummy, dummy, dummy, dummy, d_data, .true.)
+       call GPU_Error_Check(__FILE__, __LINE__)
     else
        write(*,*) 'gpu_cmpdt_2: too many partials for 3-level reducer', n0
        stop
@@ -546,6 +554,7 @@ contains
     num_blocks = (ntot + num_threads - 1)/num_threads
     call turb_decay_kernel<<<num_blocks, num_threads>>>(turb_spec_d, iold, inew, &
          & sim%turb%turb_decay_frac, ntot)
+    call GPU_Error_Check(__FILE__, __LINE__)
     if (turb_nmode > 0) then
        turb_rnd_d = turb_rnd_h
        num_blocks = (turb_nmode + num_threads - 1)/num_threads
@@ -553,6 +562,7 @@ contains
             & turb_mode_cell, turb_mode_own, turb_mode_power, turb_mode_unitk, turb_rnd_d, &
             & turb_nmode, sim%turb%turb_dt, sim%r%comp_frac, sim%turb%sol_frac, &
             & sim%turb%turb_decay_frac)
+       call GPU_Error_Check(__FILE__, __LINE__)
     endif
     if (turb_npair > 0) then
        num_blocks = (turb_npair + num_threads - 1)/num_threads
@@ -718,6 +728,7 @@ contains
     call nvtxStartRange("GPU grav_hydro", color=0)!green
     call grav_hydro<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(uold, unew, f, constant_gravity, &
          & head_idx, num_octs, gamma, smallr, smallc2, dt)
+    call GPU_Error_Check(__FILE__, __LINE__)
     call nvtxEndRange()
 
   end subroutine gpu_grav_hydro
@@ -890,6 +901,7 @@ contains
          & head_idx, num_subgrids, sim%m%ngridmax, ilevel, sim%r%levelmin, sim%r%nlevelmax, &
          & gamma, smallr, smallc2, dt, dx, slope, slope_mag, riemann, riemann2d, &
          & switch_llf_dmin, switch_llf_pmin, induction, etamag, constant_gravity)
+    call GPU_Error_Check(__FILE__, __LINE__)
 #else
 #if defined(NPRE) && NPRE == 4
     if(nsubgrid == 2)threads_per_block = 128
@@ -1007,14 +1019,17 @@ contains
     num_blocks = (num_octs + num_threads/twotondim - 1) / (num_threads/twotondim)
     call nimhd_coeff_kernel<<<num_blocks, num_threads>>>(uold, bold, eta_nimhd, head_oct, num_octs, &
          & real(sim%r%gamma,dp), real(sim%r%smallr,dp), real(sim%r%etamag,dp), real(sim%r%eta_ad,dp))
+    call GPU_Error_Check(__FILE__, __LINE__)
     if (num_cache > 0) then
        num_blocks = (num_cache + num_threads/twotondim - 1) / (num_threads/twotondim)
        call nimhd_coeff_kernel<<<num_blocks, num_threads>>>(uold, bold, eta_nimhd, head_cache, num_cache, &
             & real(sim%r%gamma,dp), real(sim%r%smallr,dp), real(sim%r%etamag,dp), real(sim%r%eta_ad,dp))
+       call GPU_Error_Check(__FILE__, __LINE__)
     endif
     d_dtp(1) = huge(0.0d0)
     call nimhd_dt_kernel<<<num_sg, threads_per_block>>>(grid, eta_nimhd, bold, nbor, head_sg, num_sg, d_dtp, &
          & dx, real(sim%r%nimhd_courant,dp), coarse_fine)
+    call GPU_Error_Check(__FILE__, __LINE__)
     h_dtp = d_dtp
     dt_parab = h_dtp(1)
   end function nimhd_dt_parab
@@ -1136,6 +1151,7 @@ contains
            & head_sg, num_sg, sim%m%ngridmax, ilevel, sim%r%levelmin, sim%r%nlevelmax, dt, dx, &
            & real(mu(jstage),dp), real(nu(jstage),dp), real(mut(jstage),dp), &
            & real(gt(jstage),dp), real(mut1,dp), real(q(jstage-1),dp), real(q(jstage-1),dp))
+      call GPU_Error_Check(__FILE__, __LINE__)
     end subroutine nimhd_stage
 #endif
   end subroutine gpu_nimhd_fine
@@ -1322,6 +1338,7 @@ contains
       if (sim%m%noct(lev) <= 0) return
       call nimhd_scratch_kernel<<<(sim%m%noct(lev) + num_threads/twotondim - 1)/(num_threads/twotondim), num_threads>>>(uold, &
            & unew, b_cf, sim%m%head(lev), sim%m%noct(lev), mode)
+      call GPU_Error_Check(__FILE__, __LINE__)
     end subroutine scratch
 
     subroutine refresh_ghosts(b)
@@ -1333,6 +1350,7 @@ contains
          call nimhd_ghost_b_kernel<<<(num_cache + num_threads - 1)/num_threads, num_threads>>>(grid, uold, b, &
               & father, hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, &
               & periodic, head_cache, num_cache, int(sim%r%interpol_type,4))
+         call GPU_Error_Check(__FILE__, __LINE__)
       end do
     end subroutine refresh_ghosts
 
@@ -1356,12 +1374,14 @@ contains
               & head_sg, num_sg, sim%m%ngridmax, l, lmin, sim%r%nlevelmax, dt, real(sim%r%boxlen/2**l,dp), &
               & real(mu(jstage),dp), real(nu(jstage),dp), real(mut(jstage),dp), &
               & real(gt(jstage),dp), real(mut1,dp), real(q(jstage-1),dp), 1.0_dp)
+         call GPU_Error_Check(__FILE__, __LINE__)
       end do
       do l = lf - 1, lmin, -1
          num_octs = sim%m%noct(l+1)
          if (num_octs <= 0) cycle
          call nimhd_restrict_b_kernel<<<(num_octs + num_threads - 1)/num_threads, num_threads>>>(grid, father, yj, &
               & sim%m%head(l+1), num_octs)
+         call GPU_Error_Check(__FILE__, __LINE__)
       end do
     end subroutine composite_stage
   end subroutine gpu_nimhd_composite
@@ -1402,6 +1422,7 @@ contains
        call nvtxStartRange("GPU upload", color=0)!green
        call upload_kernel<<<num_blocks, num_threads>>>(grid, father, uold, bold, head_idx, num_octs, &
             & internal_energy, gamma, smallr, smallc2)
+       call GPU_Error_Check(__FILE__, __LINE__)
        call nvtxEndRange()
     endif
 
@@ -1544,6 +1565,7 @@ contains
    ! Get total number of true new stars
    nstar_new_d = 0_8
    call count_star_kernel<<<num_blocks, num_threads>>>(flag2, head_idx, num_octs, nstar_new_d)
+   call GPU_Error_Check(__FILE__, __LINE__)
    nstar_new = nstar_new_d
 
    mstar_loc = real(nstar_new, kind=8) * mstar
@@ -1573,6 +1595,7 @@ contains
 
       ! Arrays swap_local and swap_global contain the parent oct and cell index of each new star
       call compute_star_swap_table<<<num_blocks, num_threads>>>(swap_local, swap_global, flag2, prefix_sum, head_idx, num_octs)
+      call GPU_Error_Check(__FILE__, __LINE__)
 
       num_threads = 256
       num_blocks = (npart_new + num_threads - 1) / num_threads
@@ -1858,6 +1881,7 @@ contains
     if (num_octs > 0) then
        call free_hash_kernel<<<num_blocks, num_threads>>>(grid, hash_key, hash_val, sim%m%hash_size, &
             & ckey_max, key_off, head_idx, num_octs)
+       call GPU_Error_Check(__FILE__, __LINE__)
     endif
     sim%m%ifree_cache = head_cache
 
@@ -1890,6 +1914,7 @@ contains
                & rtuold, d_rt_c, &
 #endif
                & interpol_var, interpol_type, smallr_d)
+          call GPU_Error_Check(__FILE__, __LINE__)
        endif
     else
        ! Interpolation: refine level by level, coarse to fine
@@ -1910,6 +1935,7 @@ contains
                   & rtuold, d_rt_c, &
 #endif
                   & interpol_var, interpol_type, smallr_d)
+             call GPU_Error_Check(__FILE__, __LINE__)
 
              ! Insert the octs just created in the hash table, unless main memory is full
              new_ifree = ifree_d
@@ -1920,6 +1946,7 @@ contains
              if (num_octs > 0) then
                 call insert_hash_kernel<<<num_blocks, num_threads>>>(grid, hash_key, hash_val, sim%m%hash_size, &
                      & ckey_max, key_off, ins_head, num_octs)
+                call GPU_Error_Check(__FILE__, __LINE__)
              end if
              ins_head = new_ifree
           endif
@@ -1948,6 +1975,7 @@ contains
     if (num_octs > 0) then
        call insert_hash_kernel<<<num_blocks, num_threads>>>(grid, hash_key, hash_val, sim%m%hash_size, &
             & ckey_max, key_off, head_idx, num_octs)
+       call GPU_Error_Check(__FILE__, __LINE__)
     end if
 
     ! Remove old octs by setting lev to zero and free their hash table entry
@@ -1959,6 +1987,7 @@ contains
        if (num_octs > 0) then
           call derefine_kernel<<<num_blocks, num_threads>>>(grid, flag1, hash_key, hash_val, sim%m%hash_size, &
                & ckey_max, key_off, head_idx, num_octs)
+          call GPU_Error_Check(__FILE__, __LINE__)
        endif
     end do
 
@@ -1974,6 +2003,7 @@ contains
     ! Init global swap table
     if (num_octs > 0) then
        call init_global_swap_table_kernel<<<num_blocks, num_threads>>>(swap_global, head_idx, num_octs)
+       call GPU_Error_Check(__FILE__, __LINE__)
     endif
 
     ! Sort octs per levels using bucket sort
@@ -2003,11 +2033,13 @@ contains
           ! Init prefix sum
           call init_prefix_sum_level<<<num_blocks, num_threads>>>(grid, swap_global, prefix_sum, &
                & head_idx, num_octs, ilev)
+          call GPU_Error_Check(__FILE__, __LINE__)
 
           ! Compute prefix sum
 #if defined(CUB_SCAN_REFINE)
           call cub_inclusive_sum(c_loc(prefix_sum), head_idx, num_octs)
           call get_total_sum<<<1,1>>>(prefix_sum, head_idx, num_octs, new_noct_d)
+          call GPU_Error_Check(__FILE__, __LINE__)
 #else
           call gpu_scan(prefix_sum, head_idx, num_octs, new_noct_d)
 #endif
@@ -2016,12 +2048,15 @@ contains
 #if defined(FUSE_LEVEL)
           call compute_and_update_swap_table<<<num_blocks, num_threads>>>(swap_local, swap_global, prefix_sum, &
                & head_idx, num_octs, new_noct_d)
+          call GPU_Error_Check(__FILE__, __LINE__)
 #else
           call compute_local_swap_table<<<num_blocks, num_threads>>>(swap_local, swap_global, prefix_sum, &
                & head_idx, num_octs)
+          call GPU_Error_Check(__FILE__, __LINE__)
 
           call update_global_swap_table<<<num_blocks, num_threads>>>(swap_global, swap_local, &
                & head_idx, num_octs)
+          call GPU_Error_Check(__FILE__, __LINE__)
 #endif
           ! Compute new noct. note: this results in D-to-H memcpy
           new_noct = new_noct_d
@@ -2065,6 +2100,7 @@ contains
           nthr = 128
           nblk = (((num_octs + nrnd - 1) / nrnd) + nthr - 1) / nthr
           call gather_keys_2<<<nblk,nthr>>>(grid, swap_global, head_idx, num_octs, hkeys_in)
+          call GPU_Error_Check(__FILE__, __LINE__)
 
           ! sort Hilbert keys
           ! hkeys_in has keys to sort by, hkeys_out is the sorted keys.
@@ -2089,6 +2125,7 @@ contains
              ! Init prefix sum
              call init_prefix_sum_bit<<<num_blocks, num_threads>>>(grid, swap_global, prefix_sum, &
                   & head_idx, num_octs, ibit)
+             call GPU_Error_Check(__FILE__, __LINE__)
 
              ! Compute prefix sum
              call gpu_scan(prefix_sum, head_idx, num_octs)
@@ -2096,10 +2133,12 @@ contains
              ! Compute local swap table
              call compute_local_swap_table<<<num_blocks, num_threads>>>(swap_local, swap_global, prefix_sum, &
                   & head_idx, num_octs)
+             call GPU_Error_Check(__FILE__, __LINE__)
 
              ! Update global swap table
              call update_global_swap_table<<<num_blocks, num_threads>>>(swap_global, swap_local, &
                   & head_idx, num_octs)
+             call GPU_Error_Check(__FILE__, __LINE__)
 
              call nvtxEndRange()
           end do
@@ -2124,15 +2163,21 @@ contains
        call nvtxStartRange("scatter_gather", color=2)!yellow
 #if defined(FUSE_SCATTER_GATHER)
        call sort_gather_scatter_grid_flag<<<num_blocks, num_threads>>>(grid, flag1, flag2, swap_global, head_idx, num_octs)
+       call GPU_Error_Check(__FILE__, __LINE__)
 #else
        call sort_gather_grid<<<num_blocks, num_threads>>>(flag2, grid, swap_global, head_idx, num_octs)
+       call GPU_Error_Check(__FILE__, __LINE__)
        call sort_scatter_grid<<<num_blocks, num_threads>>>(grid, flag2, head_idx, num_octs)
+       call GPU_Error_Check(__FILE__, __LINE__)
        call sort_gather_flag<<<num_blocks, num_threads>>>(flag2, flag1, swap_global, head_idx, num_octs)
+       call GPU_Error_Check(__FILE__, __LINE__)
        call sort_scatter_flag<<<num_blocks, num_threads>>>(flag1, flag2, head_idx, num_octs)
+       call GPU_Error_Check(__FILE__, __LINE__)
 #endif
 #ifdef HYDRO
        call sort_gather_hydro<<<num_blocks_2, dim3(threadsX_per_block,threadsY_per_block,1)>>>(unew, uold, bnew, bold, &
             & swap_global, head_idx, num_octs)
+       call GPU_Error_Check(__FILE__, __LINE__)
        info = cudaMemcpy(uold(1,1,head_idx), unew(1,1,head_idx), twotondim*nvar*int(num_octs,8))
 #ifdef MHD
        info = cudaMemcpy(bold(1,1,head_idx), bnew(1,1,head_idx), twotondim*6*int(num_octs,8))
@@ -2143,25 +2188,38 @@ contains
           nv = min(nvar, nrtvar-iv)
           call sort_gather_rt<<<num_blocks_2, dim3(threadsX_per_block,threadsY_per_block,1)>>>(unew, rtuold, &
                & iv, nv, swap_global, head_idx, num_octs)
+          call GPU_Error_Check(__FILE__, __LINE__)
           call sort_scatter_rt<<<num_blocks_2, dim3(threadsX_per_block,threadsY_per_block,1)>>>(rtuold, unew, &
                & iv, nv, head_idx, num_octs)
+          call GPU_Error_Check(__FILE__, __LINE__)
        end do
 #endif
 #endif
 #ifdef GRAV
 #if defined(FUSE_SCATTER_GATHER)
        call sort_gather_scatter_force_phi<<<num_blocks, num_threads>>>(f, phi, phi_old, nref, swap_global, head_idx, num_octs)
+       call GPU_Error_Check(__FILE__, __LINE__)
 #else
        call sort_gather_force<<<num_blocks, num_threads>>>(nref, f, 1, swap_global, head_idx, num_octs)
+       call GPU_Error_Check(__FILE__, __LINE__)
        call sort_scatter_force<<<num_blocks, num_threads>>>(f, nref, 1, head_idx, num_octs)
+       call GPU_Error_Check(__FILE__, __LINE__)
        call sort_gather_force<<<num_blocks, num_threads>>>(nref, f, 2, swap_global, head_idx, num_octs)
+       call GPU_Error_Check(__FILE__, __LINE__)
        call sort_scatter_force<<<num_blocks, num_threads>>>(f, nref, 2, head_idx, num_octs)
+       call GPU_Error_Check(__FILE__, __LINE__)
        call sort_gather_force<<<num_blocks, num_threads>>>(nref, f, 3, swap_global, head_idx, num_octs)
+       call GPU_Error_Check(__FILE__, __LINE__)
        call sort_scatter_force<<<num_blocks, num_threads>>>(f, nref, 3, head_idx, num_octs)
+       call GPU_Error_Check(__FILE__, __LINE__)
        call sort_gather_phi<<<num_blocks, num_threads>>>(nref, phi, swap_global, head_idx, num_octs)
+       call GPU_Error_Check(__FILE__, __LINE__)
        call sort_scatter_phi<<<num_blocks, num_threads>>>(phi, nref, head_idx, num_octs)
+       call GPU_Error_Check(__FILE__, __LINE__)
        call sort_gather_phi<<<num_blocks, num_threads>>>(nref, phi_old, swap_global, head_idx, num_octs)
+       call GPU_Error_Check(__FILE__, __LINE__)
        call sort_scatter_phi<<<num_blocks, num_threads>>>(phi_old, nref, head_idx, num_octs)
+       call GPU_Error_Check(__FILE__, __LINE__)
 #endif
 #endif
        call nvtxEndRange()
@@ -2172,6 +2230,7 @@ contains
        ! Update hash table
        call update_hash_kernel<<<num_blocks, num_threads>>>(grid, hash_key, hash_val, sim%m%hash_size, &
             & ckey_max, key_off, head_idx, num_octs)
+       call GPU_Error_Check(__FILE__, __LINE__)
 
     endif
 
@@ -2183,6 +2242,7 @@ contains
        ! Update father index array (they should always exist without MPI)
        call update_father_array<<<num_blocks, num_threads>>>(grid, father, hash_key, hash_val, sim%m%hash_size, &
             & ckey_max, key_off, head_idx, num_octs)
+       call GPU_Error_Check(__FILE__, __LINE__)
 
     endif
 
@@ -2218,6 +2278,7 @@ contains
              call update_nbor_array<<<num_blocks, num_threads>>>(nbor, grid, hash_key, hash_val, &
                   & sim%m%hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
                   & head_idx, num_subgrids, ind, prefix_sum = prefix_sum)
+             call GPU_Error_Check(__FILE__, __LINE__)
 
              ! Compute prefix sum
 #if defined(CUB_SCAN_REFINE)
@@ -2235,23 +2296,29 @@ contains
                   & hash_val, sim%m%hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, &
                   & periodic, sim%m%ngridmax, sim%m%ncachemax, ifree_cache_d, cache_overflow_d, ind, &
                   & head_idx, num_subgrids, interpol_var, interpol_type, smallr_d)
+             call GPU_Error_Check(__FILE__, __LINE__)
 #else
 #if defined(CUB_SCAN_REFINE)
              call get_total_sum<<<1,1>>>(prefix_sum, head_idx, num_subgrids, new_noct_d)
+             call GPU_Error_Check(__FILE__, __LINE__)
 #endif
              call compute_cache_swap_table<<<num_blocks, num_threads>>>(swap_local, prefix_sum, &
                   & head_idx, num_subgrids)
+             call GPU_Error_Check(__FILE__, __LINE__)
 
              call make_cache_octs<<<num_blocks, num_threads>>>(grid, flag1, &
                   & uold, bold, f, phi, phi_old, swap_local, father, nbor, &
                   & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
                   & sim%m%ngridmax, sim%m%ncachemax, ifree_cache_d, cache_overflow_d, new_noct_d, ind, &
                   & interpol_var, interpol_type, smallr_d)
+             call GPU_Error_Check(__FILE__, __LINE__)
 
              call insert_hash_cache<<<num_blocks, num_threads>>>(grid, hash_key, hash_val, sim%m%hash_size, &
                   & ckey_max, key_off, sim%m%ngridmax, ifree_cache_d, cache_overflow_d, new_noct_d)
+             call GPU_Error_Check(__FILE__, __LINE__)
 
              call advance_ifree_cache<<<1,1>>>(ifree_cache_d, new_noct_d, cache_overflow_d)
+             call GPU_Error_Check(__FILE__, __LINE__)
 #endif
              call nvtxEndRange()
 
@@ -2310,6 +2377,7 @@ contains
     if (num_octs > 0) then
        call nvtxStartRange("GPU init_flag", color=2)!yellow
        call reset_flag1_kernel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(flag1, head_idx, num_octs)
+       call GPU_Error_Check(__FILE__, __LINE__)
        call nvtxEndRange()
     endif
 
@@ -2321,6 +2389,7 @@ contains
        if (num_octs > 0) then
           call nvtxStartRange("GPU init_flag", color=2)!yellow
           call init_flag_kernel<<<num_blocks, num_threads>>>(flag1, grid, father, head_idx, num_octs)
+          call GPU_Error_Check(__FILE__, __LINE__)
           call nvtxEndRange()
        endif
     endif
@@ -2334,6 +2403,7 @@ contains
     if (num_octs > 0) then
        call nvtxStartRange("GPU init_flag", color=2)!yellow
        call count_flag1_kernel<<<num_blocks, num_threads>>>(flag1, head_idx, num_octs, nflag_d)
+       call GPU_Error_Check(__FILE__, __LINE__)
        call nvtxEndRange()
     endif
 
@@ -2368,6 +2438,7 @@ contains
     if (num_octs > 0) then
        call nvtxStartRange("GPU enforce_subgrid", color=2)!yellow
        call enforce_subgrid_kernel<<<num_blocks, num_threads>>>(flag1, head_idx, num_octs)
+       call GPU_Error_Check(__FILE__, __LINE__)
        call nvtxEndRange()
     endif
 
@@ -2456,6 +2527,7 @@ contains
        call nvtxStartRange("GPU user_flag", color=2)!yellow
        call poisson_flag_kernel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(flag1, nref, uold, bold, &
             & head_idx, num_octs, gamma, smallr, smallc2, mass_sph, m_refine, jeans_refine, factG, dx)
+       call GPU_Error_Check(__FILE__, __LINE__)
        call nvtxEndRange()
     endif
 
@@ -2471,6 +2543,7 @@ contains
           call nvtxStartRange("GPU user_flag", color=2)!yellow
           call mass_flag_kernel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(flag1, uold, &
                & head_idx, num_octs, d_thres)
+          call GPU_Error_Check(__FILE__, __LINE__)
           call nvtxEndRange()
        endif
        if(num_octs > 0)then
@@ -2481,6 +2554,7 @@ contains
 #endif
                & gamma, smallr, smallc2, err_grad_d, err_grad_p, floor_d, floor_p, &
                & sim%r%induction, do_u, err_grad_u, floor_u, do_xion, iIons, err_grad_xHII, floor_xHII, err_grad_xHI, floor_xHI)
+          call GPU_Error_Check(__FILE__, __LINE__)
           call nvtxEndRange()
        endif
     endif
@@ -2494,6 +2568,7 @@ contains
                & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, sim%m%ngridmax, &
                & box_ckey_min, box_ckey_max, periodic, ilevel, sim%r%sink_b_spline_order, &
                & real(sim%m%skip(1),kind=dp), real(sim%m%skip(2),kind=dp), real(sim%m%skip(3),kind=dp), dx)
+          call GPU_Error_Check(__FILE__, __LINE__)
           call nvtxEndRange()
        endif
     endif
@@ -2507,6 +2582,7 @@ contains
                & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, sim%m%ngridmax, &
                & box_ckey_min, box_ckey_max, periodic, ilevel, sim%r%core_b_spline_order, &
                & real(sim%m%skip(1),kind=dp), real(sim%m%skip(2),kind=dp), real(sim%m%skip(3),kind=dp), dx)
+          call GPU_Error_Check(__FILE__, __LINE__)
           call nvtxEndRange()
        endif
     endif
@@ -2521,6 +2597,7 @@ contains
     if (num_octs > 0) then
        call nvtxStartRange("GPU user_flag", color=2)!yellow
        call count_flag1_kernel<<<num_blocks, num_threads>>>(flag1, head_idx, num_octs, nflag_d)
+       call GPU_Error_Check(__FILE__, __LINE__)
        call nvtxEndRange()
     endif
 
@@ -2559,8 +2636,10 @@ contains
           call nvtxStartRange("GPU smooth_flag", color=2)!yellow
           call count_neighbors<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(flag2, flag1, nbor, &
                & head_idx, num_octs)
+          call GPU_Error_Check(__FILE__, __LINE__)
           call flag_count_kernel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(flag1, flag2, &
                & head_idx, num_octs, n_nbor(idim))
+          call GPU_Error_Check(__FILE__, __LINE__)
           call nvtxEndRange()
        end do
     endif
@@ -2574,6 +2653,7 @@ contains
     if (num_octs > 0) then
        call nvtxStartRange("GPU smooth_flag", color=2)!yellow
        call count_flag1_kernel<<<num_blocks, num_threads>>>(flag1, head_idx, num_octs, nflag_d)
+       call GPU_Error_Check(__FILE__, __LINE__)
        call nvtxEndRange()
     endif
 
@@ -2606,6 +2686,7 @@ contains
     if(num_octs > 0)then
        call nvtxStartRange("GPU enforce_rules", color=2)!yellow
        call enforce_rules<<<num_blocks, num_threads>>>(flag1, nbor, head_idx, num_octs, sim%m%ngridmax)
+       call GPU_Error_Check(__FILE__, __LINE__)
        call nvtxEndRange()
     endif
 
@@ -2638,11 +2719,14 @@ contains
        ! Works only for arrray size smaller or equal than 256^2=65'536
        grid_size_0 = (num_octs + block_size - 1) / block_size
        call block_scan<<<grid_size_0, block_size>>>(data, head_idx, num_octs, partial_sums_0, total_sum_d)
+       call GPU_Error_Check(__FILE__, __LINE__)
        if (grid_size_0 > 1) then
           call block_scan<<<1, grid_size_0>>>(partial_sums_0, 1, grid_size_0)
+          call GPU_Error_Check(__FILE__, __LINE__)
           offset = head_idx + block_size
           size = num_octs - block_size
           call uniform_add<<<grid_size_0 - 1, block_size>>>(data, offset, size, partial_sums_0, total_sum_d)
+          call GPU_Error_Check(__FILE__, __LINE__)
        end if
 
     else if(num_octs <= num_max_1)then
@@ -2650,39 +2734,51 @@ contains
        ! Works only for arrray size smaller or equal than 256^3=16'777'216
        grid_size_0 = (num_octs + block_size - 1) / block_size
        call block_scan<<<grid_size_0, block_size>>>(data, head_idx, num_octs, partial_sums_0)
+       call GPU_Error_Check(__FILE__, __LINE__)
        grid_size_1 = (grid_size_0 + block_size - 1) / block_size
        call block_scan<<<grid_size_1, block_size>>>(partial_sums_0, 1, grid_size_0, partial_sums_1)
+       call GPU_Error_Check(__FILE__, __LINE__)
        if (grid_size_1 > 1) then
           call block_scan<<<1, grid_size_1>>>(partial_sums_1, 1, grid_size_1)
+          call GPU_Error_Check(__FILE__, __LINE__)
           offset = 1 + block_size
           size = grid_size_0 - block_size
           call uniform_add<<<grid_size_1 - 1, block_size>>>(partial_sums_0, offset, size, partial_sums_1)
+          call GPU_Error_Check(__FILE__, __LINE__)
        end if
        offset = head_idx + block_size
        size = num_octs - block_size
        call uniform_add<<<grid_size_0 - 1, block_size>>>(data, offset, size, partial_sums_0, total_sum_d)
+       call GPU_Error_Check(__FILE__, __LINE__)
 
     else if(num_octs <= num_max_2)then
 
        ! Works only for arrray size smaller or equal than huge(1_4)=2'147'483'647
        grid_size_0 = (num_octs + block_size - 1) / block_size
        call block_scan<<<grid_size_0, block_size>>>(data, head_idx, num_octs, partial_sums_0)
+       call GPU_Error_Check(__FILE__, __LINE__)
        grid_size_1 = (grid_size_0 + block_size - 1) / block_size
        call block_scan<<<grid_size_1, block_size>>>(partial_sums_0, 1, grid_size_0, partial_sums_1)
+       call GPU_Error_Check(__FILE__, __LINE__)
        grid_size_2 = (grid_size_1 + block_size - 1) / block_size
        call block_scan<<<grid_size_2, block_size>>>(partial_sums_1, 1, grid_size_1, partial_sums_2)
+       call GPU_Error_Check(__FILE__, __LINE__)
        if (grid_size_2 > 1) then
           call block_scan<<<1, grid_size_2>>>(partial_sums_2, 1, grid_size_2)
+          call GPU_Error_Check(__FILE__, __LINE__)
           offset = 1 + block_size
           size = grid_size_1 - block_size
           call uniform_add<<<grid_size_2 - 1, block_size>>>(partial_sums_1, offset, size, partial_sums_2)
+          call GPU_Error_Check(__FILE__, __LINE__)
        end if
        offset = 1 + block_size
        size =  grid_size_0 - block_size
        call uniform_add<<<grid_size_1 - 1, block_size>>>(partial_sums_0, offset, size, partial_sums_1)
+       call GPU_Error_Check(__FILE__, __LINE__)
        offset = head_idx + block_size
        size = num_octs - block_size
        call uniform_add<<<grid_size_0 - 1, block_size>>>(data, offset, size, partial_sums_0, total_sum_d)
+       call GPU_Error_Check(__FILE__, __LINE__)
 
     else
 
@@ -2724,49 +2820,64 @@ contains
 
        grid_size_0 = (num_octs + block_size - 1) / block_size
        call block_scan_dp<<<grid_size_0, block_size>>>(data, head_idx, num_octs, partial_sums_dp_0)
+       call GPU_Error_Check(__FILE__, __LINE__)
        if (grid_size_0 > 1) then
           call block_scan_dp<<<1, grid_size_0>>>(partial_sums_dp_0, 1, grid_size_0)
+          call GPU_Error_Check(__FILE__, __LINE__)
           offset = head_idx + block_size
           size = num_octs - block_size
           call uniform_add_dp<<<grid_size_0 - 1, block_size>>>(data, offset, size, partial_sums_dp_0)
+          call GPU_Error_Check(__FILE__, __LINE__)
        end if
 
     else if(num_octs <= num_max_1)then
 
        grid_size_0 = (num_octs + block_size - 1) / block_size
        call block_scan_dp<<<grid_size_0, block_size>>>(data, head_idx, num_octs, partial_sums_dp_0)
+       call GPU_Error_Check(__FILE__, __LINE__)
        grid_size_1 = (grid_size_0 + block_size - 1) / block_size
        call block_scan_dp<<<grid_size_1, block_size>>>(partial_sums_dp_0, 1, grid_size_0, partial_sums_dp_1)
+       call GPU_Error_Check(__FILE__, __LINE__)
        if (grid_size_1 > 1) then
           call block_scan_dp<<<1, grid_size_1>>>(partial_sums_dp_1, 1, grid_size_1)
+          call GPU_Error_Check(__FILE__, __LINE__)
           offset = 1 + block_size
           size = grid_size_0 - block_size
           call uniform_add_dp<<<grid_size_1 - 1, block_size>>>(partial_sums_dp_0, offset, size, partial_sums_dp_1)
+          call GPU_Error_Check(__FILE__, __LINE__)
        end if
        offset = head_idx + block_size
        size = num_octs - block_size
        call uniform_add_dp<<<grid_size_0 - 1, block_size>>>(data, offset, size, partial_sums_dp_0)
+       call GPU_Error_Check(__FILE__, __LINE__)
 
     else if(num_octs <= num_max_2)then
 
        grid_size_0 = (num_octs + block_size - 1) / block_size
        call block_scan_dp<<<grid_size_0, block_size>>>(data, head_idx, num_octs, partial_sums_dp_0)
+       call GPU_Error_Check(__FILE__, __LINE__)
        grid_size_1 = (grid_size_0 + block_size - 1) / block_size
        call block_scan_dp<<<grid_size_1, block_size>>>(partial_sums_dp_0, 1, grid_size_0, partial_sums_dp_1)
+       call GPU_Error_Check(__FILE__, __LINE__)
        grid_size_2 = (grid_size_1 + block_size - 1) / block_size
        call block_scan_dp<<<grid_size_2, block_size>>>(partial_sums_dp_1, 1, grid_size_1, partial_sums_dp_2)
+       call GPU_Error_Check(__FILE__, __LINE__)
        if (grid_size_2 > 1) then
           call block_scan_dp<<<1, grid_size_2>>>(partial_sums_dp_2, 1, grid_size_2)
+          call GPU_Error_Check(__FILE__, __LINE__)
           offset = 1 + block_size
           size = grid_size_1 - block_size
           call uniform_add_dp<<<grid_size_2 - 1, block_size>>>(partial_sums_dp_1, offset, size, partial_sums_dp_2)
+          call GPU_Error_Check(__FILE__, __LINE__)
        end if
        offset = 1 + block_size
        size =  grid_size_0 - block_size
        call uniform_add_dp<<<grid_size_1 - 1, block_size>>>(partial_sums_dp_0, offset, size, partial_sums_dp_1)
+       call GPU_Error_Check(__FILE__, __LINE__)
        offset = head_idx + block_size
        size = num_octs - block_size
        call uniform_add_dp<<<grid_size_0 - 1, block_size>>>(data, offset, size, partial_sums_dp_0)
+       call GPU_Error_Check(__FILE__, __LINE__)
 
     else
 
@@ -2807,6 +2918,7 @@ contains
        call nvtxStartRange("GPU reset_hash", color=2)!yellow
        call insert_hash_kernel<<<num_blocks, threads_per_block>>>(grid, hash_key, hash_val, &
             & sim%m%hash_size, ckey_max, key_off, head_idx, num_octs)
+       call GPU_Error_Check(__FILE__, __LINE__)
        call nvtxEndRange()
     endif
 
@@ -2819,6 +2931,7 @@ contains
        call nvtxStartRange("GPU reset_hash", color=2)!yellow
        call insert_hash_kernel<<<num_blocks, threads_per_block>>>(grid, hash_key, hash_val, &
             & sim%m%hash_size, ckey_max, key_off, head_idx, num_octs)
+       call GPU_Error_Check(__FILE__, __LINE__)
        call nvtxEndRange()
     endif
 
@@ -2882,6 +2995,7 @@ contains
        call nvtxStartRange("GPU multipole_leaf", color=1)!blue
        call multipole_leaf<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(unew, uold, grid, &
             & head_idx, num_octs, dx)
+       call GPU_Error_Check(__FILE__, __LINE__)
        call nvtxEndRange()
     end if
 
@@ -2911,6 +3025,7 @@ contains
     if (num_octs > 0) then
        call nvtxStartRange("GPU multipole_split", color=1)!blue
        call multipole_upload<<<num_blocks, num_threads>>>(grid, father, unew, head_idx, num_octs)
+       call GPU_Error_Check(__FILE__, __LINE__)
        call nvtxEndRange()
     end if
 
@@ -2948,6 +3063,7 @@ contains
        call nvtxStartRange("GPU cic_multipole", color=1)!blue
        call multipole_cic<<<num_blocks, num_threads>>>(unew, rho, grid, nbor, &
             & head_idx, num_subgrids, dx, box_size, periodic, sim%r%ngridmax)
+       call GPU_Error_Check(__FILE__, __LINE__)
        call nvtxEndRange()
     endif
 
@@ -2962,6 +3078,7 @@ contains
        if (num_octs > 0) then
           call nvtxStartRange("GPU cic_multipole", color=1)!blue
           call multipole_tot<<<num_blocks, num_threads>>>(unew, head_idx, num_octs, multipole_d)
+          call GPU_Error_Check(__FILE__, __LINE__)
           call nvtxEndRange()
        end if
 
@@ -3003,6 +3120,7 @@ contains
        call deposit_rho<<<num_blocks, dim3(threadsX_per_block, threadsY_per_block, 1)>>>( &
             & uold, unew, rho, nref, grid, nbor, head_idx, num_octs, &
             & dx, vol_loc, m_refine, mass_sph, var_cut_refine, sim%r%ivar_refine, sim%r%ngridmax)
+       call GPU_Error_Check(__FILE__, __LINE__)
        call nvtxEndRange()
     end if
 
@@ -3013,6 +3131,7 @@ contains
        if (num_octs > 0) then
           call nvtxStartRange("GPU cic_multipole2 tot", color=1)!blue
           call multipole_tot<<<num_blocks, num_threads>>>(unew, head_idx, num_octs, multipole_d)
+          call GPU_Error_Check(__FILE__, __LINE__)
           call nvtxEndRange()
        end if
        multipole_h = multipole_d
@@ -3253,6 +3372,7 @@ contains
     call nvtxStartRange("GPU build_mg", color=2)!yellow
     if (ifine == ilevel) then
        call init_prefix_sum_mg<<<num_blocks, num_threads>>>(grid, prefix_sum, head_idx, num_octs)
+       call GPU_Error_Check(__FILE__, __LINE__)
     else
        call init_prefix_sum_mg<<<num_blocks, num_threads>>>(grid_mg, prefix_sum, head_idx, num_octs)
     endif
@@ -3287,6 +3407,7 @@ contains
        if (ifine == ilevel) then
           call make_father_octs<<<num_blocks_2, num_threads_2>>>(grid, grid_mg, phi_mg, f_mg, swap_local, &
                & head_mg, new_noct)
+          call GPU_Error_Check(__FILE__, __LINE__)
        else
           call make_father_octs<<<num_blocks_2, num_threads_2>>>(grid_mg, grid_mg, phi_mg, f_mg, swap_local, &
                & head_mg, new_noct)
@@ -3404,6 +3525,7 @@ contains
        call nvtxStartRange("GPU restrict_mask", color=1)!blue
        call reset_mask_kernel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(f_mg, &
             & head_idx, num_octs, 0d0)
+       call GPU_Error_Check(__FILE__, __LINE__)
        call nvtxEndRange()
     endif
 
@@ -3424,9 +3546,11 @@ contains
        if (ifine == ilevel) then
           call restrict_mask<<<num_blocks, num_threads>>>(grid, father_mg, f, f_mg, &
                & head_idx, head_father, num_octs)
+          call GPU_Error_Check(__FILE__, __LINE__)
        else
           call restrict_mask<<<num_blocks, num_threads>>>(grid_mg, father_mg, f_mg, f_mg, &
                & head_idx, head_father, num_octs)
+          call GPU_Error_Check(__FILE__, __LINE__)
        endif
        call nvtxEndRange()
     endif
@@ -3440,6 +3564,7 @@ contains
        call nvtxStartRange("GPU restrict_mask", color=1)!blue
        mask_max = -1d0
        call volume_to_mask<<<num_blocks, num_threads>>>(f_mg, head_idx, num_octs, mask_max)
+       call GPU_Error_Check(__FILE__, __LINE__)
        mask_max_host = mask_max
        call nvtxEndRange()
        allmasked = (mask_max_host <= 0d0)
@@ -3491,9 +3616,11 @@ contains
        if (ifine == ilevel) then
           call cmp_residual<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(phi, f, nbor, &
                & head_idx, num_octs, fourpi, offset, oneoverdx2, sim%m%ngridmax)
+          call GPU_Error_Check(__FILE__, __LINE__)
        else
           call cmp_residual<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(phi_mg, f_mg, nbor_mg, &
                & head_idx, num_octs, fourpi, offset, oneoverdx2, sim%m_mg%ngridmax)
+          call GPU_Error_Check(__FILE__, __LINE__)
        endif
        call nvtxEndRange()
     endif
@@ -3542,9 +3669,11 @@ contains
        if (ifine == ilevel) then
           call gauss_seidel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(phi, f, nbor, &
                & head_idx, num_octs, dx2, safe, redstep, sim%m%ngridmax)
+          call GPU_Error_Check(__FILE__, __LINE__)
        else
           call gauss_seidel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(phi_mg, f_mg, nbor_mg, &
                & head_idx, num_octs, dx2, safe, redstep, sim%m_mg%ngridmax)
+          call GPU_Error_Check(__FILE__, __LINE__)
        endif
        call nvtxEndRange()
     end if
@@ -3579,6 +3708,7 @@ contains
        call nvtxStartRange("GPU reset_corr", color=1)!blue
        call reset_phi_kernel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(phi_mg, &
             & head_idx, num_octs, 0d0)
+       call GPU_Error_Check(__FILE__, __LINE__)
        call nvtxEndRange()
     endif
 
@@ -3623,9 +3753,11 @@ contains
        if (ifine == ilevel) then
           call restrict_residual<<<num_blocks, num_threads>>>(grid, father_mg, f, f_mg, &
                & head_idx, head_father, num_octs)
+          call GPU_Error_Check(__FILE__, __LINE__)
        else
           call restrict_residual<<<num_blocks, num_threads>>>(grid_mg, father_mg, f_mg, f_mg, &
                & head_idx, head_father, num_octs)
+          call GPU_Error_Check(__FILE__, __LINE__)
        endif
        call nvtxEndRange()
     end if
@@ -3671,9 +3803,11 @@ contains
        if (ifine == ilevel) then
           call interpolate_correct<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(grid, &
                & father_mg, nbor_mg, phi, phi_mg, f, head_idx, head_father, num_octs)
+          call GPU_Error_Check(__FILE__, __LINE__)
        else
           call interpolate_correct<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(grid_mg, &
                & father_mg, nbor_mg, phi_mg, phi_mg, f_mg, head_idx, head_father, num_octs)
+          call GPU_Error_Check(__FILE__, __LINE__)
        endif
        call nvtxEndRange()
     end if
@@ -3718,6 +3852,7 @@ contains
     if (num_octs > 0) then
        call nvtxStartRange("GPU residual_norm2", color=1)!blue
        call residual_norm<<<num_blocks, num_threads>>>(f, head_idx, num_octs, norm_tot)
+       call GPU_Error_Check(__FILE__, __LINE__)
        norm_tot_host = norm_tot ! device to host
        call nvtxEndRange()
        norm = dx2 * norm_tot_host
@@ -3758,6 +3893,7 @@ contains
     if (num_octs > 0) then
        call nvtxStartRange("GPU rhs_norm2", color=1)!blue
        call rhs_norm<<<num_blocks, num_threads>>>(f, head_idx, num_octs, norm_tot)
+       call GPU_Error_Check(__FILE__, __LINE__)
        norm_tot_host = norm_tot ! device to host
        call nvtxEndRange()
        norm = dx2 * norm_tot_host
@@ -3797,6 +3933,7 @@ contains
        call nvtxStartRange("GPU gradient_phi", color=1)!blue
        call gradient_phi<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(phi, f, nbor, &
             & head_idx, num_octs, dx)
+       call GPU_Error_Check(__FILE__, __LINE__)
        call nvtxEndRange()
     end if
 
@@ -3890,6 +4027,7 @@ contains
     if (num_octs > 0) then
        call nvtxStartRange("GPU epot", color=1)!blue
        call cmp_epot<<<num_blocks, num_threads>>>(grid, f, head_idx, num_octs, epot_tot)
+       call GPU_Error_Check(__FILE__, __LINE__)
        epot_tot_host = epot_tot ! device to host
        call nvtxEndRange()
        epot = fact * epot_tot_host
@@ -3933,6 +4071,7 @@ contains
     if (num_octs > 0) then
        call nvtxStartRange("GPU rhomax", color=1)!blue
        call cmp_rhomax<<<num_blocks, num_threads>>>(rho, head_idx, num_octs, rhomax_tot)
+       call GPU_Error_Check(__FILE__, __LINE__)
        rhomax_tot_host = rhomax_tot ! device to host
        call nvtxEndRange()
        rhomax = rhomax_tot_host

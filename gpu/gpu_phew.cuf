@@ -244,10 +244,12 @@ contains
     block_dim = dim3(twotondim, 16, 1)
     grid_dim = dim3((num_octs + 15) / 16, 1, 1)
     call flag_test_cells_kernel<<<grid_dim, block_dim>>>(prefix_sum, rho, grid, threshold, 1, num_octs)
+    call GPU_Error_Check(__FILE__, __LINE__)
 
     ! The CPU limit, on the 64-bit count before it is narrowed
     ntest8_d = 0
     call phew_count_test_kernel<<<(num_octs + 255) / 256, 256>>>(num_octs, ntest8_d)
+    call GPU_Error_Check(__FILE__, __LINE__)
     ntest8 = ntest8_d
     if (ntest8 > sim%m%ngridmax) then
        write(*,*) 'Error: cells above the core clump threshold (', ntest8, ') exceed ngridmax (', sim%m%ngridmax, ')'
@@ -260,13 +262,16 @@ contains
     call phew_allocate_test(ntest)
     call scatter_test_cells_kernel<<<grid_dim, block_dim>>>(phew_grid0, phew_cell0, phew_level0, phew_dens0, &
          & prefix_sum, rho, grid, threshold, 1, num_octs)
+    call GPU_Error_Check(__FILE__, __LINE__)
 
     ! Stable sort by decreasing density: equal densities keep the collect order
     nblock = (ntest + 255) / 256
     call phew_sort_key_kernel<<<nblock, 256>>>(ntest)
+    call GPU_Error_Check(__FILE__, __LINE__)
     call radix_sort(c_loc(phew_key_in), c_loc(phew_key_out), c_loc(phew_order_in), c_loc(phew_order_out), &
          & 1, ntest, 0, 64)
     call phew_gather_test_kernel<<<nblock, 256>>>(ntest)
+    call GPU_Error_Check(__FILE__, __LINE__)
   end subroutine phew_collect_test
 
   ! =========================================================================
@@ -402,10 +407,12 @@ contains
     phew_map(:, 1:sim%m%ifree-1) = 0
     nblock = (ntest + 255) / 256
     call phew_map_kernel<<<nblock, 256>>>(ntest)
+    call GPU_Error_Check(__FILE__, __LINE__)
 
     ! 56 threads per test cell, so block size 224 (4 cells per block)
     call phew_neighbour_kernel<<<(ntest + ncell_block - 1) / ncell_block, nnbor*ncell_block>>>( &
          & hash_key, hash_val, sim%m%hash_size, ntest, sim%m%ngridmax)
+    call GPU_Error_Check(__FILE__, __LINE__)
 
     ! Number the peaks in test order, i.e. by decreasing density
     call gpu_scan(phew_peak, 1, ntest, npeak_d)
@@ -450,9 +457,11 @@ contains
     do while (nmove_h > 0)
        nmove_d = 0
        call pointer_jump_kernel<<<nblock, 256>>>(phew_parent, nmove_d, ntest)
+       call GPU_Error_Check(__FILE__, __LINE__)
        nmove_h = nmove_d
     end do
     call phew_label_kernel<<<nblock, 256>>>(ntest)
+    call GPU_Error_Check(__FILE__, __LINE__)
   end subroutine phew_collect_patch
 
   ! =========================================================================
@@ -546,9 +555,12 @@ contains
     integer, intent(in) :: ntest, npeak
 
     call phew_init_saddle_kernel<<<(npeak + 255) / 256, 256>>>(threshold, npeak)
+    call GPU_Error_Check(__FILE__, __LINE__)
     ! 56 threads per test cell, so block size 224 (4 cells per block)
     call phew_saddle_kernel<<<(ntest + ncell_block - 1) / ncell_block, nnbor*ncell_block>>>(threshold, ntest, 1)
+    call GPU_Error_Check(__FILE__, __LINE__)
     call phew_saddle_kernel<<<(ntest + ncell_block - 1) / ncell_block, nnbor*ncell_block>>>(threshold, ntest, 2)
+    call GPU_Error_Check(__FILE__, __LINE__)
   end subroutine phew_collect_saddle
 
   ! =========================================================================
@@ -630,6 +642,7 @@ contains
        nmerge_d = 0
        call phew_merge_kernel<<<(npeak + 255) / 256, 256>>>(real(sim%c%relevance_threshold, kind=dp), &
             & npeak, nmerge_d)
+       call GPU_Error_Check(__FILE__, __LINE__)
        nmerge_h = nmerge_d
        if (nmerge_h == 0) exit
 
@@ -638,16 +651,19 @@ contains
        do while (nmove_h > 0)
           nmove_d = 0
           call pointer_jump_kernel<<<(npeak + 255) / 256, 256>>>(phew_new_peak, nmove_d, npeak)
+          call GPU_Error_Check(__FILE__, __LINE__)
           nmove_h = nmove_d
        end do
 
        ! New peak patches and their saddle points
        call phew_relabel_kernel<<<(ntest + 255) / 256, 256>>>(ntest)
+       call GPU_Error_Check(__FILE__, __LINE__)
        call phew_collect_saddle(threshold, ntest, npeak)
     end do
 
     nalive_d = 0
     call phew_relevance_kernel<<<(npeak + 255) / 256, 256>>>(npeak, nalive_d)
+    call GPU_Error_Check(__FILE__, __LINE__)
     nalive_h = nalive_d
     if (sim%g%myid == 1) write(*,'(" Found",I12,"  relevant peaks")') nalive_h
   end subroutine phew_merge_clumps
@@ -979,20 +995,26 @@ contains
 
     ! Peak cell position, velocity and acceleration
     call phew_peak_kernel<<<(npeak + 255) / 256, 256>>>(boxlen, npeak)
+    call GPU_Error_Check(__FILE__, __LINE__)
     if (.not. (sim%r%core_use_clump_prop_criteria .or. sim%r%core_use_contracting_all_axes)) return
 
     ! Test cells of each peak patch, by test index
     call phew_label_key_kernel<<<(ntest + 255) / 256, 256>>>(ntest)
+    call GPU_Error_Check(__FILE__, __LINE__)
     call radix_sort(c_loc(phew_key_in), c_loc(phew_key_out), c_loc(phew_order_in), c_loc(phew_order_out), &
          & 1, ntest, 0, 32)
     phew_begin(1:npeak) = 1
     phew_end(1:npeak) = 0
     call phew_segment_kernel<<<(ntest + 255) / 256, 256>>>(ntest)
+    call GPU_Error_Check(__FILE__, __LINE__)
 
     ! Gas mass and centre of mass, then the virial terms about it
     call phew_gas_mass_kernel<<<npeak, nprop>>>(boxlen, smallr)
+    call GPU_Error_Check(__FILE__, __LINE__)
     call phew_virial_kernel<<<npeak, nprop>>>(boxlen, smallr, gamma, dx_min)
+    call GPU_Error_Check(__FILE__, __LINE__)
     call phew_criteria_kernel<<<(npeak + 255) / 256, 256>>>(sim%r%core_use_contracting_all_axes, npeak)
+    call GPU_Error_Check(__FILE__, __LINE__)
   end subroutine phew_clump_properties
 
   ! =========================================================================
@@ -1025,6 +1047,7 @@ contains
     ! Test cell of each core, level by level, as particle_peak_id
     call launch_particle_id(sim, sim%core, core_xp, phew_core_test, phew_map, int(sim%r%ncoremax, kind=8))
     call phew_ncore_kernel<<<(sim%core%npart + 255) / 256, 256>>>(sim%core%npart)
+    call GPU_Error_Check(__FILE__, __LINE__)
   end subroutine phew_count_cores
 
   ! =========================================================================
@@ -1253,6 +1276,7 @@ contains
          & sim%r%core_use_contracting_criteria .or. sim%r%core_use_contracting_all_axes, &
          & real(mseed, kind=dp), real(sim%r%boxlen, kind=dp), real(sim%r%smallr, kind=dp), &
          & real(sim%r%gamma, kind=dp), real(u_floor, kind=dp), real(factG, kind=dp), real(pi, kind=dp))
+    call GPU_Error_Check(__FILE__, __LINE__)
 
     ! 2. New core index of each flagged peak
     call gpu_scan(prefix_sum, 1, npeak, nnew_d)
@@ -1264,12 +1288,14 @@ contains
        stop
     endif
     call compute_sink_swap_table<<<(npeak + 255) / 256, 256>>>(swap_local, prefix_sum, npeak)
+    call GPU_Error_Check(__FILE__, __LINE__)
 
     ! 3. Create the cores
     dtnew_part_d = sim%g%dtnew
     call phew_formation_kernel<<<(nnew + 255) / 256, 256>>>(nnew, sim%core%npart, sim%core%npart_tot, &
          & nstep_coarse, real(mseed, kind=dp), real(sim%g%texp, kind=dp), real(sim%r%boxlen, kind=dp), &
          & real(sim%r%smallr, kind=dp), real(u_floor, kind=dp), sim%r%metal, sim%r%imetal)
+    call GPU_Error_Check(__FILE__, __LINE__)
 
     ! 4. Update host-side metadata
     sim%core%npart = sim%core%npart + nnew

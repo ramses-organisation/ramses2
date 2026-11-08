@@ -429,12 +429,14 @@ subroutine gpu_split_part(sim, ilevel)
        & grid, hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, &
        & skip1, skip2, skip3, dx_loc, ilevel, head_idx, num_parts, &
        & leading)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
   ! Initialize prefix sum using swap table sortp
   call nvtxStartRange("gpu_split_part", color=4) ! purple
   call init_prefix_sum_part_hilbert_fine<<<num_blocks, num_threads>>>( &
        & isp_swap, sortp, prefix_sum, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
   ! Compute prefix sum
@@ -450,11 +452,13 @@ subroutine gpu_split_part(sim, ilevel)
   call write_swap_global_hilbert_partition<<<num_blocks, num_threads>>>( &
        & isp_swap, sortp, prefix_sum, &
        & head_idx, num_parts, n_coarse)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
   call nvtxStartRange("gpu_split_part", color=4) ! purple
   call write_sortp_part<<<num_blocks, num_threads>>>(sortp, isp_swap, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
   ! Shuffle data according to swap table
@@ -464,42 +468,54 @@ subroutine gpu_split_part(sim, ilevel)
   do idim = 1, ndim
      call sort_gather_part_real_col<<<num_blocks, num_threads>>>(xp_swap, xp, &
           & sortp, head_idx, num_parts, leading, idim)
+     call GPU_Error_Check(__FILE__, __LINE__)
      call sort_scatter_part_real_col<<<num_blocks, num_threads>>>(xp, xp_swap, &
           & head_idx, num_parts, leading, idim)
+     call GPU_Error_Check(__FILE__, __LINE__)
   end do
 
   ! Velocities
   do idim = 1, ndim
      call sort_gather_part_real_col<<<num_blocks, num_threads>>>(xp_swap, vp, &
           & sortp, head_idx, num_parts, leading, idim)
+     call GPU_Error_Check(__FILE__, __LINE__)
      call sort_scatter_part_real_col<<<num_blocks, num_threads>>>(vp, xp_swap, &
           & head_idx, num_parts, leading, idim)
+     call GPU_Error_Check(__FILE__, __LINE__)
   end do
 
   ! Masses
   call sort_gather_part_real_1d<<<num_blocks, num_threads>>>(xp_swap, mp, &
        & sortp, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call sort_scatter_part_real_1d<<<num_blocks, num_threads>>>(mp, xp_swap, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
 
   ! Levels
   call sort_gather_part_i4_1d<<<num_blocks, num_threads>>>(isp_swap, levelp, &
        & sortp, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call sort_scatter_part_i4_1d<<<num_blocks, num_threads>>>(levelp, isp_swap, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
 
   ! Particle ids
   if (allocated(idp)) then
 #ifndef LONGINT
      call sort_gather_part_i8_1d<<<num_blocks, num_threads>>>(isp_swap, idp, &
           & sortp, head_idx, num_parts)
+     call GPU_Error_Check(__FILE__, __LINE__)
      call sort_scatter_part_i8_1d<<<num_blocks, num_threads>>>(idp, isp_swap, &
           & head_idx, num_parts)
+     call GPU_Error_Check(__FILE__, __LINE__)
 #else
      call sort_gather_part_i8_1d<<<num_blocks, num_threads>>>(idp_swap, idp, &
           & sortp, head_idx, num_parts)
+     call GPU_Error_Check(__FILE__, __LINE__)
      call sort_scatter_part_i8_1d<<<num_blocks, num_threads>>>(idp, idp_swap, &
           & head_idx, num_parts)
+     call GPU_Error_Check(__FILE__, __LINE__)
 #endif
   end if
   call nvtxEndRange()
@@ -555,12 +571,14 @@ subroutine gpu_split_star(sim, ilevel)
        & grid, hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, &
        & skip1, skip2, skip3, dx_loc, ilevel, head_idx, num_parts, &
        & leading)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
   ! Initialize prefix sum using swap table sortp
   call nvtxStartRange("gpu_split_star", color=4) ! purple
   call init_prefix_sum_part_hilbert_fine<<<num_blocks, num_threads>>>( &
        & isp_swap, star_sortp, prefix_sum, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
   ! Compute prefix sum
@@ -576,11 +594,13 @@ subroutine gpu_split_star(sim, ilevel)
   call write_swap_global_hilbert_partition<<<num_blocks, num_threads>>>( &
        & isp_swap, star_sortp, prefix_sum, &
        & head_idx, num_parts, n_coarse)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
   call nvtxStartRange("gpu_split_star", color=4) ! purple
   call write_sortp_part<<<num_blocks, num_threads>>>(star_sortp, isp_swap, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
   ! Shuffle data according to swap table
@@ -590,53 +610,69 @@ subroutine gpu_split_star(sim, ilevel)
   do idim = 1, ndim
      call sort_gather_part_real_col<<<num_blocks, num_threads>>>(xp_swap, star_xp, &
           & star_sortp, head_idx, num_parts, leading, idim)
+     call GPU_Error_Check(__FILE__, __LINE__)
      call sort_scatter_part_real_col<<<num_blocks, num_threads>>>(star_xp, xp_swap, &
           & head_idx, num_parts, leading, idim)
+     call GPU_Error_Check(__FILE__, __LINE__)
   end do
 
   ! Velocities
   do idim = 1, ndim
      call sort_gather_part_real_col<<<num_blocks, num_threads>>>(xp_swap, star_vp, &
           & star_sortp, head_idx, num_parts, leading, idim)
+     call GPU_Error_Check(__FILE__, __LINE__)
      call sort_scatter_part_real_col<<<num_blocks, num_threads>>>(star_vp, xp_swap, &
           & head_idx, num_parts, leading, idim)
+     call GPU_Error_Check(__FILE__, __LINE__)
   end do
 
   ! Masses
   call sort_gather_part_real_1d<<<num_blocks, num_threads>>>(xp_swap, star_mp, &
        & star_sortp, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call sort_scatter_part_real_1d<<<num_blocks, num_threads>>>(star_mp, xp_swap, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
 
   ! Birth time
   call sort_gather_part_real_1d<<<num_blocks, num_threads>>>(xp_swap, star_tp, &
        & star_sortp, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call sort_scatter_part_real_1d<<<num_blocks, num_threads>>>(star_tp, xp_swap, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
 
   ! Metallicity
   call sort_gather_part_real_1d<<<num_blocks, num_threads>>>(xp_swap, star_zp, &
        & star_sortp, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call sort_scatter_part_real_1d<<<num_blocks, num_threads>>>(star_zp, xp_swap, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
 
   ! Levels
   call sort_gather_part_i4_1d<<<num_blocks, num_threads>>>(isp_swap, star_levelp, &
        & star_sortp, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call sort_scatter_part_i4_1d<<<num_blocks, num_threads>>>(star_levelp, isp_swap, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
 
   ! Particle ids
 #ifndef LONGINT
   call sort_gather_part_i8_1d<<<num_blocks, num_threads>>>(isp_swap, star_idp, &
        & star_sortp, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call sort_scatter_part_i8_1d<<<num_blocks, num_threads>>>(star_idp, isp_swap, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
 #else
   call sort_gather_part_i8_1d<<<num_blocks, num_threads>>>(idp_swap, star_idp, &
        & star_sortp, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call sort_scatter_part_i8_1d<<<num_blocks, num_threads>>>(star_idp, idp_swap, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
 #endif
   call nvtxEndRange()
 
@@ -691,12 +727,14 @@ subroutine gpu_split_sink(sim, ilevel)
        & grid, hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, &
        & skip1, skip2, skip3, dx_loc, ilevel, head_idx, num_parts, &
        & leading)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
   ! Initialize prefix sum using swap table sortp
   call nvtxStartRange("gpu_split_sink", color=4) ! purple
   call init_prefix_sum_part_hilbert_fine<<<num_blocks, num_threads>>>( &
        & isp_swap, sink_sortp, prefix_sum, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
   ! Compute prefix sum
@@ -712,11 +750,13 @@ subroutine gpu_split_sink(sim, ilevel)
   call write_swap_global_hilbert_partition<<<num_blocks, num_threads>>>( &
        & isp_swap, sink_sortp, prefix_sum, &
        & head_idx, num_parts, n_coarse)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
   call nvtxStartRange("gpu_split_sink", color=4) ! purple
   call write_sortp_part<<<num_blocks, num_threads>>>(sink_sortp, isp_swap, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
   ! Shuffle data according to swap table
@@ -726,82 +766,106 @@ subroutine gpu_split_sink(sim, ilevel)
   do idim = 1, ndim
      call sort_gather_part_real_col<<<num_blocks, num_threads>>>(xp_swap, sink_xp, &
           & sink_sortp, head_idx, num_parts, leading, idim)
+     call GPU_Error_Check(__FILE__, __LINE__)
      call sort_scatter_part_real_col<<<num_blocks, num_threads>>>(sink_xp, xp_swap, &
           & head_idx, num_parts, leading, idim)
+     call GPU_Error_Check(__FILE__, __LINE__)
   end do
 
   ! Velocities
   do idim = 1, ndim
      call sort_gather_part_real_col<<<num_blocks, num_threads>>>(xp_swap, sink_vp, &
           & sink_sortp, head_idx, num_parts, leading, idim)
+     call GPU_Error_Check(__FILE__, __LINE__)
      call sort_scatter_part_real_col<<<num_blocks, num_threads>>>(sink_vp, xp_swap, &
           & head_idx, num_parts, leading, idim)
+     call GPU_Error_Check(__FILE__, __LINE__)
   end do
 
   ! Accelerations
   do idim = 1, ndim
      call sort_gather_part_real_col<<<num_blocks, num_threads>>>(xp_swap, sink_fp, &
           & sink_sortp, head_idx, num_parts, leading, idim)
+     call GPU_Error_Check(__FILE__, __LINE__)
      call sort_scatter_part_real_col<<<num_blocks, num_threads>>>(sink_fp, xp_swap, &
           & head_idx, num_parts, leading, idim)
+     call GPU_Error_Check(__FILE__, __LINE__)
   end do
 
   ! Angular momenta
   do idim = 1, ndim
      call sort_gather_part_real_col<<<num_blocks, num_threads>>>(xp_swap, sink_jp, &
           & sink_sortp, head_idx, num_parts, leading, idim)
+     call GPU_Error_Check(__FILE__, __LINE__)
      call sort_scatter_part_real_col<<<num_blocks, num_threads>>>(sink_jp, xp_swap, &
           & head_idx, num_parts, leading, idim)
+     call GPU_Error_Check(__FILE__, __LINE__)
   end do
 
   ! Masses
   call sort_gather_part_real_1d<<<num_blocks, num_threads>>>(xp_swap, sink_mp, &
        & sink_sortp, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call sort_scatter_part_real_1d<<<num_blocks, num_threads>>>(sink_mp, xp_swap, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
 
   ! Birth time
   call sort_gather_part_real_1d<<<num_blocks, num_threads>>>(xp_swap, sink_tp, &
        & sink_sortp, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call sort_scatter_part_real_1d<<<num_blocks, num_threads>>>(sink_tp, xp_swap, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
 
   ! Merging time
   call sort_gather_part_real_1d<<<num_blocks, num_threads>>>(xp_swap, sink_tm, &
        & sink_sortp, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call sort_scatter_part_real_1d<<<num_blocks, num_threads>>>(sink_tm, xp_swap, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
 
   ! Levels
   call sort_gather_part_i4_1d<<<num_blocks, num_threads>>>(isp_swap, sink_levelp, &
        & sink_sortp, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call sort_scatter_part_i4_1d<<<num_blocks, num_threads>>>(sink_levelp, isp_swap, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
 
   ! Particle ids
 #ifndef LONGINT
   call sort_gather_part_i8_1d<<<num_blocks, num_threads>>>(isp_swap, sink_idp, &
        & sink_sortp, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call sort_scatter_part_i8_1d<<<num_blocks, num_threads>>>(sink_idp, isp_swap, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
 #else
   call sort_gather_part_i8_1d<<<num_blocks, num_threads>>>(idp_swap, sink_idp, &
        & sink_sortp, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call sort_scatter_part_i8_1d<<<num_blocks, num_threads>>>(sink_idp, idp_swap, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
 #endif
 
   ! Merging ids
 #ifndef LONGINT
   call sort_gather_part_i8_1d<<<num_blocks, num_threads>>>(isp_swap, sink_idm, &
        & sink_sortp, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call sort_scatter_part_i8_1d<<<num_blocks, num_threads>>>(sink_idm, isp_swap, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
 #else
   call sort_gather_part_i8_1d<<<num_blocks, num_threads>>>(idp_swap, sink_idm, &
        & sink_sortp, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call sort_scatter_part_i8_1d<<<num_blocks, num_threads>>>(sink_idm, idp_swap, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
 #endif
   call nvtxEndRange()
 
@@ -857,14 +921,17 @@ subroutine gpu_split_core(sim, ilevel)
        & grid, hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, &
        & skip1, skip2, skip3, dx_loc, ilevel, head_idx, num_parts, &
        & leading)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
   ! Initialize prefix sums in sortp order and in row order
   call nvtxStartRange("gpu_split_core", color=4) ! purple
   call init_prefix_sum_part_hilbert_fine<<<num_blocks, num_threads>>>( &
        & isp_swap, core_sortp, prefix_sum, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call init_prefix_sum_part<<<num_blocks, num_threads>>>( &
        & isp_swap, prefix_sum_phys, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
   ! Compute prefix sums
@@ -881,11 +948,13 @@ subroutine gpu_split_core(sim, ilevel)
   call write_swap_global_cpu_partition<<<num_blocks, num_threads>>>( &
        & isp_swap, core_sortp, prefix_sum, prefix_sum_phys, &
        & head_idx, num_parts, n_coarse)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
   call nvtxStartRange("gpu_split_core", color=4) ! purple
   call write_sortp_part<<<num_blocks, num_threads>>>(core_sortp, isp_swap, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
   ! Shuffle data according to swap table
@@ -895,81 +964,105 @@ subroutine gpu_split_core(sim, ilevel)
   do idim = 1, ndim
      call sort_gather_part_real_col<<<num_blocks, num_threads>>>(xp_swap, core_xp, &
           & core_sortp, head_idx, num_parts, leading, idim)
+     call GPU_Error_Check(__FILE__, __LINE__)
      call sort_scatter_part_real_col<<<num_blocks, num_threads>>>(core_xp, xp_swap, &
           & head_idx, num_parts, leading, idim)
+     call GPU_Error_Check(__FILE__, __LINE__)
   end do
 
   ! Velocities
   do idim = 1, ndim
      call sort_gather_part_real_col<<<num_blocks, num_threads>>>(xp_swap, core_vp, &
           & core_sortp, head_idx, num_parts, leading, idim)
+     call GPU_Error_Check(__FILE__, __LINE__)
      call sort_scatter_part_real_col<<<num_blocks, num_threads>>>(core_vp, xp_swap, &
           & head_idx, num_parts, leading, idim)
+     call GPU_Error_Check(__FILE__, __LINE__)
   end do
 
   ! Accelerations
   do idim = 1, ndim
      call sort_gather_part_real_col<<<num_blocks, num_threads>>>(xp_swap, core_fp, &
           & core_sortp, head_idx, num_parts, leading, idim)
+     call GPU_Error_Check(__FILE__, __LINE__)
      call sort_scatter_part_real_col<<<num_blocks, num_threads>>>(core_fp, xp_swap, &
           & head_idx, num_parts, leading, idim)
+     call GPU_Error_Check(__FILE__, __LINE__)
   end do
 
   ! Angular momenta
   do idim = 1, ndim
      call sort_gather_part_real_col<<<num_blocks, num_threads>>>(xp_swap, core_jp, &
           & core_sortp, head_idx, num_parts, leading, idim)
+     call GPU_Error_Check(__FILE__, __LINE__)
      call sort_scatter_part_real_col<<<num_blocks, num_threads>>>(core_jp, xp_swap, &
           & head_idx, num_parts, leading, idim)
+     call GPU_Error_Check(__FILE__, __LINE__)
   end do
 
   ! Masses
   call sort_gather_part_real_1d<<<num_blocks, num_threads>>>(xp_swap, core_mp, &
        & core_sortp, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call sort_scatter_part_real_1d<<<num_blocks, num_threads>>>(core_mp, xp_swap, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
 
   ! Metallicity
   call sort_gather_part_real_1d<<<num_blocks, num_threads>>>(xp_swap, core_zp, &
        & core_sortp, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call sort_scatter_part_real_1d<<<num_blocks, num_threads>>>(core_zp, xp_swap, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
 
   ! Birth time
   call sort_gather_part_real_1d<<<num_blocks, num_threads>>>(xp_swap, core_tp, &
        & core_sortp, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call sort_scatter_part_real_1d<<<num_blocks, num_threads>>>(core_tp, xp_swap, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
 
   ! Specific energy
   call sort_gather_part_real_1d<<<num_blocks, num_threads>>>(xp_swap, core_up, &
        & core_sortp, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call sort_scatter_part_real_1d<<<num_blocks, num_threads>>>(core_up, xp_swap, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
 
   ! Levels
   call sort_gather_part_i4_1d<<<num_blocks, num_threads>>>(isp_swap, core_levelp, &
        & core_sortp, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call sort_scatter_part_i4_1d<<<num_blocks, num_threads>>>(core_levelp, isp_swap, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
 
   ! Last accretion steps
   call sort_gather_part_i4_1d<<<num_blocks, num_threads>>>(isp_swap, core_nacc, &
        & core_sortp, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call sort_scatter_part_i4_1d<<<num_blocks, num_threads>>>(core_nacc, isp_swap, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
 
   ! Particle ids
 #ifndef LONGINT
   call sort_gather_part_i8_1d<<<num_blocks, num_threads>>>(isp_swap, core_idp, &
        & core_sortp, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call sort_scatter_part_i8_1d<<<num_blocks, num_threads>>>(core_idp, isp_swap, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
 #else
   call sort_gather_part_i8_1d<<<num_blocks, num_threads>>>(idp_swap, core_idp, &
        & core_sortp, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call sort_scatter_part_i8_1d<<<num_blocks, num_threads>>>(core_idp, idp_swap, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
 #endif
   call nvtxEndRange()
 
@@ -1024,12 +1117,14 @@ subroutine gpu_split_tree(sim, ilevel)
        & grid, hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, &
        & skip1, skip2, skip3, dx_loc, ilevel, head_idx, num_parts, &
        & leading)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
   ! Initialize prefix sum using swap table sortp
   call nvtxStartRange("gpu_split_tree", color=4) ! purple
   call init_prefix_sum_part_hilbert_fine<<<num_blocks, num_threads>>>( &
        & isp_swap, tree_sortp, prefix_sum, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
   ! Compute prefix sum
@@ -1045,11 +1140,13 @@ subroutine gpu_split_tree(sim, ilevel)
   call write_swap_global_hilbert_partition<<<num_blocks, num_threads>>>( &
        & isp_swap, tree_sortp, prefix_sum, &
        & head_idx, num_parts, n_coarse)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
   call nvtxStartRange("gpu_split_tree", color=4) ! purple
   call write_sortp_part<<<num_blocks, num_threads>>>(tree_sortp, isp_swap, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
   ! Shuffle data according to swap table
@@ -1059,73 +1156,95 @@ subroutine gpu_split_tree(sim, ilevel)
   do idim = 1, ndim
      call sort_gather_part_real_col<<<num_blocks, num_threads>>>(xp_swap, tree_xp, &
           & tree_sortp, head_idx, num_parts, leading, idim)
+     call GPU_Error_Check(__FILE__, __LINE__)
      call sort_scatter_part_real_col<<<num_blocks, num_threads>>>(tree_xp, xp_swap, &
           & head_idx, num_parts, leading, idim)
+     call GPU_Error_Check(__FILE__, __LINE__)
   end do
 
   ! Velocities
   do idim = 1, ndim
      call sort_gather_part_real_col<<<num_blocks, num_threads>>>(xp_swap, tree_vp, &
           & tree_sortp, head_idx, num_parts, leading, idim)
+     call GPU_Error_Check(__FILE__, __LINE__)
      call sort_scatter_part_real_col<<<num_blocks, num_threads>>>(tree_vp, xp_swap, &
           & head_idx, num_parts, leading, idim)
+     call GPU_Error_Check(__FILE__, __LINE__)
   end do
 
   ! Masses
   call sort_gather_part_real_1d<<<num_blocks, num_threads>>>(xp_swap, tree_mp, &
        & tree_sortp, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call sort_scatter_part_real_1d<<<num_blocks, num_threads>>>(tree_mp, xp_swap, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
 
   ! Birth time
   call sort_gather_part_real_1d<<<num_blocks, num_threads>>>(xp_swap, tree_tp, &
        & tree_sortp, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call sort_scatter_part_real_1d<<<num_blocks, num_threads>>>(tree_tp, xp_swap, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
 
   ! Merging time
   call sort_gather_part_real_1d<<<num_blocks, num_threads>>>(xp_swap, tree_tm, &
        & tree_sortp, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call sort_scatter_part_real_1d<<<num_blocks, num_threads>>>(tree_tm, xp_swap, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
 
   ! Levels
   call sort_gather_part_i4_1d<<<num_blocks, num_threads>>>(isp_swap, tree_levelp, &
        & tree_sortp, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call sort_scatter_part_i4_1d<<<num_blocks, num_threads>>>(tree_levelp, isp_swap, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
 
   ! Particle ids
 #ifndef LONGINT
   call sort_gather_part_i8_1d<<<num_blocks, num_threads>>>(isp_swap, tree_idp, &
        & tree_sortp, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call sort_scatter_part_i8_1d<<<num_blocks, num_threads>>>(tree_idp, isp_swap, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
 #else
   call sort_gather_part_i8_1d<<<num_blocks, num_threads>>>(idp_swap, tree_idp, &
        & tree_sortp, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call sort_scatter_part_i8_1d<<<num_blocks, num_threads>>>(tree_idp, idp_swap, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
 #endif
 
   ! Merging ids
 #ifndef LONGINT
   call sort_gather_part_i8_1d<<<num_blocks, num_threads>>>(isp_swap, tree_idm, &
        & tree_sortp, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call sort_scatter_part_i8_1d<<<num_blocks, num_threads>>>(tree_idm, isp_swap, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
 #else
   call sort_gather_part_i8_1d<<<num_blocks, num_threads>>>(idp_swap, tree_idm, &
        & tree_sortp, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call sort_scatter_part_i8_1d<<<num_blocks, num_threads>>>(tree_idm, idp_swap, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
 #endif
 
   ! Tracking (peak) ids
   call sort_gather_part_i4_1d<<<num_blocks, num_threads>>>(isp_swap, tree_idt, &
        & tree_sortp, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call sort_scatter_part_i4_1d<<<num_blocks, num_threads>>>(tree_idt, isp_swap, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
   ! Bookkeeping
@@ -1281,12 +1400,14 @@ subroutine gpu_sort_part(sim, ilevel)
   call compute_hkey_part_kernel<<<num_blocks, num_threads>>>(xp, idp_swap, &
        & box_ckey_min, box_ckey_max, d_skip, dx_inv, head_idx, num_parts, &
        & int(sim%r%npartmax,8), level, shift)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
 #if defined(CUB_SORT_PART)
   ! generate the input sequence [head_idx ... head_idx + num_parts - 1]
   nblks = (((num_parts + nrnd - 1)/nrnd) + nthr - 1)/nthr
   call init_global_swap_table_kernel_u8<<<nblks,nthr>>>(isp_swap, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
 
   ! idp_swap has keys to sort by. isp_swap is the input indices sequence
   ! sortp has the sorted indices. hkeyp will have the sorted keys. we don't
@@ -1299,6 +1420,7 @@ subroutine gpu_sort_part(sim, ilevel)
   call nvtxStartRange("gpu_sort_part:init_sortp", color=4)
   call init_global_swap_table_kernel<<<num_blocks, num_threads>>>(sortp, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
   ! Loop over bits (one NVTX range per radix pass; kernels visible in CUDA row)
@@ -1310,6 +1432,7 @@ subroutine gpu_sort_part(sim, ilevel)
      ! Init prefix sum based on Hilbert key bit value
      call init_prefix_sum_part_bit<<<num_blocks, num_threads>>>(idp_swap, &
           & sortp, prefix_sum, head_idx, num_parts, ibit)
+     call GPU_Error_Check(__FILE__, __LINE__)
 
      ! Compute prefix sum
      call gpu_scan(prefix_sum, head_idx, num_parts)
@@ -1317,10 +1440,12 @@ subroutine gpu_sort_part(sim, ilevel)
      ! Compute sorted indices
      call compute_local_swap_table<<<num_blocks, num_threads>>>(isp_swap, &
           & sortp, prefix_sum, head_idx, num_parts)
+     call GPU_Error_Check(__FILE__, __LINE__)
 
      ! Store back to sortp
      call update_global_swap_table<<<num_blocks, num_threads>>>(sortp, &
           & isp_swap, head_idx, num_parts)
+     call GPU_Error_Check(__FILE__, __LINE__)
 
      call nvtxEndRange()
   end do
@@ -1376,12 +1501,14 @@ subroutine gpu_sort_star(sim, ilevel)
   call compute_hkey_part_kernel<<<num_blocks, num_threads>>>(star_xp, idp_swap, &
        & box_ckey_min, box_ckey_max, d_skip, dx_inv, head_idx, num_parts, &
        & int(sim%r%nstarmax,8), level, shift)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
 #if defined(CUB_SORT_PART)
   ! generate the input sequence [head_idx ... head_idx + num_parts - 1]
   nblks = (((num_parts + nrnd - 1)/nrnd) + nthr - 1)/nthr
   call init_global_swap_table_kernel_u8<<<nblks,nthr>>>(isp_swap, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
 
   ! idp_swap has keys to sort by. isp_swap is the input indices sequence
   ! sortp has the sorted indices. hkeyp will have the sorted keys. we don't
@@ -1394,6 +1521,7 @@ subroutine gpu_sort_star(sim, ilevel)
   call nvtxStartRange("gpu_sort_star:init_sortp", color=4)
   call init_global_swap_table_kernel<<<num_blocks, num_threads>>>(star_sortp, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
   ! Loop over bits (one NVTX range per radix pass; kernels visible in CUDA row)
@@ -1405,6 +1533,7 @@ subroutine gpu_sort_star(sim, ilevel)
      ! Init prefix sum based on Hilbert key bit value
      call init_prefix_sum_part_bit<<<num_blocks, num_threads>>>(idp_swap, &
           & star_sortp, prefix_sum, head_idx, num_parts, ibit)
+     call GPU_Error_Check(__FILE__, __LINE__)
 
      ! Compute prefix sum
      call gpu_scan(prefix_sum, head_idx, num_parts)
@@ -1412,10 +1541,12 @@ subroutine gpu_sort_star(sim, ilevel)
      ! Compute sorted indices
      call compute_local_swap_table<<<num_blocks, num_threads>>>(isp_swap, &
           & star_sortp, prefix_sum, head_idx, num_parts)
+     call GPU_Error_Check(__FILE__, __LINE__)
 
      ! Store back to sortp
      call update_global_swap_table<<<num_blocks, num_threads>>>(star_sortp, &
           & isp_swap, head_idx, num_parts)
+     call GPU_Error_Check(__FILE__, __LINE__)
 
      call nvtxEndRange()
   end do
@@ -1471,12 +1602,14 @@ subroutine gpu_sort_sink(sim, ilevel)
   call compute_hkey_part_kernel<<<num_blocks, num_threads>>>(sink_xp, idp_swap, &
        & box_ckey_min, box_ckey_max, d_skip, dx_inv, head_idx, num_parts, &
        & int(sim%r%nsinkmax,8), level, shift)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
 #if defined(CUB_SORT_PART)
   ! generate the input sequence [head_idx ... head_idx + num_parts - 1]
   nblks = (((num_parts + nrnd - 1)/nrnd) + nthr - 1)/nthr
   call init_global_swap_table_kernel_u8<<<nblks,nthr>>>(isp_swap, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
 
   ! idp_swap has keys to sort by. isp_swap is the input indices sequence
   ! sortp has the sorted indices. hkeyp will have the sorted keys. we don't
@@ -1489,6 +1622,7 @@ subroutine gpu_sort_sink(sim, ilevel)
   call nvtxStartRange("gpu_sort_sink:init_sortp", color=4)
   call init_global_swap_table_kernel<<<num_blocks, num_threads>>>(sink_sortp, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
   ! Loop over bits (one NVTX range per radix pass; kernels visible in CUDA row)
@@ -1500,6 +1634,7 @@ subroutine gpu_sort_sink(sim, ilevel)
      ! Init prefix sum based on Hilbert key bit value
      call init_prefix_sum_part_bit<<<num_blocks, num_threads>>>(idp_swap, &
           & sink_sortp, prefix_sum, head_idx, num_parts, ibit)
+     call GPU_Error_Check(__FILE__, __LINE__)
 
      ! Compute prefix sum
      call gpu_scan(prefix_sum, head_idx, num_parts)
@@ -1507,10 +1642,12 @@ subroutine gpu_sort_sink(sim, ilevel)
      ! Compute sorted indices
      call compute_local_swap_table<<<num_blocks, num_threads>>>(isp_swap, &
           & sink_sortp, prefix_sum, head_idx, num_parts)
+     call GPU_Error_Check(__FILE__, __LINE__)
 
      ! Store back to sortp
      call update_global_swap_table<<<num_blocks, num_threads>>>(sink_sortp, &
           & isp_swap, head_idx, num_parts)
+     call GPU_Error_Check(__FILE__, __LINE__)
 
      call nvtxEndRange()
   end do
@@ -1559,12 +1696,14 @@ subroutine gpu_sort_core(sim, ilevel)
   call compute_hkey_part_kernel<<<num_blocks, num_threads>>>(core_xp, idp_swap, &
        & box_ckey_min, box_ckey_max, d_skip, dx_inv, head_idx, num_parts, &
        & int(sim%r%ncoremax,8), level, shift)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
 #if defined(CUB_SORT_PART)
   ! generate the input sequence [head_idx ... head_idx + num_parts - 1]
   nblks = (((num_parts + nrnd - 1)/nrnd) + nthr - 1)/nthr
   call init_global_swap_table_kernel_u8<<<nblks,nthr>>>(isp_swap, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
 
   ! idp_swap has keys to sort by. isp_swap is the input indices sequence
   ! sortp has the sorted indices. hkeyp will have the sorted keys. we don't
@@ -1577,6 +1716,7 @@ subroutine gpu_sort_core(sim, ilevel)
   call nvtxStartRange("gpu_sort_core:init_sortp", color=4)
   call init_global_swap_table_kernel<<<num_blocks, num_threads>>>(core_sortp, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
   ! Loop over bits (one NVTX range per radix pass; kernels visible in CUDA row)
@@ -1588,6 +1728,7 @@ subroutine gpu_sort_core(sim, ilevel)
      ! Init prefix sum based on Hilbert key bit value
      call init_prefix_sum_part_bit<<<num_blocks, num_threads>>>(idp_swap, &
           & core_sortp, prefix_sum, head_idx, num_parts, ibit)
+     call GPU_Error_Check(__FILE__, __LINE__)
 
      ! Compute prefix sum
      call gpu_scan(prefix_sum, head_idx, num_parts)
@@ -1595,10 +1736,12 @@ subroutine gpu_sort_core(sim, ilevel)
      ! Compute sorted indices
      call compute_local_swap_table<<<num_blocks, num_threads>>>(isp_swap, &
           & core_sortp, prefix_sum, head_idx, num_parts)
+     call GPU_Error_Check(__FILE__, __LINE__)
 
      ! Store back to sortp
      call update_global_swap_table<<<num_blocks, num_threads>>>(core_sortp, &
           & isp_swap, head_idx, num_parts)
+     call GPU_Error_Check(__FILE__, __LINE__)
 
      call nvtxEndRange()
   end do
@@ -1646,12 +1789,14 @@ subroutine gpu_sort_tree(sim, ilevel)
   call compute_hkey_part_kernel<<<num_blocks, num_threads>>>(tree_xp, idp_swap, &
        & box_ckey_min, box_ckey_max, d_skip, dx_inv, head_idx, num_parts, &
        & int(sim%r%ntreemax,8), level, shift)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
 #if defined(CUB_SORT_PART)
   ! generate the input sequence [head_idx ... head_idx + num_parts - 1]
   nblks = (((num_parts + nrnd - 1)/nrnd) + nthr - 1)/nthr
   call init_global_swap_table_kernel_u8<<<nblks,nthr>>>(isp_swap, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
 
   ! idp_swap has keys to sort by. isp_swap is the input indices sequence
   ! sortp has the sorted indices. hkeyp will have the sorted keys. we don't
@@ -1664,6 +1809,7 @@ subroutine gpu_sort_tree(sim, ilevel)
   call nvtxStartRange("gpu_sort_tree:init_sortp", color=4)
   call init_global_swap_table_kernel<<<num_blocks, num_threads>>>(tree_sortp, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
   ! Loop over bits (one NVTX range per radix pass; kernels visible in CUDA row)
@@ -1675,6 +1821,7 @@ subroutine gpu_sort_tree(sim, ilevel)
      ! Init prefix sum based on Hilbert key bit value
      call init_prefix_sum_part_bit<<<num_blocks, num_threads>>>(idp_swap, &
           & tree_sortp, prefix_sum, head_idx, num_parts, ibit)
+     call GPU_Error_Check(__FILE__, __LINE__)
 
      ! Compute prefix sum
      call gpu_scan(prefix_sum, head_idx, num_parts)
@@ -1682,10 +1829,12 @@ subroutine gpu_sort_tree(sim, ilevel)
      ! Compute sorted indices
      call compute_local_swap_table<<<num_blocks, num_threads>>>(isp_swap, &
           & tree_sortp, prefix_sum, head_idx, num_parts)
+     call GPU_Error_Check(__FILE__, __LINE__)
 
      ! Store back to sortp
      call update_global_swap_table<<<num_blocks, num_threads>>>(tree_sortp, &
           & isp_swap, head_idx, num_parts)
+     call GPU_Error_Check(__FILE__, __LINE__)
 
      call nvtxEndRange()
   end do
@@ -2186,6 +2335,7 @@ subroutine gpu_cic_part_large(sim, ilevel, rtype)
      call nvtxStartRange("gpu_cic_part_large:multipole", color=4)
      call multipole_q_kernel<<<num_blocks, num_threads>>>(xp, mp, q_d, &
           & 1, sim%p%npart, int(sim%r%npartmax,8))
+     call GPU_Error_Check(__FILE__, __LINE__)
      call nvtxEndRange()
      q_h = q_d
 
@@ -2229,6 +2379,7 @@ subroutine gpu_cic_part_large(sim, ilevel, rtype)
        & xp, mp, rho, nref, &
        & skip1, skip2, skip3, dx_loc, vol_loc, 1d0, .false., &
        & sim%r%m_refine(ilevel), sim%r%mass_cut_refine, ilevel, int(sim%r%npartmax,8))
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
 end subroutine gpu_cic_part_large
@@ -2260,6 +2411,7 @@ subroutine gpu_cic_star_large(sim, ilevel, rtype)
      call nvtxStartRange("gpu_cic_star_large:multipole", color=4)
      call multipole_q_kernel<<<num_blocks, num_threads>>>(star_xp, star_mp, q_d, &
           & 1, sim%star%npart, int(sim%r%nstarmax,8))
+     call GPU_Error_Check(__FILE__, __LINE__)
      call nvtxEndRange()
      q_h = q_d
 
@@ -2304,6 +2456,7 @@ subroutine gpu_cic_star_large(sim, ilevel, rtype)
        & star_xp, star_mp, rho, nref, &
        & skip1, skip2, skip3, dx_loc, vol_loc, mass_sph, .true., &
        & sim%r%m_refine(ilevel), sim%r%mass_cut_refine, ilevel, int(sim%r%nstarmax,8))
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
 end subroutine gpu_cic_star_large
@@ -2335,6 +2488,7 @@ subroutine gpu_cic_sink_large(sim, ilevel, rtype)
      call nvtxStartRange("gpu_cic_sink_large:multipole", color=4)
      call multipole_q_kernel<<<num_blocks, num_threads>>>(sink_xp, sink_mp, q_d, &
           & 1, sim%sink%npart, int(sim%r%nsinkmax,8))
+     call GPU_Error_Check(__FILE__, __LINE__)
      call nvtxEndRange()
      q_h = q_d
 
@@ -2379,6 +2533,7 @@ subroutine gpu_cic_sink_large(sim, ilevel, rtype)
        & sink_xp, sink_mp, rho, nref, &
        & skip1, skip2, skip3, dx_loc, vol_loc, mass_sph, .true., &
        & sim%r%m_refine(ilevel), sim%r%mass_cut_refine, ilevel, int(sim%r%nsinkmax,8))
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
 end subroutine gpu_cic_sink_large
@@ -2410,6 +2565,7 @@ subroutine gpu_cic_core_large(sim, ilevel, rtype)
      call nvtxStartRange("gpu_cic_core_large:multipole", color=4)
      call multipole_q_kernel<<<num_blocks, num_threads>>>(core_xp, core_mp, q_d, &
           & 1, sim%core%npart, int(sim%r%ncoremax,8))
+     call GPU_Error_Check(__FILE__, __LINE__)
      call nvtxEndRange()
      q_h = q_d
 
@@ -2443,6 +2599,7 @@ subroutine gpu_cic_core_large(sim, ilevel, rtype)
        & core_xp, core_mp, rho, nref, &
        & skip1, skip2, skip3, dx_loc, vol_loc, mass_sph, .true., &
        & sim%r%m_refine(ilevel), sim%r%mass_cut_refine, ilevel, int(sim%r%ncoremax,8))
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
 end subroutine gpu_cic_core_large
@@ -2733,6 +2890,7 @@ subroutine gpu_cic_part_medium(sim, ilevel, rtype)
      call nvtxStartRange("gpu_cic_part_medium:multipole", color=4)
      call multipole_q_kernel<<<num_blocks, num_threads>>>(xp, mp, q_d, &
           & 1, sim%p%npart, int(sim%r%npartmax,8))
+     call GPU_Error_Check(__FILE__, __LINE__)
      call nvtxEndRange()
      q_h = q_d
 
@@ -2764,6 +2922,7 @@ subroutine gpu_cic_part_medium(sim, ilevel, rtype)
        & xp, mp, rho, nref, &
        & skip1, skip2, skip3, dx_loc, vol_loc, 1d0, .false., &
        & sim%r%m_refine(ilevel), sim%r%mass_cut_refine, ilevel, int(sim%r%npartmax,8))
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
 end subroutine gpu_cic_part_medium
@@ -2794,6 +2953,7 @@ subroutine gpu_cic_star_medium(sim, ilevel, rtype)
      call nvtxStartRange("gpu_cic_star_medium:multipole", color=4)
      call multipole_q_kernel<<<num_blocks, num_threads>>>(star_xp, star_mp, q_d, &
           & 1, sim%star%npart, int(sim%r%nstarmax,8))
+     call GPU_Error_Check(__FILE__, __LINE__)
      call nvtxEndRange()
      q_h = q_d
 
@@ -2826,6 +2986,7 @@ subroutine gpu_cic_star_medium(sim, ilevel, rtype)
        & star_xp, star_mp, rho, nref, &
        & skip1, skip2, skip3, dx_loc, vol_loc, mass_sph, .true., &
        & sim%r%m_refine(ilevel), sim%r%mass_cut_refine, ilevel, int(sim%r%nstarmax,8))
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
 end subroutine gpu_cic_star_medium
@@ -2856,6 +3017,7 @@ subroutine gpu_cic_sink_medium(sim, ilevel, rtype)
      call nvtxStartRange("gpu_cic_sink_medium:multipole", color=4)
      call multipole_q_kernel<<<num_blocks, num_threads>>>(sink_xp, sink_mp, q_d, &
           & 1, sim%sink%npart, int(sim%r%nsinkmax,8))
+     call GPU_Error_Check(__FILE__, __LINE__)
      call nvtxEndRange()
      q_h = q_d
 
@@ -2888,6 +3050,7 @@ subroutine gpu_cic_sink_medium(sim, ilevel, rtype)
        & sink_xp, sink_mp, rho, nref, &
        & skip1, skip2, skip3, dx_loc, vol_loc, mass_sph, .true., &
        & sim%r%m_refine(ilevel), sim%r%mass_cut_refine, ilevel, int(sim%r%nsinkmax,8))
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
 end subroutine gpu_cic_sink_medium
@@ -3170,6 +3333,7 @@ subroutine gpu_cic_part_small(sim, ilevel, rtype)
      call nvtxStartRange("gpu_cic_part_small:multipole", color=4)
      call multipole_q_kernel<<<num_blocks, num_threads>>>(xp, mp, q_d, &
           & 1, sim%p%npart, int(sim%r%npartmax,8))
+     call GPU_Error_Check(__FILE__, __LINE__)
      call nvtxEndRange()
      q_h = q_d
      do idim = 1, ndim+1
@@ -3199,9 +3363,11 @@ subroutine gpu_cic_part_small(sim, ilevel, rtype)
   call nvtxStartRange("gpu_cic_part_small:runs", color=4)
   call init_leader_marker_part_small<<<blk, nblk>>>(sortp, idp_swap, &
        & prefix_sum, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call gpu_scan(prefix_sum, head_idx, num_parts)
   call fill_run_tail_part_small<<<blk, nblk>>>(prefix_sum, isp_swap, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
   ! Per stencil offset: prefix sum the weighted contributions and deposit one
@@ -3212,24 +3378,28 @@ subroutine gpu_cic_part_small(sim, ilevel, rtype)
      call fill_contrib_part_small<<<blk, nblk>>>(sortp, xp, mp, xp_swap, &
           & skip1, skip2, skip3, dx_inv, vol_loc, k, 0, sim%r%mass_cut_refine, 1d0, &
           & head_idx, num_parts, int(sim%r%npartmax,8))
+     call GPU_Error_Check(__FILE__, __LINE__)
      call gpu_scan_dp(xp_swap, head_idx, num_parts)
      call deposit_runs_part_small<<<blk, nblk>>>(sortp, xp, xp_swap, &
           & prefix_sum, isp_swap, &
           & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, &
           & box_ckey_min, box_ckey_max, rho, &
           & skip1, skip2, skip3, dx_inv, k, ilevel, head_idx, num_parts, int(sim%r%npartmax,8))
+     call GPU_Error_Check(__FILE__, __LINE__)
 
      ! nref contribution (w, gated), only when the refinement gate is active.
      if (sim%r%m_refine(ilevel) >= 0.0_dp) then
         call fill_contrib_part_small<<<blk, nblk>>>(sortp, xp, mp, xp_swap, &
              & skip1, skip2, skip3, dx_inv, vol_loc, k, 1, sim%r%mass_cut_refine, 1d0, &
              & head_idx, num_parts, int(sim%r%npartmax,8))
+        call GPU_Error_Check(__FILE__, __LINE__)
         call gpu_scan_dp(xp_swap, head_idx, num_parts)
         call deposit_runs_part_small<<<blk, nblk>>>(sortp, xp, xp_swap, &
              & prefix_sum, isp_swap, &
              & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, &
              & box_ckey_min, box_ckey_max, nref, &
              & skip1, skip2, skip3, dx_inv, k, ilevel, head_idx, num_parts, int(sim%r%npartmax,8))
+        call GPU_Error_Check(__FILE__, __LINE__)
      endif
   end do
   call nvtxEndRange()
@@ -3261,6 +3431,7 @@ subroutine gpu_cic_star_small(sim, ilevel, rtype)
      call nvtxStartRange("gpu_cic_star_small:multipole", color=4)
      call multipole_q_kernel<<<num_blocks, num_threads>>>(star_xp, star_mp, q_d, &
           & 1, sim%star%npart, int(sim%r%nstarmax,8))
+     call GPU_Error_Check(__FILE__, __LINE__)
      call nvtxEndRange()
      q_h = q_d
      do idim = 1, ndim+1
@@ -3291,9 +3462,11 @@ subroutine gpu_cic_star_small(sim, ilevel, rtype)
   call nvtxStartRange("gpu_cic_star_small:runs", color=4)
   call init_leader_marker_part_small<<<blk, nblk>>>(star_sortp, idp_swap, &
        & prefix_sum, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call gpu_scan(prefix_sum, head_idx, num_parts)
   call fill_run_tail_part_small<<<blk, nblk>>>(prefix_sum, isp_swap, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
   ! Per stencil offset: prefix sum the weighted contributions and deposit one
@@ -3304,24 +3477,28 @@ subroutine gpu_cic_star_small(sim, ilevel, rtype)
      call fill_contrib_part_small<<<blk, nblk>>>(star_sortp, star_xp, star_mp, xp_swap, &
           & skip1, skip2, skip3, dx_inv, vol_loc, k, 0, sim%r%mass_cut_refine, 1d0, &
           & head_idx, num_parts, int(sim%r%nstarmax,8))
+     call GPU_Error_Check(__FILE__, __LINE__)
      call gpu_scan_dp(xp_swap, head_idx, num_parts)
      call deposit_runs_part_small<<<blk, nblk>>>(star_sortp, star_xp, xp_swap, &
           & prefix_sum, isp_swap, &
           & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, &
           & box_ckey_min, box_ckey_max, rho, &
           & skip1, skip2, skip3, dx_inv, k, ilevel, head_idx, num_parts, int(sim%r%nstarmax,8))
+     call GPU_Error_Check(__FILE__, __LINE__)
 
      ! nref contribution (w, gated), only when the refinement gate is active.
      if (sim%r%m_refine(ilevel) >= 0.0_dp) then
         call fill_contrib_part_small<<<blk, nblk>>>(star_sortp, star_xp, star_mp, xp_swap, &
              & skip1, skip2, skip3, dx_inv, vol_loc, k, 2, sim%r%mass_cut_refine, mass_sph,&
              & head_idx, num_parts, int(sim%r%nstarmax,8))
+        call GPU_Error_Check(__FILE__, __LINE__)
         call gpu_scan_dp(xp_swap, head_idx, num_parts)
         call deposit_runs_part_small<<<blk, nblk>>>(star_sortp, star_xp, xp_swap, &
              & prefix_sum, isp_swap, &
              & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, &
              & box_ckey_min, box_ckey_max, nref, &
              & skip1, skip2, skip3, dx_inv, k, ilevel, head_idx, num_parts, int(sim%r%nstarmax,8))
+        call GPU_Error_Check(__FILE__, __LINE__)
      endif
   end do
   call nvtxEndRange()
@@ -3353,6 +3530,7 @@ subroutine gpu_cic_sink_small(sim, ilevel, rtype)
      call nvtxStartRange("gpu_cic_sink_small:multipole", color=4)
      call multipole_q_kernel<<<num_blocks, num_threads>>>(sink_xp, sink_mp, q_d, &
           & 1, sim%sink%npart, int(sim%r%nsinkmax,8))
+     call GPU_Error_Check(__FILE__, __LINE__)
      call nvtxEndRange()
      q_h = q_d
      do idim = 1, ndim+1
@@ -3383,9 +3561,11 @@ subroutine gpu_cic_sink_small(sim, ilevel, rtype)
   call nvtxStartRange("gpu_cic_sink_small:runs", color=4)
   call init_leader_marker_part_small<<<blk, nblk>>>(sink_sortp, idp_swap, &
        & prefix_sum, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call gpu_scan(prefix_sum, head_idx, num_parts)
   call fill_run_tail_part_small<<<blk, nblk>>>(prefix_sum, isp_swap, &
        & head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
   ! Per stencil offset: prefix sum the weighted contributions and deposit one
@@ -3396,24 +3576,28 @@ subroutine gpu_cic_sink_small(sim, ilevel, rtype)
      call fill_contrib_part_small<<<blk, nblk>>>(sink_sortp, sink_xp, sink_mp, xp_swap, &
           & skip1, skip2, skip3, dx_inv, vol_loc, k, 0, sim%r%mass_cut_refine, 1d0, &
           & head_idx, num_parts, int(sim%r%nsinkmax,8))
+     call GPU_Error_Check(__FILE__, __LINE__)
      call gpu_scan_dp(xp_swap, head_idx, num_parts)
      call deposit_runs_part_small<<<blk, nblk>>>(sink_sortp, sink_xp, xp_swap, &
           & prefix_sum, isp_swap, &
           & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, &
           & box_ckey_min, box_ckey_max, rho, &
           & skip1, skip2, skip3, dx_inv, k, ilevel, head_idx, num_parts, int(sim%r%nsinkmax,8))
+     call GPU_Error_Check(__FILE__, __LINE__)
 
      ! nref contribution (w, gated), only when the refinement gate is active.
      if (sim%r%m_refine(ilevel) >= 0.0_dp) then
         call fill_contrib_part_small<<<blk, nblk>>>(sink_sortp, sink_xp, sink_mp, xp_swap, &
              & skip1, skip2, skip3, dx_inv, vol_loc, k, 2, sim%r%mass_cut_refine, mass_sph,&
              & head_idx, num_parts, int(sim%r%nsinkmax,8))
+        call GPU_Error_Check(__FILE__, __LINE__)
         call gpu_scan_dp(xp_swap, head_idx, num_parts)
         call deposit_runs_part_small<<<blk, nblk>>>(sink_sortp, sink_xp, xp_swap, &
              & prefix_sum, isp_swap, &
              & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, &
              & box_ckey_min, box_ckey_max, nref, &
              & skip1, skip2, skip3, dx_inv, k, ilevel, head_idx, num_parts, int(sim%r%nsinkmax,8))
+        call GPU_Error_Check(__FILE__, __LINE__)
      endif
   end do
   call nvtxEndRange()
@@ -3555,6 +3739,7 @@ subroutine gpu_bspline_part(sim, ilevel, rtype, order)
      call nvtxStartRange("gpu_bspline_part:multipole", color=4)
      call multipole_q_kernel<<<num_blocks, num_threads>>>(xp, mp, q_d, &
           & 1, sim%p%npart, int(sim%r%npartmax,8))
+     call GPU_Error_Check(__FILE__, __LINE__)
      call nvtxEndRange()
      q_h = q_d
 
@@ -3586,6 +3771,7 @@ subroutine gpu_bspline_part(sim, ilevel, rtype, order)
        & real(dx_loc,kind=dp), real(vol_loc,kind=dp), 1.0_dp, .false., &
        & real(sim%r%m_refine(ilevel),kind=dp), real(sim%r%mass_cut_refine,kind=dp), &
        & order, ilevel, int(sim%r%npartmax,8))
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
 end subroutine gpu_bspline_part
@@ -3619,6 +3805,7 @@ subroutine gpu_bspline_star(sim, ilevel, rtype, order)
      call nvtxStartRange("gpu_bspline_star:multipole", color=4)
      call multipole_q_kernel<<<num_blocks, num_threads>>>(star_xp, star_mp, q_d, &
           & 1, sim%star%npart, int(sim%r%nstarmax,8))
+     call GPU_Error_Check(__FILE__, __LINE__)
      call nvtxEndRange()
      q_h = q_d
 
@@ -3650,6 +3837,7 @@ subroutine gpu_bspline_star(sim, ilevel, rtype, order)
        & real(dx_loc,kind=dp), real(vol_loc,kind=dp), real(sim%r%mass_sph,kind=dp), .true., &
        & real(sim%r%m_refine(ilevel),kind=dp), real(sim%r%mass_cut_refine,kind=dp), &
        & order, ilevel, int(sim%r%nstarmax,8))
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
 end subroutine gpu_bspline_star
@@ -3683,6 +3871,7 @@ subroutine gpu_bspline_sink(sim, ilevel, rtype, order)
      call nvtxStartRange("gpu_bspline_sink:multipole", color=4)
      call multipole_q_kernel<<<num_blocks, num_threads>>>(sink_xp, sink_mp, q_d, &
           & 1, sim%sink%npart, int(sim%r%nsinkmax,8))
+     call GPU_Error_Check(__FILE__, __LINE__)
      call nvtxEndRange()
      q_h = q_d
 
@@ -3714,6 +3903,7 @@ subroutine gpu_bspline_sink(sim, ilevel, rtype, order)
        & real(dx_loc,kind=dp), real(vol_loc,kind=dp), real(sim%r%mass_sph,kind=dp), .true., &
        & real(sim%r%m_refine(ilevel),kind=dp), real(sim%r%mass_cut_refine,kind=dp), &
        & order, ilevel, int(sim%r%nsinkmax,8))
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
 end subroutine gpu_bspline_sink
@@ -3747,6 +3937,7 @@ subroutine gpu_bspline_core(sim, ilevel, rtype, order)
      call nvtxStartRange("gpu_bspline_core:multipole", color=4)
      call multipole_q_kernel<<<num_blocks, num_threads>>>(core_xp, core_mp, q_d, &
           & 1, sim%core%npart, int(sim%r%ncoremax,8))
+     call GPU_Error_Check(__FILE__, __LINE__)
      call nvtxEndRange()
      q_h = q_d
 
@@ -3778,6 +3969,7 @@ subroutine gpu_bspline_core(sim, ilevel, rtype, order)
        & real(dx_loc,kind=dp), real(vol_loc,kind=dp), real(sim%r%mass_sph,kind=dp), .true., &
        & real(sim%r%m_refine(ilevel),kind=dp), real(sim%r%mass_cut_refine,kind=dp), &
        & order, ilevel, int(sim%r%ncoremax,8))
+  call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
 end subroutine gpu_bspline_core
@@ -4355,6 +4547,7 @@ subroutine gpu_kick_drift_part(sim, ilevel, action_part)
           & skip1, skip2, skip3, dx_loc, 0d0, action_part, ilevel, head_idx, num_parts, &
           & int(sim%r%npartmax,8), .false., sim%p%static, &
           & sim%r%part_force_interpolation_scheme+1)
+     call GPU_Error_Check(__FILE__, __LINE__)
      call nvtxEndRange()
 
   endif
@@ -4398,6 +4591,7 @@ subroutine gpu_kick_drift_star(sim, ilevel, action_part)
           & skip1, skip2, skip3, dx_loc, 0d0, action_part, ilevel, head_idx, num_parts, &
           & int(sim%r%nstarmax,8), .false., sim%star%static, &
           & sim%r%star_force_interpolation_scheme+1)
+     call GPU_Error_Check(__FILE__, __LINE__)
      call nvtxEndRange()
 
   endif
@@ -4446,6 +4640,7 @@ subroutine gpu_kick_drift_sink(sim, ilevel, action_part)
           & action_part, ilevel, head_idx, num_parts, &
           & int(sim%r%nsinkmax,8), .true., sim%sink%static, &
           & sim%r%sink_force_interpolation_scheme+1)
+     call GPU_Error_Check(__FILE__, __LINE__)
      call nvtxEndRange()
 
   endif
@@ -4491,6 +4686,7 @@ subroutine gpu_kick_drift_core(sim, ilevel, action_part)
           & action_part, ilevel, head_idx, num_parts, &
           & int(sim%r%ncoremax,8), .true., sim%core%static, &
           & sim%r%sink_force_interpolation_scheme+1)
+     call GPU_Error_Check(__FILE__, __LINE__)
      call nvtxEndRange()
 
   endif
@@ -4534,6 +4730,7 @@ subroutine gpu_kick_drift_tree(sim, ilevel, action_part)
           & skip1, skip2, skip3, dx_loc, 0d0, action_part, ilevel, head_idx, num_parts, &
           & int(sim%r%ntreemax,8), .false., sim%tree%static, &
           & sim%r%tree_force_interpolation_scheme+1)
+     call GPU_Error_Check(__FILE__, __LINE__)
      call nvtxEndRange()
 
   endif

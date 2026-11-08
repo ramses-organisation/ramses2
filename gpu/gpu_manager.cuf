@@ -151,6 +151,7 @@ recursive subroutine r_set_grid_device(pst)
      do ind = 1, subgridsize
         call update_nbor_array<<<num_blocks, num_threads>>>(nbor, grid, hash_key, hash_val, pst%s%m%hash_size, &
              & ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, head_idx, num_subgrids, ind)
+        call GPU_Error_Check(__FILE__, __LINE__)
      end do
      call GPU_Error_Check(__FILE__, __LINE__)
      call nvtxEndRange()
