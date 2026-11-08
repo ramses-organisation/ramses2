@@ -382,9 +382,9 @@ cub_module_radix_sort_f.o: cub_module_radix_sort.cuf cub_module_radix_sort_c.o
 	nvfortran $(FFLAGS) -c cub_module_radix_sort_c.o $(GPU_PATH)/cub_module_radix_sort.cuf -o cub_module_radix_sort_f.o
 
 %.o:%.cuf
-	$(F90) $(FFLAGS) -c $< -o $@ $(LIBS)
+	$(F90) $(FFLAGS) -c $< -o $@
 %.o:%.f90
-	$(F90) $(FFLAGS) -c $< -o $@ $(LIBS)
+	$(F90) $(FFLAGS) -c $< -o $@
 %.o:%.c
 	$(C) $(CFLAGS) -c $< -o $@
 #############################################################################
