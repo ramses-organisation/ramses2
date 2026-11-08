@@ -206,6 +206,7 @@ contains
 
   include 'gpu_reduce.cuf'
   include 'gpu_hash.cuf'
+  include 'gpu_cell.cuf'
 
   ! ==========================================================================
   !> @brief
@@ -2949,10 +2950,7 @@ contains
        source_idx = nbor(ind_nbor)
        if (source_idx > ngridmax) then
           father_idx = father(source_idx)
-          i = grid(source_idx)%ckey(1) - 2 * grid(father_idx)%ckey(1)
-          j = grid(source_idx)%ckey(2) - 2 * grid(father_idx)%ckey(2)
-          k = grid(source_idx)%ckey(3) - 2 * grid(father_idx)%ckey(3)
-          cell_idx = 1 + i + 2*j + 4*k
+          cell_idx = parent_cell_idx(grid(source_idx)%ckey, grid(father_idx)%ckey)
           info = atomicadd(unew(cell_idx, 1, father_idx), flux%density)
           info = atomicadd(unew(cell_idx, 2, father_idx), flux%momentum_x)
           info = atomicadd(unew(cell_idx, 3, father_idx), flux%momentum_y)
@@ -3005,10 +3003,7 @@ contains
        source_idx = nbor(ind_nbor)
        if (source_idx > ngridmax) then
           father_idx = father(source_idx)
-          i = grid(source_idx)%ckey(1) - 2 * grid(father_idx)%ckey(1)
-          j = grid(source_idx)%ckey(2) - 2 * grid(father_idx)%ckey(2)
-          k = grid(source_idx)%ckey(3) - 2 * grid(father_idx)%ckey(3)
-          cell_idx = 1 + i + 2*j + 4*k
+          cell_idx = parent_cell_idx(grid(source_idx)%ckey, grid(father_idx)%ckey)
           info = atomicadd(unew(cell_idx, 1, father_idx), flux%density)
           info = atomicadd(unew(cell_idx, 2, father_idx), flux%momentum_x)
           info = atomicadd(unew(cell_idx, 3, father_idx), flux%momentum_y)
@@ -3065,10 +3060,7 @@ contains
        source_idx = nbor(ind_nbor)
        if (source_idx > ngridmax) then
           father_idx = father(source_idx)
-          i = grid(source_idx)%ckey(1) - 2 * grid(father_idx)%ckey(1)
-          j = grid(source_idx)%ckey(2) - 2 * grid(father_idx)%ckey(2)
-          k = grid(source_idx)%ckey(3) - 2 * grid(father_idx)%ckey(3)
-          cell_idx = 1 + i + 2*j + 4*k
+          cell_idx = parent_cell_idx(grid(source_idx)%ckey, grid(father_idx)%ckey)
           info = atomicadd(unew(cell_idx, 1, father_idx), flux%density)
           info = atomicadd(unew(cell_idx, 2, father_idx), flux%momentum_x)
           info = atomicadd(unew(cell_idx, 3, father_idx), flux%momentum_y)
@@ -3121,10 +3113,7 @@ contains
        source_idx = nbor(ind_nbor)
        if (source_idx > ngridmax) then
           father_idx = father(source_idx)
-          i = grid(source_idx)%ckey(1) - 2 * grid(father_idx)%ckey(1)
-          j = grid(source_idx)%ckey(2) - 2 * grid(father_idx)%ckey(2)
-          k = grid(source_idx)%ckey(3) - 2 * grid(father_idx)%ckey(3)
-          cell_idx = 1 + i + 2*j + 4*k
+          cell_idx = parent_cell_idx(grid(source_idx)%ckey, grid(father_idx)%ckey)
           info = atomicadd(unew(cell_idx, 1, father_idx), flux%density)
           info = atomicadd(unew(cell_idx, 2, father_idx), flux%momentum_x)
           info = atomicadd(unew(cell_idx, 3, father_idx), flux%momentum_y)
@@ -3181,10 +3170,7 @@ contains
        source_idx = nbor(ind_nbor)
        if (source_idx > ngridmax) then
           father_idx = father(source_idx)
-          i = grid(source_idx)%ckey(1) - 2 * grid(father_idx)%ckey(1)
-          j = grid(source_idx)%ckey(2) - 2 * grid(father_idx)%ckey(2)
-          k = grid(source_idx)%ckey(3) - 2 * grid(father_idx)%ckey(3)
-          cell_idx = 1 + i + 2*j + 4*k
+          cell_idx = parent_cell_idx(grid(source_idx)%ckey, grid(father_idx)%ckey)
           info = atomicadd(unew(cell_idx, 1, father_idx), flux%density)
           info = atomicadd(unew(cell_idx, 2, father_idx), flux%momentum_x)
           info = atomicadd(unew(cell_idx, 3, father_idx), flux%momentum_y)
@@ -3237,10 +3223,7 @@ contains
        source_idx = nbor(ind_nbor)
        if (source_idx > ngridmax) then
           father_idx = father(source_idx)
-          i = grid(source_idx)%ckey(1) - 2 * grid(father_idx)%ckey(1)
-          j = grid(source_idx)%ckey(2) - 2 * grid(father_idx)%ckey(2)
-          k = grid(source_idx)%ckey(3) - 2 * grid(father_idx)%ckey(3)
-          cell_idx = 1 + i + 2*j + 4*k
+          cell_idx = parent_cell_idx(grid(source_idx)%ckey, grid(father_idx)%ckey)
           info = atomicadd(unew(cell_idx, 1, father_idx), flux%density)
           info = atomicadd(unew(cell_idx, 2, father_idx), flux%momentum_x)
           info = atomicadd(unew(cell_idx, 3, father_idx), flux%momentum_y)
@@ -3615,7 +3598,7 @@ contains
     integer, value :: ngridmax, i, j, k
     logical, intent(out) :: is_coarse
     integer, intent(out) :: coct, ccell
-    integer :: stencil_idx, nbidx, fidx, ci, cj, ck
+    integer :: stencil_idx, nbidx, fidx
 
     stencil_idx = 1 + i + nsubgridp2*j + nsubgridp2sq*k
     nbidx = nbor(stencil_idx)
@@ -3623,10 +3606,7 @@ contains
     coct = 0; ccell = 1
     if (is_coarse) then
        fidx = father(nbidx)
-       ci = grid(nbidx)%ckey(1) - 2*grid(fidx)%ckey(1)
-       cj = grid(nbidx)%ckey(2) - 2*grid(fidx)%ckey(2)
-       ck = grid(nbidx)%ckey(3) - 2*grid(fidx)%ckey(3)
-       ccell = 1 + ci + 2*cj + 4*ck
+       ccell = parent_cell_idx(grid(nbidx)%ckey, grid(fidx)%ckey)
        coct = fidx
     end if
   end subroutine get_cf_cell
@@ -4372,10 +4352,7 @@ contains
        source_idx = nbor(ind_nbor, head_idx + block_idx)
        if (source_idx > ngridmax) then
           father_idx = father(source_idx)
-          i = grid(source_idx)%ckey(1) - 2*grid(father_idx)%ckey(1)
-          j = grid(source_idx)%ckey(2) - 2*grid(father_idx)%ckey(2)
-          k = grid(source_idx)%ckey(3) - 2*grid(father_idx)%ckey(3)
-          cell_idx = 1 + i + 2*j + 4*k
+          cell_idx = parent_cell_idx(grid(source_idx)%ckey, grid(father_idx)%ckey)
           info = atomicadd(unew(cell_idx,5,father_idx), energy_flux)
        endif
     endif
@@ -4947,16 +4924,13 @@ contains
     integer(kind=4), device :: father(*)
     real(kind=dp), device :: b(1:twotondim,1:6,*)
     integer(kind=4), intent(in), value :: head_idx, num_octs
-    integer :: oct_idx, father_idx, i, j, k
+    integer :: oct_idx, father_idx
 
     oct_idx = threadIdx%x - 1 + (blockIdx%x - 1) * blockDim%x
     if (oct_idx >= num_octs) return
     oct_idx = head_idx + oct_idx
     father_idx = father(oct_idx)
-    i = grid(oct_idx)%ckey(1) - 2 * grid(father_idx)%ckey(1)
-    j = grid(oct_idx)%ckey(2) - 2 * grid(father_idx)%ckey(2)
-    k = grid(oct_idx)%ckey(3) - 2 * grid(father_idx)%ckey(3)
-    call restrict_face_b(b, oct_idx, 1 + i + 2*j + 4*k, father_idx)
+    call restrict_face_b(b, oct_idx, parent_cell_idx(grid(oct_idx)%ckey, grid(father_idx)%ckey), father_idx)
   end subroutine nimhd_restrict_b_kernel
 #endif
 
@@ -4972,7 +4946,7 @@ contains
     real(kind=dp), intent(in), value :: gamma, smallr, smallc2
 
     integer :: tid, bid, cell_idx, oct_idx
-    integer :: ind, father_idx, i, j, k, ivar, idim
+    integer :: ind, father_idx, ivar, idim
     real(kind=dp) :: eint_sum, ekin, erad, emag
     real(kind=dp) :: density, smalle
     real(kind=dp), parameter :: inv_twotondim = 1.0_dp / real(twotondim, kind=dp)
@@ -4988,10 +4962,7 @@ contains
 
     ! Compute the parent cell idx
     father_idx = father(oct_idx)
-    i = grid(oct_idx)%ckey(1) - 2 * grid(father_idx)%ckey(1)
-    j = grid(oct_idx)%ckey(2) - 2 * grid(father_idx)%ckey(2)
-    k = grid(oct_idx)%ckey(3) - 2 * grid(father_idx)%ckey(3)
-    cell_idx = 1 + i + 2*j + 4*k
+    cell_idx = parent_cell_idx(grid(oct_idx)%ckey, grid(father_idx)%ckey)
 
     ! Reset conservative variables
     ! Average children variables
@@ -5966,10 +5937,7 @@ contains
     if (neighbor_oct_idx <= ngridmax) return
 
     father_oct_idx = father(neighbor_oct_idx)
-    kx = grid(neighbor_oct_idx)%ckey(1) - 2 * grid(father_oct_idx)%ckey(1)
-    ky = grid(neighbor_oct_idx)%ckey(2) - 2 * grid(father_oct_idx)%ckey(2)
-    kz = grid(neighbor_oct_idx)%ckey(3) - 2 * grid(father_oct_idx)%ckey(3)
-    cell_idx = 1 + kx + 2*ky + 4*kz
+    cell_idx = parent_cell_idx(grid(neighbor_oct_idx)%ckey, grid(father_oct_idx)%ckey)
     do ivar = 1, nvar
        info = atomicadd(unew(cell_idx, ivar, father_oct_idx), -dU(ivar) / real(twotondim, kind=dp))
     end do

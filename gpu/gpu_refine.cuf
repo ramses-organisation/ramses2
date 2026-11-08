@@ -13,6 +13,7 @@ contains
 
   include 'gpu_hash.cuf'
   include 'gpu_hilbert.cuf'
+  include 'gpu_cell.cuf'
 
 ! Hydro prolongation (slope limiters and interpol_hydro_d).
 
@@ -2642,7 +2643,7 @@ end subroutine nimhd_ghost_b_kernel
     integer(kind=4), intent(in), value :: interpol_var, interpol_type
     real(kind=dp), intent(in), value :: smallr
 
-    integer :: cache_idx, parent_idx, cell_idx, ind, i, j, k, ivar
+    integer :: cache_idx, parent_idx, cell_idx, ind, ivar
     integer, dimension(1:ndim) :: ckey
     ! Prolongation scratch for parent stencil and children.
     real(kind=dp) :: u1(0:twondim,1:nvar)
@@ -2663,10 +2664,7 @@ end subroutine nimhd_ghost_b_kernel
     ! Get parent oct and parent cell idx
     parent_idx = father(cache_idx)
     ckey(1:ndim) = grid(cache_idx)%ckey(1:ndim)
-    i = ckey(1) - 2*grid(parent_idx)%ckey(1)
-    j = ckey(2) - 2*grid(parent_idx)%ckey(2)
-    k = ckey(3) - 2*grid(parent_idx)%ckey(3)
-    cell_idx = 1 + i + 2*j + 4*k
+    cell_idx = parent_cell_idx(ckey, grid(parent_idx)%ckey)
 
 #ifdef MHD
     ! divB-preserving MHD prolongation
