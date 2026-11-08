@@ -2685,7 +2685,7 @@ contains
     num_blocks = (num_octs + num_threads - 1) / num_threads
     if(num_octs > 0)then
        call nvtxStartRange("GPU enforce_rules", color=2)!yellow
-       call enforce_rules<<<num_blocks, num_threads>>>(flag1, nbor, head_idx, num_octs, sim%m%ngridmax)
+       call enforce_rules<<<num_blocks, num_threads>>>(flag1, grid, nbor, head_idx, num_octs, sim%m%ngridmax)
        call GPU_Error_Check(__FILE__, __LINE__)
        call nvtxEndRange()
     endif
