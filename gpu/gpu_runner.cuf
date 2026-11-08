@@ -2,6 +2,7 @@ module gpu_runner
   use amr_parameters, only: ndim, twotondim, threetondim, dp, i8b
 #ifdef DO_RT
   use amr_parameters, only: MAXLEVEL
+  use rt_parameters, only: nrtgrp
 #endif
   use hydro_parameters, only: nvar
   use oct_commons, only: oct
@@ -41,6 +42,8 @@ module gpu_runner
   !> Arrays to hold the RT photon variables on the device
   real(kind=dp), device, allocatable, dimension(:,:,:) :: rtuold, rtunew
   real(kind=dp), device, dimension(1:MAXLEVEL) :: d_rt_c ! Reduced light speed of each level
+  real(kind=dp), device, dimension(1:nrtgrp) :: d_rt_err_grad_cn ! Photon density refinement threshold of each group
+  real(kind=dp), device, dimension(1:nrtgrp) :: d_rt_floor_cn ! Photon density refinement floor of each group
   !> Coarse photon fluxes staged in the ghost octs by face, and the octs that wrote them
   real(kind=dp), device, allocatable, dimension(:,:,:) :: rt_dep_val
   integer(kind=4), device, allocatable, dimension(:,:) :: rt_dep_src
@@ -2664,6 +2667,9 @@ contains
     use nvtx
     use hydro_device, only: hydro_flag_kernel
     use flag_device, only: count_flag1_kernel, poisson_flag_kernel, mass_flag_kernel, sink_flag_kernel
+#ifdef DO_RT
+    use rt_device, only: rt_flag_kernel
+#endif
     use ramses_commons, only: ramses_t
     type(ramses_t), intent(inout) :: sim
     integer, intent(in) :: ilevel
@@ -2679,6 +2685,10 @@ contains
 #ifdef MHD
     real(kind=dp) :: err_grad_b2, floor_b2, err_grad_A, floor_A
     real(kind=dp) :: err_grad_B, floor_B, err_grad_C, floor_C
+#endif
+#ifdef DO_RT
+    logical :: do_rtcn
+    real(kind=dp) :: rt_c_lev, rt_c_coarse
 #endif
     real(kind=dp) :: m_refine, jeans_refine, mass_sph, dx, factG, d_thres
     integer(kind=8), device :: nflag_d
@@ -2765,6 +2775,24 @@ contains
           call nvtxEndRange()
        endif
     endif
+
+#ifdef DO_RT
+    ! Refinement rules for the photon density, whenever a threshold is other than -1, as in rt_flag
+    do_rtcn = sim%r%rt .and. any(sim%r%rt_err_grad_cn(1:nrtgrp) /= -1.0_dp)
+    if (do_rtcn .and. num_octs > 0) then
+       rt_c_lev = sim%g%rt_c(ilevel)
+       ! Light speed of the parent cells read for missing neighbors (none at levelmin)
+       rt_c_coarse = sim%g%rt_c(max(ilevel-1,1))
+       ! Photon density thresholds and floors of the groups, copied at every launch
+       d_rt_err_grad_cn = sim%r%rt_err_grad_cn
+       d_rt_floor_cn = sim%r%rt_floor_cn
+       call nvtxStartRange("GPU user_flag", color=2)!yellow
+       call rt_flag_kernel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(flag1, grid, nbor, father, &
+            & rtuold, head_idx, num_octs, sim%m%ngridmax, rt_c_lev, rt_c_coarse, d_rt_err_grad_cn, d_rt_floor_cn)
+       call GPU_Error_Check(__FILE__, __LINE__)
+       call nvtxEndRange()
+    endif
+#endif
 
     ! Refinement rules around sink particles (sinks at level ilevel and finer)
     if (sim%r%sink .and. sim%r%sink_refine) then

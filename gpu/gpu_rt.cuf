@@ -1,5 +1,5 @@
 !> Photon transport kernels: the hyperbolic RT step of rt_step (rt_godunov_fine, set_rtuold, the source
-!> regions, the photon state of ghost octs and the restriction of the RT variables), on one rank.
+!> regions, the photon state of ghost octs, the restriction of the RT variables) and rt_flag, on one rank.
 module rt_device
 #ifdef DO_RT
   use amr_parameters, only: dp, ndim, twotondim, twondim
@@ -8,6 +8,7 @@ module rt_device
   use oct_commons, only: oct
   use gpu_utils
   use cudafor
+  use hydro_device, only: hhh, iii
   implicit none
 
   !> Faces between the cells of an oct and between them and their face neighbors
@@ -644,6 +645,147 @@ contains
     end do
 
   end subroutine rt_upload_kernel
+  ! =========================================================================
+
+  ! =========================================================================
+  !> Photon density stencil cell of a neighbor: a cache oct gives its parent cell,
+  !> read at the light speed of the coarser level, as rt_flag does
+  attributes(device) subroutine rt_stencil_cell(grid, father, ngridmax, source_idx, icell, &
+       & rt_c_lev, rt_c_coarse, rt_oct, rt_cell, rt_c_nbor)
+    implicit none
+    type(oct), device :: grid(*)
+    integer(kind=4), device :: father(*)
+    integer(kind=4), value :: ngridmax
+    integer, value :: source_idx, icell
+    real(kind=dp), value :: rt_c_lev, rt_c_coarse
+    integer :: rt_oct, rt_cell
+    real(kind=dp) :: rt_c_nbor
+
+    if (source_idx > ngridmax) then
+       rt_oct = father(source_idx)
+       rt_cell = parent_cell_idx(grid(source_idx)%ckey, grid(rt_oct)%ckey)
+       rt_c_nbor = rt_c_coarse
+    else
+       rt_oct = source_idx
+       rt_cell = icell
+       rt_c_nbor = rt_c_lev
+    endif
+
+  end subroutine rt_stencil_cell
+  ! =========================================================================
+
+  ! =========================================================================
+  !> Photon density gradient criterion of rt_refine on three cells, for the groups with a threshold >= 0
+  attributes(device) subroutine rt_crit(rtuold, cell_mid, oct_mid, cell_lft, oct_lft, c_lft, &
+       & cell_rgt, oct_rgt, c_rgt, rt_c_lev, rt_err_grad_cn_d, rt_floor_cn_d, ok)
+    implicit none
+    real(kind=dp), device :: rtuold(1:twotondim,1:nrtvar,*)
+    integer, value :: cell_mid, oct_mid, cell_lft, oct_lft, cell_rgt, oct_rgt
+    real(kind=dp), value :: c_lft, c_rgt, rt_c_lev
+    real(kind=dp), device :: rt_err_grad_cn_d(1:nrtgrp), rt_floor_cn_d(1:nrtgrp)
+    logical :: ok
+
+    integer :: igroup, iNp
+    real(kind=dp) :: ng, nm, nd, error
+
+    ok = .false.
+
+    do igroup = 1, nrtgrp
+       if (rt_err_grad_cn_d(igroup) >= 0.0_dp) then
+          iNp = 1 + (igroup-1)*(ndim+1)
+          ng = rtuold(cell_lft, iNp, oct_lft) * c_lft
+          nm = rtuold(cell_mid, iNp, oct_mid) * rt_c_lev
+          nd = rtuold(cell_rgt, iNp, oct_rgt) * c_rgt
+          error = 2.0_dp*max( &
+               & abs((nd-nm)/(nd+nm+rt_floor_cn_d(igroup))), &
+               & abs((nm-ng)/(nm+ng+rt_floor_cn_d(igroup))) )
+          if (error > rt_err_grad_cn_d(igroup)) ok = .true.
+       endif
+    end do
+
+  end subroutine rt_crit
+  ! =========================================================================
+
+  ! =========================================================================
+  !> Flag the cells of one level on the photon density gradient, as rt_flag, one thread per cell.
+  !> The neighbor octs come from the subgrid neighbor list, as in hydro_flag_kernel.
+  attributes(global) subroutine rt_flag_kernel(flag1, grid, nbor, father, rtuold, head_idx, num_octs, &
+       & ngridmax, rt_c_lev, rt_c_coarse, rt_err_grad_cn_d, rt_floor_cn_d)
+    implicit none
+    integer(kind=4), device :: flag1(1:twotondim,*)
+    type(oct), device :: grid(*)
+    integer(kind=4), device :: nbor(1:subgridsize,*)
+    integer(kind=4), device :: father(*)
+    real(kind=dp), device :: rtuold(1:twotondim,1:nrtvar,*)
+    integer(kind=4), intent(in), value :: head_idx, num_octs, ngridmax
+    real(kind=dp), intent(in), value :: rt_c_lev, rt_c_coarse
+    real(kind=dp), device :: rt_err_grad_cn_d(1:nrtgrp), rt_floor_cn_d(1:nrtgrp)
+
+    integer :: cell_idx, oct_idx, block_idx, subgrid_idx
+    integer :: i, j, k, il, jl, kl, ir, jr, kr
+    integer :: icell, inbor, idim, ind_nbor
+    integer :: oct_lft, cell_lft, oct_rgt, cell_rgt
+    real(kind=dp) :: c_lft, c_rgt
+    logical :: ok
+
+    block_idx = blockIdx%x - 1
+
+    ! Compute the oct idx
+    oct_idx = block_idx * blockDim%y + threadIdx%y - 1
+    if (oct_idx >= num_octs) return
+    oct_idx = head_idx + oct_idx
+
+    ! Compute the cell idx
+    cell_idx = threadIdx%x
+
+    ! Compute subgrid idx
+    subgrid_idx = (oct_idx - 1) / nsubgridtondim + 1
+
+    ! Compute oct idx within subgrid
+    oct_idx = (oct_idx - 1) - (subgrid_idx - 1) * nsubgridtondim
+    k = oct_idx / nsubgridsq
+    j = (oct_idx - k * nsubgridsq) / nsubgrid
+    i = oct_idx - j * nsubgrid - k * nsubgridsq
+    i = i + 1; j = j + 1; k = k + 1
+
+    ! Compute true oct idx
+    ind_nbor = 1 + i + nsubgridp2 * j  + nsubgridp2sq * k
+    oct_idx = nbor(ind_nbor, subgrid_idx)
+
+    ! Loop over dimensions
+    do idim = 1, ndim
+
+       il = 0; jl = 0; kl = 0
+       ir = 0; jr = 0; kr = 0
+       if (idim == 1) then
+          il = iii(cell_idx, 2 * (idim-1) + 1)
+          ir = iii(cell_idx, 2 * (idim-1) + 2)
+       else if (idim == 2) then
+          jl = iii(cell_idx, 2 * (idim-1) + 1)
+          jr = iii(cell_idx, 2 * (idim-1) + 2)
+       else
+          kl = iii(cell_idx, 2 * (idim-1) + 1)
+          kr = iii(cell_idx, 2 * (idim-1) + 2)
+       endif
+
+       ! Left and right cells
+       icell = hhh(cell_idx, 2 * (idim-1) + 1)
+       inbor = 1 + (i + il) + nsubgridp2 * (j + jl)  + nsubgridp2sq * (k + kl)
+       call rt_stencil_cell(grid, father, ngridmax, nbor(inbor, subgrid_idx), icell, &
+            & rt_c_lev, rt_c_coarse, oct_lft, cell_lft, c_lft)
+       icell = hhh(cell_idx, 2 * (idim-1) + 2)
+       inbor = 1 + (i + ir) + nsubgridp2 * (j + jr)  + nsubgridp2sq * (k + kr)
+       call rt_stencil_cell(grid, father, ngridmax, nbor(inbor, subgrid_idx), icell, &
+            & rt_c_lev, rt_c_coarse, oct_rgt, cell_rgt, c_rgt)
+
+       ! Check refinement criterion, and if satisfied set flag1 to 1
+       call rt_crit(rtuold, cell_idx, oct_idx, cell_lft, oct_lft, c_lft, cell_rgt, oct_rgt, c_rgt, &
+            & rt_c_lev, rt_err_grad_cn_d, rt_floor_cn_d, ok)
+       if (ok) flag1(cell_idx, oct_idx) = 1
+
+    end do
+
+  end subroutine rt_flag_kernel
   ! =========================================================================
 
 #endif

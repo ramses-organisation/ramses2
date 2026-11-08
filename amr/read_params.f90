@@ -1486,11 +1486,6 @@ subroutine m_read_params(pst)
   endif
 #endif
 #ifdef DO_RT
-  ! The GPU does not flag cells on the photon flux gradient
-  if(rt.and.any(rt_err_grad_cn(1:nrtgrp).ne.-1.0))then
-     write(*,*)'Error: rt_err_grad_cn is not supported on GPU'
-     nml_ok=.false.
-  endif
   ! The GPU does not exchange the photon variables between ranks
   if(rt.and.s%g%ncpu>1)then
      write(*,*)'Error: rt on more than one rank is not supported on GPU'
