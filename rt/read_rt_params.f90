@@ -246,24 +246,19 @@ subroutine m_read_rt_params(pst)
   !--------------------------------------------------
   ! Check the RT options supported on GPU
   !--------------------------------------------------
-  ! The GPU chemistry has no stellar emission
-  if(s%r%star.and.rt_star.and.s%r%neq_chem)then
-     write(*,*)'Error: star=.true. with rt_star=.true. and neq_chem=.true. is not supported on GPU'
-     call mdl_abort(s%mdl)
-  endif
   ! The GPU chemistry has no IR dust coupling
   if(rt_isIR)then
      write(*,*)'Error: rt_isIR is not supported on GPU'
      call mdl_abort(s%mdl)
   endif
   ! The GPU chemistry has no IR opacity that depends on the radiation temperature
-  if(is_kIR_T.and.(rt_advect.or.rt_T_rad))then
-     write(*,*)'Error: is_kIR_T with rt_advect=.true. or rt_T_rad=.true. is not supported on GPU'
+  if(is_kIR_T.and.(rt_advect.or.rt_T_rad.or.(s%r%star.and.rt_star)))then
+     write(*,*)'Error: is_kIR_T with rt_advect=.true., rt_T_rad=.true. or star=.true. with rt_star=.true. is not supported on GPU'
      call mdl_abort(s%mdl)
   endif
   ! The GPU chemistry has no recombination radiation and no case A rates
-  if(rt_advect.and..not.rt_otsa)then
-     write(*,*)'Error: rt_otsa=.false. with rt_advect=.true. is not supported on GPU'
+  if((rt_advect.or.(s%r%star.and.rt_star)).and..not.rt_otsa)then
+     write(*,*)'Error: rt_otsa=.false. with rt_advect=.true. or star=.true. with rt_star=.true. is not supported on GPU'
      call mdl_abort(s%mdl)
   endif
   ! Without rt_advect the GPU cooling runs, and it updates the photon variables only with neq_chem
