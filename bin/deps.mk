@@ -58,7 +58,7 @@ init_cooling.o: amr_commons.o cooling_module.o
 init_cr.o: amr_commons.o mdl.o mdl_commons.o ramses_commons.o
 init_flow_fine.o: amr_parameters.o input_hydro_condinit.o input_hydro_gadget.o input_hydro_grafic.o ramses_commons.o
 init_hydro.o: amr_commons.o mdl.o mdl_commons.o ramses_commons.o
-init_neq_chem.o: amr_commons.o coolrates_module.o
+init_neq_chem.o: amr_commons.o coolrates_module.o hydro_parameters.o
 init_part.o: amr_commons.o amr_parameters.o mdl.o mdl_commons.o pm_commons.o pm_parameters.o ramses_commons.o
 init_refine_adaptive.o: cr_upload.o flag_utils.o init_part.o input_hydro_grafic.o input_part.o input_part_zoom.o ramses_commons.o refine_utils.o rt_upload.o upload.o
 init_refine_basegrid.o: amr_parameters.o flag_utils.o hash.o hilbert.o input_hydro_grafic.o mdl.o mdl_commons.o ramses_commons.o
