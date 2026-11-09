@@ -1204,7 +1204,7 @@ contains
        runaway = runaway_d
        if (runaway /= 0) then
           write(*,*)'Error: a cell took more than 100000 sub-steps in the GPU neq chemistry'
-          stop
+          error stop
        endif
     end if
 
