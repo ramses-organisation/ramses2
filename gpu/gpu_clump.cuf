@@ -87,6 +87,7 @@ module clump_device
 contains
 
   include 'gpu_hash.cuf'
+  include 'gpu_cell.cuf'
 
   ! =========================================================================
   ! Allocate clump arrays on the device
@@ -408,7 +409,7 @@ contains
     integer, value :: head_idx, num_octs
 
     integer :: cell_idx, oct_idx, block_idx
-    integer :: father_idx, i, j, k, father_cell_idx
+    integer :: father_idx, father_cell_idx
 
     block_idx = blockIdx%x - 1
     oct_idx = block_idx * blockDim%y + threadIdx%y - 1
@@ -422,10 +423,7 @@ contains
 
     ! Compute parent indices
     father_idx = father(oct_idx)
-    i = grid(oct_idx)%ckey(1) - 2 * grid(father_idx)%ckey(1)
-    j = grid(oct_idx)%ckey(2) - 2 * grid(father_idx)%ckey(2)
-    k = grid(oct_idx)%ckey(3) - 2 * grid(father_idx)%ckey(3)
-    father_cell_idx = 1 + i + 2*j + 4*k
+    father_cell_idx = parent_cell_idx(grid(oct_idx)%ckey, grid(father_idx)%ckey)
 
     ! Smooth density field
     rho(cell_idx, oct_idx) = 0.5d0 * rho(cell_idx, oct_idx) + 0.5d0 * rho(father_cell_idx, father_idx)

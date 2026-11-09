@@ -13,164 +13,10 @@ contains
 
   include 'gpu_hash.cuf'
   include 'gpu_hilbert.cuf'
+  include 'gpu_cell.cuf'
+#include "gpu_interpol.cuf"
 
-! Hydro prolongation (slope limiters and interpol_hydro_d).
-
-! MinMod cell-centred slope limiter.
-attributes(device) subroutine compute_limiter_minmod_d(a, w)
-  implicit none
-  real(kind=dp) :: a(0:twondim)
-  real(kind=dp) :: w(1:ndim)
-  integer :: idim
-  real(kind=dp) :: diff_left, diff_right, minmod
-  do idim = 1, ndim
-     diff_left  = 0.5_dp*(a(2*idim)-a(0))
-     diff_right = 0.5_dp*(a(0)-a(2*idim-1))
-     if (diff_left*diff_right <= 0.0_dp) then
-        minmod = 0.0_dp
-     else
-        minmod = min(abs(diff_left),abs(diff_right))*diff_left/abs(diff_left)
-     end if
-     w(idim) = minmod
-  end do
-end subroutine compute_limiter_minmod_d
-
-! Moncen cell-centred slope limiter.
-attributes(device) subroutine compute_limiter_central_d(a, w)
-  implicit none
-  real(kind=dp) :: a(0:twondim)
-  real(kind=dp) :: w(1:ndim)
-  integer :: j, idim, ind, ix, iy, iz
-  real(kind=dp) :: xc(1:twotondim,1:3)
-  real(kind=dp) :: xxc
-  real(kind=dp) :: ac(1:twotondim)
-  real(kind=dp) :: corner, kernel, diff_corner, diff_kernel
-  real(kind=dp) :: max_limiter, min_limiter, limiter
-
-  ! Set position of cell centers relative to grid center
-  do ind = 1, twotondim
-     iz = (ind-1)/4
-     iy = (ind-1-4*iz)/2
-     ix = (ind-1-2*iy-4*iz)
-     xc(ind,1) = (real(ix,kind=dp)-0.5_dp)
-     xc(ind,2) = (real(iy,kind=dp)-0.5_dp)
-     xc(ind,3) = (real(iz,kind=dp)-0.5_dp)
-  end do
-
-  ! Second order central slope
-  do idim = 1, ndim
-     w(idim) = 0.25_dp*(a(2*idim)-a(2*idim-1))
-  end do
-
-  ! Compute corner interpolated values
-  do ind = 1, twotondim
-     ac(ind) = a(0)
-  end do
-  do idim = 1, ndim
-     do ind = 1, twotondim
-        xxc = xc(ind,idim)
-        corner = ac(ind) + 2.0_dp*w(idim)*xxc
-        ac(ind) = corner
-     end do
-  end do
-
-  ! Compute max of corners
-  corner = ac(1)
-  do j = 2, twotondim
-     corner = max(corner, ac(j))
-  end do
-  ! Compute max of gradient kernel
-  kernel = a(1)
-  do j = 2, twondim
-     kernel = max(kernel, a(j))
-  end do
-  diff_kernel = a(0) - kernel
-  diff_corner = a(0) - corner
-  max_limiter = 0.0_dp
-  if (diff_kernel*diff_corner > 0.0_dp) then
-     max_limiter = min(1.0_dp, diff_kernel/diff_corner)
-  end if
-
-  ! Compute min of corners
-  corner = ac(1)
-  do j = 2, twotondim
-     corner = min(corner, ac(j))
-  end do
-  ! Compute min of gradient kernel
-  kernel = a(1)
-  do j = 2, twondim
-     kernel = min(kernel, a(j))
-  end do
-  diff_kernel = a(0) - kernel
-  diff_corner = a(0) - corner
-  min_limiter = 0.0_dp
-  if (diff_kernel*diff_corner > 0.0_dp) then
-     min_limiter = min(1.0_dp, diff_kernel/diff_corner)
-  end if
-
-  ! Compute limiter and correct gradient
-  limiter = min(min_limiter, max_limiter)
-  do idim = 1, ndim
-     w(idim) = w(idim)*limiter
-  end do
-end subroutine compute_limiter_central_d
-
-! Central cell-centred slope.
-attributes(device) subroutine compute_central_d(a, w)
-  implicit none
-  real(kind=dp) :: a(0:twondim)
-  real(kind=dp) :: w(1:ndim)
-  integer :: idim
-  do idim = 1, ndim
-     w(idim) = 0.25_dp*(a(2*idim)-a(2*idim-1))
-  end do
-end subroutine compute_central_d
-
-! Positions xc of the 2**ndim child cell centers relative to the parent cell center.
-attributes(device) subroutine child_centers_d(xc)
-  implicit none
-  real(kind=dp) :: xc(1:8,1:3)
-  integer :: ind, ix, iy, iz
-
-  do ind = 1, twotondim
-     iz = (ind-1)/4
-     iy = (ind-1-4*iz)/2
-     ix = (ind-1-2*iy-4*iz)
-     if (ndim > 0) xc(ind,1) = (real(ix,kind=dp)-0.5_dp)
-     if (ndim > 1) xc(ind,2) = (real(iy,kind=dp)-0.5_dp)
-     if (ndim > 2) xc(ind,3) = (real(iz,kind=dp)-0.5_dp)
-  end do
-
-end subroutine child_centers_d
-
-! Interpolate one variable from its parent stencil a into the 2**ndim children u2,
-! with xc the child cell centers relative to the parent cell center.
-attributes(device) subroutine interpol_one_var_d(a, u2, xc, interpol_type)
-  implicit none
-  real(kind=dp) :: a(0:twondim)
-  real(kind=dp) :: u2(1:twotondim)
-  real(kind=dp) :: xc(1:8,1:3)
-  integer, value :: interpol_type
-  integer :: idim, ind
-  real(kind=dp) :: w(1:ndim)
-
-  ! Reset gradient
-  w(1:ndim) = 0.0_dp
-
-  ! Compute gradient with chosen limiter
-  if (interpol_type == 1) call compute_limiter_minmod_d(a, w)
-  if (interpol_type == 2) call compute_limiter_central_d(a, w)
-  if (interpol_type == 3) call compute_central_d(a, w)
-
-  ! Interpolate over children cells
-  do ind = 1, twotondim
-     u2(ind) = a(0)
-     do idim = 1, ndim
-        u2(ind) = u2(ind) + w(idim)*xc(ind,idim)
-     end do
-  end do
-
-end subroutine interpol_one_var_d
+! Hydro prolongation (interpol_hydro_d).
 
 ! Interpolate the parent stencil u1 (father cell and its 2*ndim neighbours)
 ! into the 2**ndim children u2, as interpol_hydro on the CPU.
@@ -596,137 +442,6 @@ attributes(device) subroutine interpol_mhd_d(u1, u2, B1, B2, B3, refined, &
 end subroutine interpol_mhd_d
 #endif
 
-! Gather coarse parent stencil for prolongation (and face B for MHD).
-attributes(device) subroutine gather_twondim_parent_stencil( &
-     & grid, uold, bold, hash_key, hash_val, hash_size, ckey_max, key_off, &
-     & box_ckey_min, box_ckey_max, periodic, ilev_child, chkey, central_idx, central_cell, u1, &
-     & igrid_nbor, ind_nbor &
-#ifdef MHD
-     & , B1, B3, refined &
-#endif
-     & )
-  implicit none
-  type(oct), device :: grid(*)
-  real(kind=dp), device :: uold(1:twotondim,1:nvar,*)
-  real(kind=dp), device :: bold(1:twotondim,1:6,*)
-  integer(kind=8), device :: hash_key(*)
-  integer(kind=4), device :: hash_val(*)
-  integer(kind=4), value :: hash_size
-  integer(kind=4), device :: ckey_max(*)
-  integer(kind=8), device :: key_off(*)
-  integer(kind=4), device :: box_ckey_min(1:ndim,*)
-  integer(kind=4), device :: box_ckey_max(1:ndim,*)
-  logical, device :: periodic(1:3)
-  integer(kind=4), value :: ilev_child
-  integer(kind=4), value :: central_idx, central_cell
-  integer(kind=4) :: chkey(1:ndim)
-  real(kind=dp) :: u1(0:twondim,1:nvar)
-  ! Parent oct (0 if missing) and parent cell of each stencil cell
-  integer :: igrid_nbor(0:twondim), ind_nbor(0:twondim)
-#ifdef MHD
-  real(kind=dp) :: B1(0:twondim,1:6)
-  real(kind=dp) :: B3(1:twondim,1:twotondim,1:6)
-  logical :: refined(1:twondim)
-#endif
-
-  integer(kind=8) :: key, offset, ix, iy, iz, nx
-  integer :: inbor, idim, idn, ivar, pidx, pcell, ilev_par
-  integer :: nkey(1:ndim), fkey(1:ndim), bit(1:ndim)
-#ifdef MHD
-  integer :: ib, ind, cidx
-#endif
-
-  ilev_par = ilev_child - 1
-
-  ! --- Central parent cell (inbor=0): the father cell being refined ---
-  ! Use the caller's resident father directly; re-deriving it via hash_get can
-  ! miss and read element 0 (uninitialised) on a coarse-fine ghost edge.
-  pcell = central_cell
-  pidx  = central_idx
-  igrid_nbor(0) = pidx
-  ind_nbor(0) = pcell
-  do ivar = 1, nvar
-     u1(0,ivar) = uold(pcell,ivar,pidx)
-  end do
-#ifdef MHD
-  do ib = 1, 6
-     B1(0,ib) = bold(pcell,ib,pidx)
-  end do
-#endif
-
-  ! --- Neighbouring father cells (inbor=1..twondim) + refined-sibling b3 ---
-  ! shift(:,inbor): 1->(-1,0,0) 2->(+1,0,0) 3->(0,-1,0) 4->(0,+1,0) 5->(0,0,-1)
-  ! Neighbour offset mapping for parent stencil.
-  do inbor = 1, twondim
-#ifdef MHD
-     refined(inbor) = .false.
-#endif
-     do idim = 1, ndim
-        nkey(idim) = chkey(idim)
-     end do
-     idn = (inbor+1)/2
-     if (mod(inbor,2) == 1) then
-        nkey(idn) = chkey(idn) - 1
-     else
-        nkey(idn) = chkey(idn) + 1
-     end if
-     ! Periodic boundary conditions at the child level
-     do idim = 1, ndim
-        if (periodic(idim)) then
-           if (nkey(idim) <  box_ckey_min(idim,ilev_child)) nkey(idim) = box_ckey_max(idim,ilev_child) - 1
-           if (nkey(idim) >= box_ckey_max(idim,ilev_child)) nkey(idim) = box_ckey_min(idim,ilev_child)
-        end if
-     end do
-     do idim = 1, ndim
-        fkey(idim) = nkey(idim)/2
-        bit(idim)  = nkey(idim) - 2*fkey(idim)
-     end do
-     pcell = 1 + bit(1) + 2*bit(2) + 4*bit(3)
-     ix = int(fkey(1),kind=8); iy = int(fkey(2),kind=8); iz = int(fkey(3),kind=8)
-     nx = int(ckey_max(ilev_par),kind=8); offset = key_off(ilev_par)
-     key = offset + ix + iy*nx + iz*nx*nx
-     pidx = hash_get(hash_key, hash_val, hash_size, key)
-     igrid_nbor(inbor) = pidx
-     ind_nbor(inbor) = pcell
-     if (pidx > 0) then
-        do ivar = 1, nvar
-           u1(inbor,ivar) = uold(pcell,ivar,pidx)
-        end do
-#ifdef MHD
-        do ib = 1, 6
-           B1(inbor,ib) = bold(pcell,ib,pidx)
-        end do
-        ! Refined-neighbour child oct (if already in the hash table)
-        if (grid(pidx)%refined(pcell)) then
-           ix = int(nkey(1),kind=8); iy = int(nkey(2),kind=8); iz = int(nkey(3),kind=8)
-           nx = int(ckey_max(ilev_child),kind=8); offset = key_off(ilev_child)
-           key = offset + ix + iy*nx + iz*nx*nx
-           cidx = hash_get(hash_key, hash_val, hash_size, key)
-           if (cidx > 0) then
-              refined(inbor) = .true.
-              do ib = 1, 6
-                 do ind = 1, twotondim
-                    B3(inbor,ind,ib) = bold(ind,ib,cidx)
-                 end do
-              end do
-           end if
-        end if
-#endif
-     else
-        ! Defensive: a missing neighbour father reuses the central cell value
-        ! Zero gradient at domain boundary.
-        do ivar = 1, nvar
-           u1(inbor,ivar) = u1(0,ivar)
-        end do
-#ifdef MHD
-        do ib = 1, 6
-           B1(inbor,ib) = B1(0,ib)
-        end do
-#endif
-     end if
-  end do
-end subroutine gather_twondim_parent_stencil
-
 #ifdef MHD
 ! Face B of ghost octs prolongated from the coarser level, as in make_cache_octs.
 attributes(global) subroutine nimhd_ghost_b_kernel(grid, uold, b, father, hash_key, hash_val, hash_size, &
@@ -813,10 +528,6 @@ end subroutine nimhd_ghost_b_kernel
     logical :: refined(1:twondim)
 #endif
     integer :: igrid_nbor(0:twondim), ind_nbor(0:twondim)
-#ifdef DO_RT
-    integer :: inbor
-    real(kind=dp) :: rtu1(0:twondim), rtu2(1:twotondim), xc(1:8,1:3)
-#endif
     integer(kind=4), dimension(1:ndim) :: ckey
     integer(kind=8) :: hkey
 
@@ -893,27 +604,8 @@ end subroutine nimhd_ghost_b_kernel
 
 #ifdef HYDRO
 #ifdef DO_RT
-    ! Set position of cell centers relative to grid center
-    call child_centers_d(xc)
-
-    ! RT prolongation, one variable at a time, from the parent cells of the hydro stencil
-    do ivar = 1, nrtvar
-       do inbor = 0, twondim
-          if (igrid_nbor(inbor) > 0) then
-             rtu1(inbor) = rtuold(ind_nbor(inbor),ivar,igrid_nbor(inbor))
-          else
-             rtu1(inbor) = rtu1(0)
-          end if
-       end do
-       call interpol_one_var_d(rtu1, rtu2, xc, interpol_type)
-       do ind = 1, twotondim
-          rtuold(ind,ivar,child_idx) = rtu2(ind)
-          ! Rescale according to speed of light difference
-          if (mod(ivar,ndim+1) == 1) then
-             rtuold(ind,ivar,child_idx) = (rtuold(ind,ivar,child_idx) * rt_c(ilevel-1)) / rt_c(ilevel)
-          end if
-       end do
-    end do
+    ! RT prolongation from the parent cells of the hydro stencil
+    call interpol_rt_d(rtuold, igrid_nbor, ind_nbor, interpol_type, rt_c, ilevel, child_idx)
 #endif
 #endif
 
@@ -2642,7 +2334,7 @@ end subroutine nimhd_ghost_b_kernel
     integer(kind=4), intent(in), value :: interpol_var, interpol_type
     real(kind=dp), intent(in), value :: smallr
 
-    integer :: cache_idx, parent_idx, cell_idx, ind, i, j, k, ivar
+    integer :: cache_idx, parent_idx, cell_idx, ind, ivar
     integer, dimension(1:ndim) :: ckey
     ! Prolongation scratch for parent stencil and children.
     real(kind=dp) :: u1(0:twondim,1:nvar)
@@ -2663,10 +2355,7 @@ end subroutine nimhd_ghost_b_kernel
     ! Get parent oct and parent cell idx
     parent_idx = father(cache_idx)
     ckey(1:ndim) = grid(cache_idx)%ckey(1:ndim)
-    i = ckey(1) - 2*grid(parent_idx)%ckey(1)
-    j = ckey(2) - 2*grid(parent_idx)%ckey(2)
-    k = ckey(3) - 2*grid(parent_idx)%ckey(3)
-    cell_idx = 1 + i + 2*j + 4*k
+    cell_idx = parent_cell_idx(ckey, grid(parent_idx)%ckey)
 
 #ifdef MHD
     ! divB-preserving MHD prolongation

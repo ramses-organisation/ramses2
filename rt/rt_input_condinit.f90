@@ -1,4 +1,7 @@
 module rt_input_condinit_module
+#if defined(_CUDA) && defined(DO_RT)
+  use gpu_runner, only: gpu_rt_sources
+#endif
 contains
 !###############################################
 !###############################################
@@ -209,7 +212,11 @@ recursive subroutine r_rt_input_source_regions(pst,ilevel,input_size)
      call r_rt_input_source_regions(pst%pLower,ilevel,input_size)
      call mdl_get_reply(pst%s%mdl,rID,0)
   else
+#if defined(_CUDA) && defined(DO_RT)
+     call gpu_rt_sources(pst%s,ilevel)
+#else
      call rt_input_source_regions(pst%s%r,pst%s%g,pst%s%m,ilevel)
+#endif
   endif
 
 end subroutine r_rt_input_source_regions
