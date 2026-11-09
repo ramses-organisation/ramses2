@@ -5,7 +5,7 @@ module hydro_device
   use gpu_utils
   use cudafor
   implicit none
-  private :: mix64, fnv64, fnv32, hash_set, hash_get, hash_update, hash_free
+  private :: mix64, fnv64, fnv32, hash_set, hash_get, get_cell_by_key, hash_update, hash_free
 
   !> @brief
   !> Cell index and grid offset to access neighbors.
