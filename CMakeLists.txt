@@ -791,8 +791,11 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "NVHPC")
 
     # Step 1: GPU module dependencies (using object files)
     set_source_files_properties(gpu/gpu_hydro.cuf gpu/gpu_cooling.cuf gpu/gpu_star.cuf gpu/gpu_feedback.cuf gpu/gpu_rho.cuf
-                                gpu/gpu_mg.cuf gpu/gpu_refine.cuf gpu/gpu_flag.cuf
+                                gpu/gpu_mg.cuf gpu/gpu_refine.cuf
         PROPERTIES OBJECT_DEPENDS "${_gpu_obj_dir}/gpu_utils.cuf.o")
+
+    set_source_files_properties(gpu/gpu_flag.cuf
+        PROPERTIES OBJECT_DEPENDS "${_gpu_obj_dir}/gpu_utils.cuf.o;${_gpu_obj_dir}/gpu_feedback.cuf.o")
 
     set_source_files_properties(gpu/gpu_rt.cuf
         PROPERTIES OBJECT_DEPENDS "${_gpu_obj_dir}/gpu_utils.cuf.o;${_gpu_obj_dir}/gpu_hydro.cuf.o")
@@ -804,13 +807,13 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "NVHPC")
         PROPERTIES OBJECT_DEPENDS "${_gpu_obj_dir}/gpu_utils.cuf.o;${_gpu_obj_dir}/gpu_runner.cuf.o")
 
     set_source_files_properties(gpu/gpu_clump.cuf
-        PROPERTIES OBJECT_DEPENDS "${_gpu_obj_dir}/gpu_utils.cuf.o;${_gpu_obj_dir}/gpu_runner.cuf.o")
+        PROPERTIES OBJECT_DEPENDS "${_gpu_obj_dir}/gpu_utils.cuf.o;${_gpu_obj_dir}/gpu_runner.cuf.o;${_gpu_obj_dir}/gpu_part.cuf.o")
 
     set_source_files_properties(gpu/gpu_sink.cuf
         PROPERTIES OBJECT_DEPENDS "${_gpu_obj_dir}/gpu_utils.cuf.o;${_gpu_obj_dir}/gpu_feedback.cuf.o;${_gpu_obj_dir}/gpu_runner.cuf.o")
 
     set_source_files_properties(gpu/gpu_part.cuf
-        PROPERTIES OBJECT_DEPENDS "${_gpu_obj_dir}/gpu_utils.cuf.o;${_gpu_obj_dir}/gpu_runner.cuf.o")
+        PROPERTIES OBJECT_DEPENDS "${_gpu_obj_dir}/gpu_utils.cuf.o;${_gpu_obj_dir}/gpu_runner.cuf.o;${_gpu_obj_dir}/gpu_sink.cuf.o")
 
     set_source_files_properties(gpu/gpu_manager.cuf
         PROPERTIES OBJECT_DEPENDS "${_gpu_obj_dir}/gpu_runner.cuf.o")
