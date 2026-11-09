@@ -50,6 +50,9 @@ end subroutine m_rt_init_flow_fine
 !###############################################
 !###############################################
 module update_rt_c_module
+#if defined(_CUDA) && defined(DO_RT)
+  use gpu_manager, only: gpu_star_to_host
+#endif
   type :: in_broadcast_rt_c
      real(kind=8)::rt_c
   end type in_broadcast_rt_c
@@ -96,6 +99,9 @@ recursive subroutine r_rt_neq_updates(pst, nstep_coarse, input_size)
         .and. r%sedprops_update>0)then
         ! The interval is tested first: mod(n,0) is undefined
         if(mod(nstep_coarse,r%sedprops_update)==0)then
+#if defined(_CUDA) && defined(DO_RT)
+           call gpu_star_to_host(s)
+#endif
            ! Update cross sections based on evolving star properties
            call update_SED_group_props(r, g, s%SED, s%star)
         endif

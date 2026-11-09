@@ -1,4 +1,7 @@
 module star_formation_common_module
+#if defined(_CUDA) && defined(DO_RT)
+  use gpu_manager, only: gpu_star_to_host
+#endif
   implicit none
 contains
 
@@ -22,6 +25,9 @@ subroutine finish_star_formation(s)
      s%r%rt_advect=.true.
      ! Update cross sections based on star properties
      if(s%r%sedprops_update .gt. 0) then
+#if defined(_CUDA) && defined(DO_RT)
+       call gpu_star_to_host(s)
+#endif
        call update_SED_group_props(s%r, s%g, s%sed, s%star)
      endif
   endif

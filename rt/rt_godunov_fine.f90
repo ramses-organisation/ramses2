@@ -136,8 +136,8 @@ recursive subroutine r_set_rtunew(pst,ilevel,input_size)
      call mdl_get_reply(pst%s%mdl,rID,0)
   else
 #if defined(_CUDA) && defined(DO_RT)
-     ! rtunew lives on the device when the photons are advected
-     if(pst%s%r%rt_advect)then
+     ! rtunew lives on the device when the photons are advected or a star can turn them on
+     if(pst%s%r%rt_advect .or. (pst%s%r%star .and. pst%s%r%rt_star))then
         call gpu_rt_set_rtunew(pst%s,ilevel)
         return
      endif

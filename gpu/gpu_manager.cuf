@@ -297,6 +297,24 @@ end subroutine gpu_to_host_part
 !###########################################################
 !###########################################################
 !###########################################################
+subroutine gpu_star_to_host(sim)
+  implicit none
+  type(ramses_t)::sim
+  integer::istat
+
+  ! Copy the masses, birth times and metallicities of the stars to the host
+  if (.not. allocated(star_xp) .or. sim%star%npart <= 0) return
+  call nvtxStartRange("Copy star mass, time and metallicity from device to host", color=5)!red
+  istat = cudaMemcpy(sim%star%mp, star_mp, int(sim%star%npart,8))
+  istat = cudaMemcpy(sim%star%tp, star_tp, int(sim%star%npart,8))
+  istat = cudaMemcpy(sim%star%zp, star_zp, int(sim%star%npart,8))
+  call GPU_Error_Check(__FILE__, __LINE__)
+  call nvtxEndRange()
+
+end subroutine gpu_star_to_host
+!###########################################################
+!###########################################################
+!###########################################################
 subroutine gpu_to_host_turb(pst)
   use ramses_commons, only: pst_t
   implicit none
@@ -592,7 +610,7 @@ subroutine gpu_allocate_amr(sim)
 #ifdef DO_RT
   allocate(rtuold(1:twotondim,1:nrtvar,1:sim%m%ngridmax+sim%m%ncachemax))
   allocate(rtunew(1:twotondim,1:nrtvar,1:sim%m%ngridmax))
-  if(sim%r%rt_advect)then
+  if(sim%r%rt_advect .or. (sim%r%rt .and. sim%r%star .and. sim%r%rt_star))then
      allocate(rt_dep_val(1:2*ndim,1:nrtvar,1:sim%m%ncachemax))
      allocate(rt_dep_src(1:2*ndim,1:sim%m%ncachemax))
   endif

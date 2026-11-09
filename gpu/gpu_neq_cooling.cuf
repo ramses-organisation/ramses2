@@ -1168,6 +1168,10 @@ contains
 
     ! Ensure the rate tables live on the device
     if (.not. neq_tables_uploaded) call gpu_upload_neq_tables(sim)
+#ifdef DO_RT
+    ! With emitting stars, copy the run parameters at every call
+    if (sim%r%rt .and. sim%r%star .and. sim%r%rt_star) neq_run_d = sim%r
+#endif
 
     ! Density for isothermal/polytropic EOS in H/cc
     nH_eos = sim%r%eos_nH
