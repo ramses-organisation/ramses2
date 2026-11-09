@@ -246,9 +246,9 @@ subroutine m_read_rt_params(pst)
   !--------------------------------------------------
   ! Check the RT options supported on GPU
   !--------------------------------------------------
-  ! The GPU has no stellar emission
-  if(s%r%star.and.rt_star)then
-     write(*,*)'Error: star=.true. with rt_star=.true. is not supported on GPU'
+  ! The GPU chemistry has no stellar emission
+  if(s%r%star.and.rt_star.and.s%r%neq_chem)then
+     write(*,*)'Error: star=.true. with rt_star=.true. and neq_chem=.true. is not supported on GPU'
      call mdl_abort(s%mdl)
   endif
   ! The GPU chemistry has no IR dust coupling

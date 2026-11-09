@@ -47,6 +47,14 @@ module gpu_runner
   !> Coarse photon fluxes staged in the ghost octs by face, and the octs that wrote them
   real(kind=dp), device, allocatable, dimension(:,:,:) :: rt_dep_val
   integer(kind=4), device, allocatable, dimension(:,:) :: rt_dep_src
+  !> Stellar emissivity of each photon group on the device
+  real(kind=dp), device, allocatable, dimension(:,:,:) :: emissivity
+  !> Stars of the level window: cell key and window index, both sorted by key, luminosity of each group,
+  !> and photons of the first group and emission time for the emission statistics
+  integer(kind=8), device, allocatable, target, dimension(:) :: rt_star_key, rt_star_key_sorted
+  integer(kind=4), device, allocatable, target, dimension(:) :: rt_star_idx, rt_star_idx_sorted
+  real(kind=8), device, allocatable, dimension(:,:) :: rt_star_lum
+  real(kind=8), device, allocatable, dimension(:) :: rt_star_nph, rt_star_dtl
 #endif
 
   !> Arrays to hold Turbulent acceleration fields and spectra on the device,
@@ -1567,7 +1575,8 @@ contains
   end subroutine gpu_rt_set_rtunew
 
   !> @brief
-  !> Set rtuold equal to rtunew with the photon conservation fix on a GPU, as set_rtuold
+  !> Add the stellar emissivity without neq_chem, then set rtuold equal to rtunew with the photon
+  !> conservation fix on a GPU, as set_rtuold
   !>
   !> @detail
   !> @param[in] sim : The simulation object
@@ -1575,7 +1584,7 @@ contains
   !>
   subroutine gpu_rt_set_rtuold(sim, ilevel)
     use nvtx
-    use rt_device, only: rt_set_rtuold_kernel
+    use rt_device, only: rt_emission_kernel, rt_set_rtuold_kernel
     use ramses_commons, only: ramses_t
     type(ramses_t), intent(inout) :: sim
     integer, intent(in) :: ilevel
@@ -1592,6 +1601,14 @@ contains
     threadsY_per_block = 16
     num_blocks = (num_octs + threadsY_per_block - 1) / threadsY_per_block
     if (num_octs > 0) then
+       ! Stellar emission over the time step, added here only without neq_chem, as in set_rtuold
+       if (sim%r%star .and. sim%r%rt_star .and. .not. sim%r%neq_chem) then
+          call nvtxStartRange("GPU RT emission", color=0)!green
+          call rt_emission_kernel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(rtunew, &
+               & emissivity, head_idx, num_octs, real(sim%g%dtnew(ilevel),kind=dp))
+          call GPU_Error_Check(__FILE__, __LINE__)
+          call nvtxEndRange()
+       end if
        call nvtxStartRange("GPU RT set_rtuold", color=0)!green
        call rt_set_rtuold_kernel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(rtuold, rtunew, &
             & head_idx, num_octs, real(sim%g%rt_c(ilevel),kind=dp))
@@ -1710,6 +1727,207 @@ contains
     endif
 
   end subroutine gpu_rt_upload_fine
+
+  !> @brief
+  !> Set the stellar emissivity of level ilevel to zero on a GPU, as r_set_emissivity
+  !>
+  !> @detail
+  !> @param[in] sim : The simulation object
+  !> @param[in] ilevel : The refinement level to update
+  !>
+  subroutine gpu_rt_set_emissivity(sim, ilevel)
+    use nvtx
+    use ramses_commons, only: ramses_t
+    type(ramses_t), intent(inout) :: sim
+    integer, intent(in) :: ilevel
+
+    integer(kind=4) :: head_idx, num_octs
+    integer :: info
+
+    ! Only star particles with rt_star emit
+    if (.not. (sim%r%star .and. sim%r%rt_star)) return
+
+    head_idx = sim%m%head(ilevel)
+    num_octs = sim%m%noct(ilevel)
+    if (num_octs > 0) then
+       call nvtxStartRange("GPU RT set_emissivity", color=0)!green
+       info = cudaMemset(emissivity(1,1,head_idx), 0.0_dp, twotondim*nrtgrp*int(num_octs,8))
+       call GPU_Error_Check(__FILE__, __LINE__)
+       call nvtxEndRange()
+    end if
+
+  end subroutine gpu_rt_set_emissivity
+
+  !> @brief
+  !> Stellar emissivity of the star particles of level ilevel on a GPU, as star_rt_feedback
+  !>
+  !> @detail
+  !> Each star adds its luminosity to its cell, or to the coarser cell when that one is missing.
+  !> The stars are sorted by cell, and the first star of each cell adds those of the cell in window order.
+  !>
+  !> @param[in] sim : The simulation object
+  !> @param[in] ilevel : The refinement level to update
+  !>
+  subroutine gpu_rt_star_emissivity(sim, ilevel)
+    use nvtx
+    use iso_c_binding, only: c_loc
+    use cub_module, only: radix_sort
+    use constants, only: M_sun, sec2Gyr
+    use rt_device, only: rt_star_contrib_kernel, rt_star_deposit_kernel
+    use ramses_commons, only: ramses_t
+    type(ramses_t), intent(inout) :: sim
+    integer, intent(in) :: ilevel
+
+    integer(kind=4) :: head_idx, num_stars, fail
+    integer(kind=4), device :: fail_d
+    integer :: num_threads, num_blocks, end_bit, j, info
+    integer(kind=8) :: key_none
+    real(kind=8) :: scale_nH, scale_T2, scale_l, scale_d, scale_t, scale_v
+    real(kind=8) :: scale_Np, scale_Fp, scale_inp, scale_inp_cell, scale_inp_cell_coarse, scale_msun
+    real(kind=8) :: dx_loc, vol_loc, code2Gyr, dt_Gyr, dt_Gyr_parent, t_SN_Gyr, z_nometal
+    real(kind=8), allocatable, dimension(:) :: nph, dtl
+    real(kind=dp), allocatable, dimension(:) :: mp_star
+
+    head_idx = sim%star%headp(ilevel)
+    num_stars = sim%star%tailp(ilevel) - head_idx + 1
+    if (num_stars <= 0) return
+
+    ! Mesh spacing in that level
+    dx_loc = sim%r%boxlen/2**ilevel
+    vol_loc = dx_loc**ndim
+
+    ! Conversion factor from user units to cgs units
+    call units(sim%r, sim%g, scale_l, scale_t, scale_d, scale_v, scale_nH, scale_T2)
+    call rt_units(sim%r, sim%g, scale_Np, scale_Fp)
+    scale_inp = sim%r%rt_esc_frac * scale_d / scale_Np / vol_loc / M_sun
+    scale_msun = scale_d * scale_l**ndim / M_sun
+
+    ! Proper time (code units) to Gyr
+    code2Gyr = scale_t * sec2Gyr / sim%g%aexp**2
+
+    ! Time step from code units to Gyr
+    dt_Gyr = sim%g%dtnew(ilevel) * scale_t * sec2Gyr
+
+    ! Supernovae progenitors life time from Myr to Gyr
+    t_SN_Gyr = sim%r%t_SNII * 1d-3
+
+    ! Luminosity factor of a cell of the level, and of a coarser cell above levelmin
+    scale_inp_cell = scale_inp/dt_Gyr
+    scale_inp_cell_coarse = 0d0
+    if (ilevel > sim%r%levelmin) then
+       dt_Gyr_parent = sim%g%dtnew(ilevel-1) * scale_t * sec2Gyr
+       scale_inp_cell_coarse = scale_inp/2**ndim/dt_Gyr_parent
+    end if
+
+    ! Metallicity of the stars without metals
+    z_nometal = max(sim%r%z_ave*0.02, 1d-5)
+
+    ! Star scratch of the size of the window
+    if (allocated(rt_star_key)) then
+       if (size(rt_star_key) < num_stars) deallocate(rt_star_key, rt_star_key_sorted, rt_star_idx, &
+            & rt_star_idx_sorted, rt_star_lum, rt_star_nph, rt_star_dtl)
+    endif
+    if (.not. allocated(rt_star_key)) then
+       allocate(rt_star_key(1:num_stars), rt_star_key_sorted(1:num_stars))
+       allocate(rt_star_idx(1:num_stars), rt_star_idx_sorted(1:num_stars))
+       allocate(rt_star_lum(1:num_stars,1:nrtgrp), rt_star_nph(1:num_stars), rt_star_dtl(1:num_stars))
+    endif
+
+    ! Cell keys (igrid,icell) sort below key_none, the key of no cell
+    key_none = int(sim%m%ngridmax, kind=8) * twotondim
+    end_bit = 1
+    do while (ishft(key_none, -end_bit) /= 0)
+       end_bit = end_bit + 1
+    end do
+
+    num_threads = 256
+    num_blocks = (num_stars + num_threads - 1) / num_threads
+    call nvtxStartRange("GPU RT star luminosity", color=0)!green
+    fail_d = 0
+    call rt_star_contrib_kernel<<<num_blocks, num_threads>>>(star_xp, star_mp, star_tp, star_zp, &
+         & int(sim%r%nstarmax, kind=8), head_idx, num_stars, hash_key, hash_val, sim%m%hash_size, ckey_max, &
+         & key_off, d_skip, sim%m%ngridmax, ilevel, sim%r%levelmin, dx_loc, scale_inp_cell, scale_inp_cell_coarse, &
+         & code2Gyr, sim%g%texp, dt_Gyr, t_SN_Gyr, sim%r%eta_SNII, z_nometal, scale_t, sim%r%metal, key_none, &
+         & rt_star_key, rt_star_idx, rt_star_lum, size(rt_star_lum,1), rt_star_nph, rt_star_dtl, fail_d)
+    call GPU_Error_Check(__FILE__, __LINE__)
+    call nvtxEndRange()
+
+    ! A star without a cell or bad SED weights are flagged on the device, report them here
+    fail = fail_d
+    if (fail == 1) then
+       write(*,*)'Error: a star has no cell at its level or the coarser level in the GPU stellar emission'
+       error stop
+    endif
+    if (fail == 2) then
+       write(*,*)'Error: bad SED interpolation weights in the GPU stellar emission'
+       error stop
+    endif
+
+    ! Group the stars by cell, each cell keeping its stars in window order
+    call nvtxStartRange("GPU RT star sort", color=0)!green
+    call radix_sort(c_loc(rt_star_key(1)), c_loc(rt_star_key_sorted(1)), &
+         & c_loc(rt_star_idx(1)), c_loc(rt_star_idx_sorted(1)), 1, num_stars, 0, end_bit)
+    call nvtxEndRange()
+
+    ! Add the luminosities to the emissivity of the cells
+    call nvtxStartRange("GPU RT star deposit", color=0)!green
+    call rt_star_deposit_kernel<<<num_blocks, num_threads>>>(emissivity, rt_star_key_sorted, rt_star_idx_sorted, &
+         & rt_star_lum, size(rt_star_lum,1), num_stars, key_none)
+    call GPU_Error_Check(__FILE__, __LINE__)
+    call nvtxEndRange()
+
+    ! Emission statistics, summed on the host in window order
+    if (sim%r%rt_emission_stats) then
+       allocate(nph(1:num_stars), dtl(1:num_stars), mp_star(1:num_stars))
+       info = cudaMemcpy(nph, rt_star_nph, num_stars)
+       info = cudaMemcpy(dtl, rt_star_dtl, num_stars)
+       info = cudaMemcpy(mp_star, star_mp(head_idx), num_stars)
+       call GPU_Error_Check(__FILE__, __LINE__)
+       do j = 1, num_stars
+          sim%g%step_nPhot = sim%g%step_nPhot + nph(j) * scale_msun
+          sim%g%step_nStar = sim%g%step_nStar + dtl(j)/sec2Gyr/scale_t
+          sim%g%step_mStar = sim%g%step_mStar + mp_star(j) * scale_msun &
+               & * dtl(j) /sec2Gyr / scale_t
+       end do
+       deallocate(nph, dtl, mp_star)
+    endif
+
+  end subroutine gpu_rt_star_emissivity
+
+  !> @brief
+  !> Copy the stellar SED to the device: the age and metallicity bins and the cumulative photons per solar
+  !> mass of each group
+  !>
+  !> @detail
+  !> @param[in] sim : The simulation object
+  !>
+  subroutine gpu_rt_upload_sed(sim)
+    use nvtx
+    use rt_device, only: rt_sed_na, rt_sed_nz, rt_sed_lga0, rt_sed_dlga, rt_sed_lgz0, rt_sed_dlgz, &
+         & rt_sed_single_z, rt_sed_ages, rt_sed_zeds, rt_sed_cum
+    use ramses_commons, only: ramses_t
+    type(ramses_t), intent(inout) :: sim
+
+    integer :: info
+
+    call nvtxStartRange("Copy SED from host to device", color=5)!red
+    rt_sed_na = sim%SED%nA
+    rt_sed_nz = sim%SED%nZ
+    rt_sed_lga0 = sim%SED%lgA0
+    rt_sed_dlga = sim%SED%dlgA
+    rt_sed_lgz0 = sim%SED%lgZ0
+    rt_sed_dlgz = sim%SED%dlgZ
+    rt_sed_single_z = sim%SED%is_SED_single_Z
+    allocate(rt_sed_ages(1:sim%SED%nA), rt_sed_zeds(1:sim%SED%nZ))
+    allocate(rt_sed_cum(1:sim%SED%nA,1:sim%SED%nZ,1:nrtgrp))
+    info = cudaMemcpy(rt_sed_ages, sim%SED%ages, sim%SED%nA)
+    info = cudaMemcpy(rt_sed_zeds, sim%SED%zeds, sim%SED%nZ)
+    ! Property 2 of the table is one contiguous section
+    info = cudaMemcpy(rt_sed_cum, sim%SED%table(1,1,1,2), sim%SED%nA*sim%SED%nZ*nrtgrp)
+    call GPU_Error_Check(__FILE__, __LINE__)
+    call nvtxEndRange()
+
+  end subroutine gpu_rt_upload_sed
 #endif
 
   !> @brief

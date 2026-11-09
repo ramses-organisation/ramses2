@@ -1,6 +1,6 @@
 module rt_godunov_fine_module
 #if defined(_CUDA) && defined(DO_RT)
-  use gpu_runner, only: gpu_rt_godunov, gpu_rt_set_rtunew, gpu_rt_set_rtuold
+  use gpu_runner, only: gpu_rt_godunov, gpu_rt_set_rtunew, gpu_rt_set_rtuold, gpu_rt_set_emissivity
 #endif
 contains
 !###########################################################
@@ -107,7 +107,9 @@ recursive subroutine r_set_emissivity(pst,ilevel,input_size)
      call r_set_emissivity(pst%pLower,ilevel,input_size)
      call mdl_get_reply(pst%s%mdl,rID,0)
   else
-#ifdef DO_RT
+#if defined(_CUDA) && defined(DO_RT)
+     call gpu_rt_set_emissivity(pst%s,ilevel)
+#elif defined(DO_RT)
      do i=pst%s%m%head(ilevel),pst%s%m%tail(ilevel)
         pst%s%m%emissivity(:,:,i)=0
      end do
