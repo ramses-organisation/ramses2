@@ -1,5 +1,6 @@
 !> Photon transport kernels: the hyperbolic RT step of rt_step (rt_godunov_fine, set_rtuold, the source
-!> regions, the photon state of ghost octs, the restriction of the RT variables) and rt_flag, on one rank.
+!> regions, the stellar emissivity, the photon state of ghost octs, the restriction of the RT variables)
+!> and rt_flag, on one rank.
 module rt_device
 #ifdef DO_RT
   use amr_parameters, only: dp, ndim, twotondim, twondim
@@ -9,6 +10,7 @@ module rt_device
   use gpu_utils
   use cudafor
   use hydro_device, only: hhh, iii
+  use constants, only: sec2Gyr
   implicit none
 
   !> Faces between the cells of an oct and between them and their face neighbors
@@ -19,11 +21,89 @@ module rt_device
   !> and photon density, flux fractions (u, v, w), center (x, y, z), lengths (x, y, z), exponent
   real(kind=8), device, allocatable, dimension(:,:) :: rt_src_real
 
+  !> Stellar SED on the device: numbers of age and metallicity bins and their log-spaced grid constants
+  integer, device :: rt_sed_na, rt_sed_nz
+  real(kind=8), device :: rt_sed_lga0, rt_sed_dlga, rt_sed_lgz0, rt_sed_dlgz
+  !> and whether the table has one metallicity
+  logical, device :: rt_sed_single_z
+  !> and the ages [Gyr], metallicities and cumulative photons per solar mass of each group (property 2)
+  real(kind=8), device, allocatable :: rt_sed_ages(:), rt_sed_zeds(:), rt_sed_cum(:,:,:)
+
 contains
 
   include 'gpu_hash.cuf'
   include 'gpu_cell.cuf'
 #include "gpu_interpol.cuf"
+
+  ! =========================================================================
+  !> Cumulative photons per solar mass of each group at age [Gyr] and metallicity z, as inp_SED_table for
+  !> property 2; ierr is 2 for interpolation weights that do not add up to one
+  attributes(device) subroutine rt_sed_cum_d(age, z, ret, ierr)
+    implicit none
+    real(kind=8), value :: age, z
+    real(kind=8) :: ret(1:nrtgrp)
+    integer :: ierr
+
+    real(kind=8) :: lgAge, lgZ, da, dz, da0, da1, dz0, dz1
+    integer :: ia, iz, iz1, ig
+
+    if (age <= 0d0) then
+       lgAge = -4d0
+    else
+       lgAge = log10(age)
+    end if
+    ia = min(max(floor((lgAge-rt_sed_lga0)/rt_sed_dlga) + 2, 1), rt_sed_na-1)
+    da = rt_sed_ages(ia+1)-rt_sed_ages(ia)
+    da0 = min(max((age-rt_sed_ages(ia))/da, 0d0), 1d0)
+    da1 = min(max((rt_sed_ages(ia+1)-age)/da, 0d0), 1d0)
+
+    ! Lower and upper metallicity rows; a table with one metallicity has only row 1
+    if (rt_sed_single_z) then
+       iz = 1
+       iz1 = 1
+       dz0 = 0.0d0
+       dz1 = 1.0d0
+    else
+       lgZ = log10(z)
+       iz = min(max(floor((lgZ-rt_sed_lgz0)/rt_sed_dlgz) + 1, 1), rt_sed_nz-1)
+       iz1 = iz+1
+       dz = rt_sed_zeds(iz+1)-rt_sed_zeds(iz)
+       dz0 = min(max((z-rt_sed_zeds(iz))/dz, 0d0), 1d0)
+       dz1 = min(max((rt_sed_zeds(iz+1)-z)/dz, 0d0), 1d0)
+    end if
+    if (abs(da0+da1-1.0d0) > 1.0d-5 .or. abs(dz0+dz1-1.0d0) > 1.0d-5) ierr = 2
+
+    do ig = 1, nrtgrp
+       ret(ig) = da0 * dz0 * rt_sed_cum(ia+1, iz1, ig) + &
+            &    da1 * dz0 * rt_sed_cum(ia,   iz1, ig) + &
+            &    da0 * dz1 * rt_sed_cum(ia+1, iz,  ig) + &
+            &    da1 * dz1 * rt_sed_cum(ia,   iz,  ig)
+    end do
+
+  end subroutine rt_sed_cum_d
+  ! =========================================================================
+
+  ! =========================================================================
+  !> Photons per solar mass of each group emitted from age age1-dt to age1 [Gyr] at metallicity z,
+  !> as getNPhotonsEmitted
+  attributes(device) subroutine rt_nphotons_d(age1, dt, z, ret, ierr)
+    implicit none
+    real(kind=8), value :: age1, dt, z
+    real(kind=8) :: ret(1:nrtgrp)
+    integer :: ierr
+
+    real(kind=8) :: Lc0(1:nrtgrp), Lc1(1:nrtgrp)
+    integer :: ig
+
+    ! Cumulative emitted photons at the start and at the end of the time step
+    call rt_sed_cum_d(age1-dt, z, Lc0, ierr)
+    call rt_sed_cum_d(age1, z, Lc1, ierr)
+    do ig = 1, nrtgrp
+       ret(ig) = max(Lc1(ig)-Lc0(ig), 0d0)
+    end do
+
+  end subroutine rt_nphotons_d
+  ! =========================================================================
 
   ! =========================================================================
   !> Flux tensor of one cell for one photon group, as cmp_flux_tensors in 3D:
@@ -409,6 +489,36 @@ contains
   ! =========================================================================
 
   ! =========================================================================
+  !> Add the stellar emissivity over the time step dt to the photon densities in every cell of one level,
+  !> as set_rtuold without neq_chem
+  attributes(global) subroutine rt_emission_kernel(rtunew, emissivity, head_idx, num_octs, dt)
+    implicit none
+    real(kind=dp), device :: rtunew(1:twotondim,1:nrtvar,*)
+    real(kind=dp), device :: emissivity(1:twotondim,1:nrtgrp,*)
+    integer(kind=4), intent(in), value :: head_idx, num_octs
+    real(kind=dp), intent(in), value :: dt
+
+    integer :: block_idx, oct_idx, cell_idx, ig, iN
+
+    block_idx = blockIdx%x - 1
+
+    ! Compute the oct idx
+    oct_idx = block_idx * blockDim%y + threadIdx%y - 1
+    if (oct_idx >= num_octs) return
+    oct_idx = head_idx + oct_idx
+
+    ! Compute the cell idx
+    cell_idx = threadIdx%x
+
+    do ig = 1, nrtgrp
+       iN = 1 + (ig-1)*(ndim+1)
+       rtunew(cell_idx,iN,oct_idx) = rtunew(cell_idx,iN,oct_idx) + emissivity(cell_idx,ig,oct_idx)*dt
+    end do
+
+  end subroutine rt_emission_kernel
+  ! =========================================================================
+
+  ! =========================================================================
   !> Set rtuold to rtunew in every cell of one level and apply the photon conservation fix of set_rtuold
   attributes(global) subroutine rt_set_rtuold_kernel(rtuold, rtunew, head_idx, num_octs, rt_c)
     implicit none
@@ -786,6 +896,149 @@ contains
     end do
 
   end subroutine rt_flag_kernel
+  ! =========================================================================
+
+  ! =========================================================================
+  !> Luminosity of each star of the window of one level and the key of the cell that receives it, as
+  !> star_rt_feedback: one thread per star. fail is 1 for a star without a cell, 2 for bad SED weights
+  attributes(global) subroutine rt_star_contrib_kernel(star_xp, star_mp, star_tp, star_zp, leading, &
+       & head_idx, num_stars, hash_key, hash_val, hash_size, ckey_max, key_off, d_skip, ngridmax, ilevel, levelmin, &
+       & dx_loc, scale_inp_cell, scale_inp_cell_coarse, code2Gyr, texp, dt_Gyr, t_SN_Gyr, eta_SNII, z_nometal, &
+       & scale_t, metal, key_none, key, idx, lum, cap, nph, dtl, fail)
+    implicit none
+    real(kind=dp), device :: star_xp(*), star_mp(*), star_tp(*), star_zp(*)
+    integer(kind=8), intent(in), value :: leading
+    integer(kind=4), intent(in), value :: head_idx, num_stars
+    integer(kind=8), device :: hash_key(*)
+    integer(kind=4), device :: hash_val(*)
+    integer(kind=4), intent(in), value :: hash_size
+    integer(kind=4), device :: ckey_max(*)
+    integer(kind=8), device :: key_off(*)
+    real(kind=8), device :: d_skip(1:3)
+    integer(kind=4), intent(in), value :: ngridmax, ilevel, levelmin
+    real(kind=8), intent(in), value :: dx_loc, scale_inp_cell, scale_inp_cell_coarse, code2Gyr, texp, dt_Gyr
+    real(kind=8), intent(in), value :: t_SN_Gyr, eta_SNII, z_nometal, scale_t
+    logical, intent(in), value :: metal
+    integer(kind=8), intent(in), value :: key_none
+    integer(kind=8), device :: key(*)
+    integer(kind=4), device :: idx(*)
+    integer(kind=4), intent(in), value :: cap
+    real(kind=8), device :: lum(1:cap,1:nrtgrp)
+    real(kind=8), device :: nph(*), dtl(*)
+    integer(kind=4), device :: fail
+
+    integer :: j, ipart, idim, igrid, icell, ig, ierr, fail_old
+    integer(kind=4) :: ckey(1:3)
+    real(kind=8) :: scale_inp_loc, z, age, dt_loc_Gyr, mass
+    real(kind=8) :: part_NpInp(1:nrtgrp)
+
+    j = (blockIdx%x - 1) * blockDim%x + threadIdx%x
+    if (j > num_stars) return
+    ipart = head_idx + j - 1
+    idx(j) = j
+
+    ! Cell at level ilevel; a ghost oct is a missing oct
+    do idim = 1, ndim
+       ckey(idim) = int((star_xp(ipart+(idim-1)*leading)+d_skip(idim))/dx_loc)
+    end do
+    scale_inp_loc = scale_inp_cell
+    call get_cell_by_key(hash_key, hash_val, hash_size, ckey_max, key_off, ilevel, ckey, igrid, icell)
+    if (igrid > ngridmax) igrid = 0
+
+    ! Cell at the coarser level, with its larger volume and its time step
+    if (igrid == 0 .and. ilevel > levelmin) then
+       do idim = 1, ndim
+          ckey(idim) = int((star_xp(ipart+(idim-1)*leading)+d_skip(idim))/dx_loc/2)
+       end do
+       scale_inp_loc = scale_inp_cell_coarse
+       call get_cell_by_key(hash_key, hash_val, hash_size, ckey_max, key_off, ilevel-1, ckey, igrid, icell)
+       if (igrid > ngridmax) igrid = 0
+    end if
+
+    ! No cell at either level
+    if (igrid == 0) then
+       fail_old = atomicmax(fail, 1)
+       key(j) = key_none
+       do ig = 1, nrtgrp
+          lum(j,ig) = 0d0
+       end do
+       nph(j) = 0d0
+       dtl(j) = 0d0
+       return
+    end if
+
+    ! Metallicity and age of the star, and its photons emitted over the time step
+    if (metal) then
+       z = max(real(star_zp(ipart), kind=8), 1d-5)
+    else
+       z = z_nometal
+    end if
+    age = (texp - star_tp(ipart)) * code2Gyr
+    dt_loc_Gyr = max(min(dt_Gyr, age), 0d0)
+    ierr = 0
+    call rt_nphotons_d(age, dt_loc_Gyr, z, part_NpInp, ierr)
+    if (ierr > 0) fail_old = atomicmax(fail, 2)
+
+    ! Initial mass of the population: its mass plus the supernova ejecta once t_SNII has passed
+    mass = star_mp(ipart)
+    if (age > t_SN_Gyr) mass = mass / (1d0 - eta_SNII)
+
+    ! Photons and emission time for the emission statistics
+    nph(j) = part_NpInp(1) * mass
+    dtl(j) = dt_loc_Gyr
+
+    ! Luminosity in code units
+    do ig = 1, nrtgrp
+       lum(j,ig) = part_NpInp(ig) * mass * scale_inp_loc * sec2Gyr
+       lum(j,ig) = lum(j,ig) * scale_t
+    end do
+    key(j) = int(igrid - 1, kind=8) * twotondim + (icell - 1)
+
+  end subroutine rt_star_contrib_kernel
+  ! =========================================================================
+
+  ! =========================================================================
+  !> Add the luminosities of the stars, sorted by cell key, to the emissivity of their cells: one thread
+  !> per sorted star; the first star of each cell adds those of the cell in window order
+  attributes(global) subroutine rt_star_deposit_kernel(emissivity, key_sorted, idx_sorted, lum, cap, num_stars, &
+       & key_none)
+    implicit none
+    real(kind=dp), device :: emissivity(1:twotondim,1:nrtgrp,*)
+    integer(kind=8), device :: key_sorted(*)
+    integer(kind=4), device :: idx_sorted(*)
+    integer(kind=4), intent(in), value :: cap, num_stars
+    real(kind=8), device :: lum(1:cap,1:nrtgrp)
+    integer(kind=8), intent(in), value :: key_none
+
+    integer :: k, kk, igrid, icell, ig
+    integer(kind=8) :: key
+    logical :: same
+    real(kind=dp) :: acc
+
+    k = (blockIdx%x - 1) * blockDim%x + threadIdx%x
+    if (k > num_stars) return
+    key = key_sorted(k)
+    if (key == key_none) return
+    if (k > 1) then
+       if (key_sorted(k-1) == key) return
+    end if
+
+    igrid = int(key / twotondim) + 1
+    icell = int(mod(key, int(twotondim, kind=8))) + 1
+    do ig = 1, nrtgrp
+       acc = emissivity(icell,ig,igrid)
+       kk = k
+       same = .true.
+       do while (same)
+          acc = acc + lum(idx_sorted(kk),ig)
+          kk = kk + 1
+          same = (kk <= num_stars)
+          if (same) same = (key_sorted(kk) == key)
+       end do
+       emissivity(icell,ig,igrid) = acc
+    end do
+
+  end subroutine rt_star_deposit_kernel
   ! =========================================================================
 
 #endif

@@ -886,6 +886,7 @@ contains
        & scale_nH, scale_T2, dtcool, nH_eos, X_cool, &
 #ifdef DO_RT
        & rtuold, rtunew, do_smooth, ilevel, scale_d, scale_v, scale_Np, scale_Fp, &
+       & emissivity, do_emis, scale_t, &
 #endif
        & loopcnt)
     implicit none
@@ -901,6 +902,9 @@ contains
     logical :: do_smooth
     integer :: ilevel
     real(kind=8) :: scale_d, scale_v, scale_Np, scale_Fp
+    real(kind=dp) :: emissivity(1:twotondim,1:nrtgrp,*)
+    logical :: do_emis
+    real(kind=8) :: scale_t
 #endif
     !-------------------------------------------------------------------------
     real(kind=8)::nH, T2, ekk, err, emag, T2min, Zsolar
@@ -1008,6 +1012,13 @@ contains
     dNpdt(1:nrtgrp) = 0d0
     dFpdt(1:ndim,1:nrtgrp) = 0d0
 
+    ! Isotropic emission of the star particles in cgs units
+    if(do_emis) then
+       do ig=1,nrtgrp
+          dNpdt(ig) = emissivity(icell,ig,ioct) * scale_Np / scale_t
+       end do
+    end if
+
     ! Smooth RT update
     if(do_smooth) then
        do ig=1,nrtgrp
@@ -1084,6 +1095,7 @@ contains
        & scale_nH, scale_T2, dtcool, nH_eos, X_cool, &
 #ifdef DO_RT
        & rtuold, rtunew, do_smooth, ilevel, scale_d, scale_v, scale_Np, scale_Fp, &
+       & emissivity, do_emis, scale_t, &
 #endif
        & runaway)
     implicit none
@@ -1098,6 +1110,9 @@ contains
     logical, value :: do_smooth
     integer(kind=4), value :: ilevel
     real(kind=8), value :: scale_d, scale_v, scale_Np, scale_Fp
+    real(kind=dp), device :: emissivity(1:twotondim,1:nrtgrp,*)
+    logical, value :: do_emis
+    real(kind=8), value :: scale_t
 #endif
     integer(kind=4), device :: runaway
 
@@ -1120,6 +1135,7 @@ contains
          & scale_nH, scale_T2, dtcool, nH_eos, X_cool, &
 #ifdef DO_RT
          & rtuold, rtunew, do_smooth, ilevel, scale_d, scale_v, scale_Np, scale_Fp, &
+         & emissivity, do_emis, scale_t, &
 #endif
          & loopcnt)
 
@@ -1140,7 +1156,7 @@ contains
     use gpu_utils, only: GPU_Error_Check
     use gpu_runner, only: uold, bold, grid
 #ifdef DO_RT
-    use gpu_runner, only: rtuold, rtunew
+    use gpu_runner, only: rtuold, rtunew, emissivity
 #endif
     implicit none
     type(ramses_t), intent(inout) :: sim
@@ -1154,7 +1170,7 @@ contains
     real(kind=8) :: dtcool, nH_eos, nCOM
 #ifdef DO_RT
     real(kind=8) :: scale_Np, scale_Fp
-    logical :: do_smooth
+    logical :: do_smooth, do_emis
 #endif
 
     ! Conversion factor from user units to cgs units
@@ -1164,10 +1180,17 @@ contains
 
     ! The rt_smooth terms, only with rt_advect
     do_smooth = sim%r%rt_advect .and. sim%r%rt_smooth
+
+    ! The stellar emission, only in runs with emitting stars
+    do_emis = sim%r%rt .and. sim%r%star .and. sim%r%rt_star
 #endif
 
     ! Ensure the rate tables live on the device
     if (.not. neq_tables_uploaded) call gpu_upload_neq_tables(sim)
+#ifdef DO_RT
+    ! With emitting stars, copy the run parameters at every call
+    if (sim%r%rt .and. sim%r%star .and. sim%r%rt_star) neq_run_d = sim%r
+#endif
 
     ! Density for isothermal/polytropic EOS in H/cc
     nH_eos = sim%r%eos_nH
@@ -1195,6 +1218,7 @@ contains
             & dtcool, nH_eos, sim%cool%X,                                              &
 #ifdef DO_RT
             & rtuold, rtunew, do_smooth, ilevel, scale_d, scale_v, scale_Np, scale_Fp, &
+            & emissivity, do_emis, scale_t,                                            &
 #endif
             & runaway_d)
        call GPU_Error_Check(__FILE__, __LINE__)
@@ -1204,7 +1228,7 @@ contains
        runaway = runaway_d
        if (runaway /= 0) then
           write(*,*)'Error: a cell took more than 100000 sub-steps in the GPU neq chemistry'
-          stop
+          error stop
        endif
     end if
 
