@@ -2723,7 +2723,7 @@ subroutine cic_kick_drift_dust(s,p,ilevel,action_part)
 
         cs2 = r%gamma * (r%gamma-1.0d0) * max(eint, r%smallc**2) / max(rho_gas, r%smallr)
         c_sound = max(sqrt(cs2), r%smallc)
-        nu_stop = coeff*c_sound*rho_gas/p%size(ipart)
+        nu_stop = sqrt(8.0d0/(pi*r%gamma))*c_sound*rho_gas/p%size(ipart)
         wdrift(1:ndim)= v_pred(1:ndim) - uu(1:ndim)
 
         ! Operator-split: drag(half) -> forces -> drag(half)
@@ -2908,7 +2908,7 @@ subroutine tsc_kick_drift_dust(s,p,ilevel,action_part)
         end do
         cs2 = r%gamma * (r%gamma-1.0d0) * max(eint, r%smallc**2) / max(rho_gas, r%smallr)
         c_sound = max(sqrt(cs2), r%smallc)
-        nu_stop = coeff*c_sound*rho_gas/p%size(ipart)
+        nu_stop = sqrt(8.0d0/(pi*r%gamma))*c_sound*rho_gas/p%size(ipart)
         wdrift(1:ndim)= v_pred(1:ndim) - uu(1:ndim)
         ! This is where we want to split off the different physics
         ! There will also be an if(gyro_pic) gate, since everything must be computed very differently
@@ -3145,7 +3145,7 @@ subroutine pcs_kick_drift_dust(s,p,ilevel,action_part)
        end do
        cs2 = r%gamma * (r%gamma-1.0d0) * max(eint, r%smallc**2) / max(rho_gas, r%smallr)
        c_sound = max(sqrt(cs2), r%smallc)
-       nu_stop = coeff*c_sound*rho_gas/p%size(ipart)
+       nu_stop = sqrt(8.0d0/(pi*r%gamma))*c_sound*rho_gas/p%size(ipart)
        wdrift(1:ndim)= v_pred(1:ndim) - uu(1:ndim)
        ! Operator-split: drag(half) -> forces -> drag(half)
        call compute_drag_step(wdrift, c_sound, 0.5d0*g%dtnew(ilevel), nu_stop, coeff, r%analytic_dust_force)
