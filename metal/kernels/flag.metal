@@ -502,11 +502,12 @@ kernel void enforce_subgrid_kernel(
  * Mirrors enforce_rules<<<128 threads>>> in gpu_flag.cuf.
  * ========================================================================= */
 kernel void enforce_rules_kernel(
-    device int        *flag1    [[buffer(0)]],
-    device const int  *nbor     [[buffer(1)]],
-    constant int      &head_idx [[buffer(2)]],
-    constant int      &num_octs [[buffer(3)]],
-    constant int      &ngridmax [[buffer(4)]],
+    device int          *flag1    [[buffer(0)]],
+    device const int    *nbor     [[buffer(1)]],
+    constant int        &head_idx [[buffer(2)]],
+    constant int        &num_octs [[buffer(3)]],
+    constant int        &ngridmax [[buffer(4)]],
+    device const oct_t  *grid     [[buffer(5)]],
     uint gid [[thread_position_in_grid]])
 {
     if (int(gid) >= num_octs) return;
@@ -528,8 +529,12 @@ kernel void enforce_rules_kernel(
             }
         }
     }
+    /* Only cancel new refinements: unflagging a refined cell would
+       destroy its child and could orphan finer octs (2:1 violation) */
     if (ok) {
-        for (int ic = 0; ic < 8; ic++) flag1[ic + 8 * oct_abs_0] = 0;
+        for (int ic = 0; ic < 8; ic++) {
+            if (!(bool)grid[oct_abs_0].refined[ic]) flag1[ic + 8 * oct_abs_0] = 0;
+        }
     }
 }
 

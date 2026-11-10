@@ -1497,6 +1497,7 @@ extern "C" void mtl_enforce_rules(int head_idx, int num_octs, int ngridmax)
     [enc setBytes:&head_idx   length:sizeof(int) atIndex:2];
     [enc setBytes:&num_octs   length:sizeof(int) atIndex:3];
     [enc setBytes:&ngridmax   length:sizeof(int) atIndex:4];
+    [enc setBuffer:s_grid     offset:0 atIndex:5];
     [enc dispatchThreadgroups:{nblk,1,1} threadsPerThreadgroup:{tg128,1,1}];
     [enc endEncoding];
     [cmd commit];

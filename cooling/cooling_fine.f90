@@ -3,6 +3,9 @@ module cooling_fine_module
 #ifdef _CUDA
   use gpu_runner, only: gpu_cooling, gpu_check_nan
   use cooling_device, only: gpu_upload_cooling_table
+#ifndef DO_RTZ
+  use neq_cooling_device, only: gpu_neq_cooling
+#endif
 #elif defined(_METAL)
   use metal_runner, only: metal_cooling, metal_upload_cooling_table
 #endif
@@ -28,7 +31,15 @@ recursive subroutine r_cooling_fine(pst,ilevel,input_size)
      call mdl_get_reply(pst%s%mdl,rID,0)
   else
 #ifdef _CUDA
+#ifndef DO_RTZ
+     if(pst%s%r%neq_chem)then
+        call gpu_neq_cooling(pst%s, ilevel)
+     else
+        call gpu_cooling(pst%s, ilevel)
+     endif
+#else
      call gpu_cooling(pst%s, ilevel)
+#endif
      call gpu_check_nan(pst%s, ilevel, 'cooling')
 #elif defined(_METAL)
      call metal_cooling(pst%s, ilevel)

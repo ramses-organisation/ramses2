@@ -15,8 +15,13 @@ subroutine m_init_xion(pst)
   type(pst_t)::pst
   integer::ilevel
 
-  if(pst%s%g%myid==1) &
-            write(*,*) 'Initialising to CIE ionisation fractions'
+  if(pst%s%g%myid==1)then
+     if(pst%s%r%cosmo .and. pst%s%r%nrestart==0)then
+        write(*,*) 'Initialising to residual (freeze-out) ionisation fractions'
+     else
+        write(*,*) 'Initialising to CIE ionisation fractions'
+     endif
+  endif
   do ilevel=pst%s%r%nlevelmax,pst%s%r%levelmin,-1
       call r_init_xion(pst,ilevel,1)
       call m_upload_fine(pst,ilevel)
@@ -178,26 +183,51 @@ subroutine init_xion(r,g,m,tables,ilevel)
 
         ! Do the main computation of equilibrium abundances
 #ifdef DO_RTZ
-        ! In the case of RTZ, we set everything to neutral to start
+        ! In the case of RTZ, we set everything to neutral to start,
+        ! except for the residual HII fraction in cosmological runs
         do i=1,nleaf ! loop over cells
           counter = 1
           do iE=1,n_elements ! loop over elements
              if (elements(iE)%atomic_number.gt.0) then
-                do iI=1,elements(iE)%n_ions + elements(iE)%n_mol ! loop over ions + molecules
+                do iI=1,elements(iE)%n_ions ! loop over ions
                    x = 0.d0
                    if (iI.eq.1) then
                       x = 1.d0
                    end if
+                   if (r%cosmo .and. r%nrestart==0 .and. iE.eq.1) then
+                      if (iI.eq.1) x = 1.d0 - g%xHII_start
+                      if (iI.eq.2) x = g%xHII_start
+                   end if
                    m%uold(ind,r%iIons-1+counter,ind_leaf(i)) = x*m%uold(ind,1,ind_leaf(i))
                    counter = counter + 1
-                end do  ! end loop over ions + molecules
+                end do  ! end loop over ions
              end if
           end do ! end loop over elements
+          ! Molecules come after all ions (same layout as read_params)
+          if (elements(1)%atomic_number.gt.0 .and. r%isH2_rtz) then
+             m%uold(ind,r%iIons-1+counter,ind_leaf(i)) = 0.d0
+             counter = counter + 1
+          end if
         end do ! end loop over cells
 #else
-        do i=1,nleaf
-           call cmp_equilibrium_abundances(r,tables,T2(i),nH(i),pHI_rates(:),mu,nSpec(i,:),Zsolar(i))
-        end do
+        if(r%cosmo .and. r%nrestart==0)then
+           ! Use the abundances from the single-cell evolution in neq_set_model
+           ! (CIE at T2_start would wipe out the residual ionization)
+           do i=1,nleaf
+              nSpec(i,:)=0d0
+              nSpec(i,3)=(1d0-g%xion_start(ixHII))*nH(i)
+              nSpec(i,4)=g%xion_start(ixHII)*nH(i)
+              if(r%isHe)then
+                 nSpec(i,5)=1d0-g%xion_start(ixHeII)-g%xion_start(ixHeIII)
+                 nSpec(i,6)=g%xion_start(ixHeII)
+                 nSpec(i,7)=g%xion_start(ixHeIII)
+              endif
+           end do
+        else
+           do i=1,nleaf
+              call cmp_equilibrium_abundances(r,tables,T2(i),nH(i),pHI_rates(:),mu,nSpec(i,:),Zsolar(i))
+           end do
+        endif
 
         ! nspec: 1=ne, 2=nH2, 3=nHI, 4=nHII, 5=nHeI, 6=nHeII, 7=n_HEIII
         do i=1,nleaf ! Update ionization states in uold

@@ -165,6 +165,7 @@ contains
     integer(4) :: ind_average, ind_father
     integer(4) :: igrid_nbr, ind_nbr
     integer(4) :: igrid_cen, ind_cen, i, j, k
+    integer(4) :: father_idx
     real(kind=dp) :: acc, coeff, add
 
     block_idx = blockIdx%x - 1
@@ -176,6 +177,22 @@ contains
 
     ! Map thread -> fine cell (1..8)
     cell_idx = threadIdx%x
+
+    ! A cache oct can have a cache father (possible with nexpand=0).
+    ! Cache octs have no row in nbor, so inject phi from the father cell.
+    ! No time extrapolation: phi_old is not saved for cache octs.
+    father_idx = father(oct_idx)
+    if (father_idx <= 0 .or. father_idx > ngridmax) then
+       if (father_idx <= 0) then ! Should never happen
+          phi(cell_idx, oct_idx) = 0d0
+          return
+       end if
+       i = grid(oct_idx)%ckey(1) - 2 * (grid(oct_idx)%ckey(1) / 2)
+       j = grid(oct_idx)%ckey(2) - 2 * (grid(oct_idx)%ckey(2) / 2)
+       k = grid(oct_idx)%ckey(3) - 2 * (grid(oct_idx)%ckey(3) / 2)
+       phi(cell_idx, oct_idx) = phi(1 + i + 2*j + 4*k, father_idx)
+       return
+    end if
 
     ! Get 3x3x3 neighboring father cells of this oct
     call nbor_father_cells(grid, father, nbor, oct_idx, igrid_nbor, icell_nbor)
@@ -193,7 +210,7 @@ contains
        igrid_nbr  = igrid_nbor(ind_father)
        ind_nbr    = icell_nbor(ind_father)
 
-       if (igrid_nbr == 0 .or. igrid_nbr > ngridmax) then ! Should never happen
+       if (igrid_nbr <= 0 .or. igrid_nbr > ngridmax) then ! Should never happen
           igrid_nbr = igrid_cen
           ind_nbr   = ind_cen
        end if

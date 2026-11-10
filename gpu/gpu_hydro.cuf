@@ -3,9 +3,12 @@ module hydro_device
   use hydro_parameters
   use oct_commons, only: oct
   use gpu_utils
+#ifdef TURB
+  use turb_commons, only: TURB_GS, turb_gs_real
+#endif
   use cudafor
   implicit none
-  private :: mix64, fnv64, fnv32, hash_set, hash_get, hash_update, hash_free
+  private :: mix64, fnv64, fnv32, hash_set, hash_get, get_cell_by_key, hash_update, hash_free
 
   !> @brief
   !> Cell index and grid offset to access neighbors.
@@ -206,6 +209,7 @@ contains
 
   include 'gpu_reduce.cuf'
   include 'gpu_hash.cuf'
+  include 'gpu_cell.cuf'
 
   ! ==========================================================================
   !> @brief
@@ -895,6 +899,7 @@ contains
     real(kind=dp) :: rstarr, er, vstarr, Bstarr, wstarr, Cstarr, vdotBstarr, etotstarr, sqrrstarr, calfvenr, SAR
     real(kind=dp) :: vstarstar, wstarstar, Bstarstar, Cstarstar, vdotBstarstar, etotstarstarl, etotstarstarr
     real(kind=dp) :: ro, uo, vo, wo, Bo, Co, Ptoto, etoto, vdotBo
+    real(kind=dp) :: inv_rl, inv_rr, inv_rc, inv_sl, inv_sr, inv_estar, inv_sqrsum
 
     smallp = smallc2 / gamma
     entho = 1.0_dp / (gamma - 1.0_dp)
@@ -928,57 +933,64 @@ contains
     vdotBr = ur*A + vr*Br + wr*Cr
 
     ! Fast magnetosonic speeds (find_speed_fast) using the continuity-enforced A.
-    b2l = A*A + Bl*Bl + Cl*Cl; c2l = gamma*Pl/rl; d2l = 0.5_dp*(b2l/rl + c2l)
-    cfastl = sqrt(d2l + sqrt(max(d2l**2 - c2l*A*A/rl, 0.0_dp)))
-    b2r = A*A + Br*Br + Cr*Cr; c2r = gamma*Pr/rr; d2r = 0.5_dp*(b2r/rr + c2r)
-    cfastr = sqrt(d2r + sqrt(max(d2r**2 - c2r*A*A/rr, 0.0_dp)))
+    inv_rl = 1.0_dp/rl; inv_rr = 1.0_dp/rr
+    b2l = A*A + Bl*Bl + Cl*Cl; c2l = gamma*Pl*inv_rl; d2l = 0.5_dp*(b2l*inv_rl + c2l)
+    cfastl = sqrt(d2l + sqrt(max(d2l**2 - c2l*A*A*inv_rl, 0.0_dp)))
+    b2r = A*A + Br*Br + Cr*Cr; c2r = gamma*Pr*inv_rr; d2r = 0.5_dp*(b2r*inv_rr + c2r)
+    cfastr = sqrt(d2r + sqrt(max(d2r**2 - c2r*A*A*inv_rr, 0.0_dp)))
 
     ! HLL wave speeds and star state.
     SL = min(ul, ur) - max(cfastl, cfastr)
     SR = max(ul, ur) + max(cfastl, cfastr)
     rcl = rl*(ul - SL); rcr = rr*(SR - ur)
-    ustar    = (rcr*ur    + rcl*ul    + (Ptotl - Ptotr))      /(rcr + rcl)
-    Ptotstar = (rcr*Ptotl + rcl*Ptotr + rcl*rcr*(ul - ur))    /(rcr + rcl)
+    inv_rc = 1.0_dp/(rcr + rcl)
+    ustar    = (rcr*ur    + rcl*ul    + (Ptotl - Ptotr))      *inv_rc
+    Ptotstar = (rcr*Ptotl + rcl*Ptotr + rcl*rcr*(ul - ur))    *inv_rc
 
     ! Left star region.
-    rstarl = rl*(SL - ul)/(SL - ustar)
+    inv_sl = 1.0_dp/(SL - ustar)
+    rstarl = rl*(SL - ul)*inv_sl
     rstarl = max(rstarl, smallr)
     estar  = rl*(SL - ul)*(SL - ustar) - A*A
     el     = rl*(SL - ul)*(SL - ul   ) - A*A
     if (abs(estar) < 1e-4_dp*A*A) then
        vstarl = vl; Bstarl = Bl; wstarl = wl; Cstarl = Cl
     else
-       vstarl = vl - A*Bl*(ustar - ul)/estar
-       Bstarl = Bl*el/estar
-       wstarl = wl - A*Cl*(ustar - ul)/estar
-       Cstarl = Cl*el/estar
+       inv_estar = 1.0_dp/estar
+       vstarl = vl - A*Bl*(ustar - ul)*inv_estar
+       Bstarl = Bl*el*inv_estar
+       wstarl = wl - A*Cl*(ustar - ul)*inv_estar
+       Cstarl = Cl*el*inv_estar
     endif
     vdotBstarl = ustar*A + vstarl*Bstarl + wstarl*Cstarl
-    etotstarl = ((SL - ul)*etotl - Ptotl*ul + Ptotstar*ustar + A*(vdotBl - vdotBstarl))/(SL - ustar)
+    etotstarl = ((SL - ul)*etotl - Ptotl*ul + Ptotstar*ustar + A*(vdotBl - vdotBstarl))*inv_sl
     sqrrstarl = sqrt(rstarl); calfvenl = abs(A)/sqrrstarl; SAL = ustar - calfvenl
 
     ! Right star region.
-    rstarr = rr*(SR - ur)/(SR - ustar)
+    inv_sr = 1.0_dp/(SR - ustar)
+    rstarr = rr*(SR - ur)*inv_sr
     rstarr = max(rstarr, smallr)
     estar  = rr*(SR - ur)*(SR - ustar) - A*A
     er     = rr*(SR - ur)*(SR - ur   ) - A*A
     if (abs(estar) < 1e-4_dp*A*A) then
        vstarr = vr; Bstarr = Br; wstarr = wr; Cstarr = Cr
     else
-       vstarr = vr - A*Br*(ustar - ur)/estar
-       Bstarr = Br*er/estar
-       wstarr = wr - A*Cr*(ustar - ur)/estar
-       Cstarr = Cr*er/estar
+       inv_estar = 1.0_dp/estar
+       vstarr = vr - A*Br*(ustar - ur)*inv_estar
+       Bstarr = Br*er*inv_estar
+       wstarr = wr - A*Cr*(ustar - ur)*inv_estar
+       Cstarr = Cr*er*inv_estar
     endif
     vdotBstarr = ustar*A + vstarr*Bstarr + wstarr*Cstarr
-    etotstarr = ((SR - ur)*etotr - Ptotr*ur + Ptotstar*ustar + A*(vdotBr - vdotBstarr))/(SR - ustar)
+    etotstarr = ((SR - ur)*etotr - Ptotr*ur + Ptotstar*ustar + A*(vdotBr - vdotBstarr))*inv_sr
     sqrrstarr = sqrt(rstarr); calfvenr = abs(A)/sqrrstarr; SAR = ustar + calfvenr
 
     ! Double-star region.
-    vstarstar = (sqrrstarl*vstarl + sqrrstarr*vstarr + sgnm*(Bstarr - Bstarl))/(sqrrstarl + sqrrstarr)
-    wstarstar = (sqrrstarl*wstarl + sqrrstarr*wstarr + sgnm*(Cstarr - Cstarl))/(sqrrstarl + sqrrstarr)
-    Bstarstar = (sqrrstarl*Bstarr + sqrrstarr*Bstarl + sgnm*sqrrstarl*sqrrstarr*(vstarr - vstarl))/(sqrrstarl + sqrrstarr)
-    Cstarstar = (sqrrstarl*Cstarr + sqrrstarr*Cstarl + sgnm*sqrrstarl*sqrrstarr*(wstarr - wstarl))/(sqrrstarl + sqrrstarr)
+    inv_sqrsum = 1.0_dp/(sqrrstarl + sqrrstarr)
+    vstarstar = (sqrrstarl*vstarl + sqrrstarr*vstarr + sgnm*(Bstarr - Bstarl))*inv_sqrsum
+    wstarstar = (sqrrstarl*wstarl + sqrrstarr*wstarr + sgnm*(Cstarr - Cstarl))*inv_sqrsum
+    Bstarstar = (sqrrstarl*Bstarr + sqrrstarr*Bstarl + sgnm*sqrrstarl*sqrrstarr*(vstarr - vstarl))*inv_sqrsum
+    Cstarstar = (sqrrstarl*Cstarr + sqrrstarr*Cstarl + sgnm*sqrrstarl*sqrrstarr*(wstarr - wstarl))*inv_sqrsum
     vdotBstarstar = ustar*A + vstarstar*Bstarstar + wstarstar*Cstarstar
     etotstarstarl = etotstarl - sgnm*sqrrstarl*(vdotBstarl - vdotBstarstar)
     etotstarstarr = etotstarr + sgnm*sqrrstarr*(vdotBstarr - vdotBstarstar)
@@ -1132,6 +1144,8 @@ contains
     real(kind=dp) :: d2LL, d2LR, d2RL, d2RR
     real(kind=dp) :: rmin, pmin, Smax
     logical :: switch_to_llf
+    real(kind=dp) :: inv_r, inv_xL, inv_xR, inv_yB, inv_yT, inv_dx, inv_dy
+    real(kind=dp) :: isqLL, isqLR, isqRL, isqRR
 
     smallp = smallc**2 / gamma
 
@@ -1162,22 +1176,26 @@ contains
     uRR = stateRR%velocity_x; vRR = stateRR%velocity_y
     ARR = stateRR%Bx; BRR = stateRR%By; CRR = stateRR%Bz
 
-    b2LL = compute_bsquared(ALL, BLL, CLL); c2LL = gamma*pLL/rLL
-    d2LL = 0.5_dp*(b2LL/rLL + c2LL)
-    cfastLLx = sqrt(d2LL + sqrt(max(d2LL**2 - c2LL*ALL*ALL/rLL, 0.0_dp)))
-    cfastLLy = sqrt(d2LL + sqrt(max(d2LL**2 - c2LL*BLL*BLL/rLL, 0.0_dp)))
-    b2LR = compute_bsquared(ALR, BLR, CLR); c2LR = gamma*pLR/rLR
-    d2LR = 0.5_dp*(b2LR/rLR + c2LR)
-    cfastLRx = sqrt(d2LR + sqrt(max(d2LR**2 - c2LR*ALR*ALR/rLR, 0.0_dp)))
-    cfastLRy = sqrt(d2LR + sqrt(max(d2LR**2 - c2LR*BLR*BLR/rLR, 0.0_dp)))
-    b2RL = compute_bsquared(ARL, BRL, CRL); c2RL = gamma*pRL/rRL
-    d2RL = 0.5_dp*(b2RL/rRL + c2RL)
-    cfastRLx = sqrt(d2RL + sqrt(max(d2RL**2 - c2RL*ARL*ARL/rRL, 0.0_dp)))
-    cfastRLy = sqrt(d2RL + sqrt(max(d2RL**2 - c2RL*BRL*BRL/rRL, 0.0_dp)))
-    b2RR = compute_bsquared(ARR, BRR, CRR); c2RR = gamma*pRR/rRR
-    d2RR = 0.5_dp*(b2RR/rRR + c2RR)
-    cfastRRx = sqrt(d2RR + sqrt(max(d2RR**2 - c2RR*ARR*ARR/rRR, 0.0_dp)))
-    cfastRRy = sqrt(d2RR + sqrt(max(d2RR**2 - c2RR*BRR*BRR/rRR, 0.0_dp)))
+    inv_r = 1.0_dp/rLL
+    b2LL = compute_bsquared(ALL, BLL, CLL); c2LL = gamma*pLL*inv_r
+    d2LL = 0.5_dp*(b2LL*inv_r + c2LL)
+    cfastLLx = sqrt(d2LL + sqrt(max(d2LL**2 - c2LL*ALL*ALL*inv_r, 0.0_dp)))
+    cfastLLy = sqrt(d2LL + sqrt(max(d2LL**2 - c2LL*BLL*BLL*inv_r, 0.0_dp)))
+    inv_r = 1.0_dp/rLR
+    b2LR = compute_bsquared(ALR, BLR, CLR); c2LR = gamma*pLR*inv_r
+    d2LR = 0.5_dp*(b2LR*inv_r + c2LR)
+    cfastLRx = sqrt(d2LR + sqrt(max(d2LR**2 - c2LR*ALR*ALR*inv_r, 0.0_dp)))
+    cfastLRy = sqrt(d2LR + sqrt(max(d2LR**2 - c2LR*BLR*BLR*inv_r, 0.0_dp)))
+    inv_r = 1.0_dp/rRL
+    b2RL = compute_bsquared(ARL, BRL, CRL); c2RL = gamma*pRL*inv_r
+    d2RL = 0.5_dp*(b2RL*inv_r + c2RL)
+    cfastRLx = sqrt(d2RL + sqrt(max(d2RL**2 - c2RL*ARL*ARL*inv_r, 0.0_dp)))
+    cfastRLy = sqrt(d2RL + sqrt(max(d2RL**2 - c2RL*BRL*BRL*inv_r, 0.0_dp)))
+    inv_r = 1.0_dp/rRR
+    b2RR = compute_bsquared(ARR, BRR, CRR); c2RR = gamma*pRR*inv_r
+    d2RR = 0.5_dp*(b2RR*inv_r + c2RR)
+    cfastRRx = sqrt(d2RR + sqrt(max(d2RR**2 - c2RR*ARR*ARR*inv_r, 0.0_dp)))
+    cfastRRy = sqrt(d2RR + sqrt(max(d2RR**2 - c2RR*BRR*BRR*inv_r, 0.0_dp)))
 
     SL = min(uLL, uLR, uRL, uRR) - max(cfastLLx, cfastLRx, cfastRLx, cfastRRx)
     SR = max(uLL, uLR, uRL, uRR) + max(cfastLLx, cfastLRx, cfastRLx, cfastRRx)
@@ -1213,34 +1231,36 @@ contains
     rcRLy = rRL*(vRL - SB); rcRRy = rRR*(ST - vRR)
 
     ustar = (rcLLx*uLL + rcLRx*uLR + rcRLx*uRL + rcRRx*uRR &
-         & + (PtotLL - PtotRL + PtotLR - PtotRR))/(rcLLx + rcLRx + rcRLx + rcRRx)
+         & + (PtotLL - PtotRL + PtotLR - PtotRR))*(1.0_dp/(rcLLx + rcLRx + rcRLx + rcRRx))
     vstar = (rcLLy*vLL + rcLRy*vLR + rcRLy*vRL + rcRRy*vRR &
-         & + (PtotLL - PtotLR + PtotRL - PtotRR))/(rcLLy + rcLRy + rcRLy + rcRRy)
+         & + (PtotLL - PtotLR + PtotRL - PtotRR))*(1.0_dp/(rcLLy + rcLRy + rcRLy + rcRRy))
 
-    rstarLLx = rLL*(SL - uLL)/(SL - ustar); BstarLL = BLL*(SL - uLL)/(SL - ustar)
-    rstarLLy = rLL*(SB - vLL)/(SB - vstar); AstarLL = ALL*(SB - vLL)/(SB - vstar)
-    rstarLL  = rLL*(SL - uLL)/(SL - ustar)*(SB - vLL)/(SB - vstar)
+    inv_xL = 1.0_dp/(SL - ustar); inv_xR = 1.0_dp/(SR - ustar)
+    inv_yB = 1.0_dp/(SB - vstar); inv_yT = 1.0_dp/(ST - vstar)
+    rstarLLx = rLL*(SL - uLL)*inv_xL; BstarLL = BLL*(SL - uLL)*inv_xL
+    rstarLLy = rLL*(SB - vLL)*inv_yB; AstarLL = ALL*(SB - vLL)*inv_yB
+    rstarLL  = rLL*(SL - uLL)*inv_xL*(SB - vLL)*inv_yB
     EstarLLx = ustar*BstarLL - vLL*ALL
     EstarLLy = uLL*BLL - vstar*AstarLL
     EstarLL  = ustar*BstarLL - vstar*AstarLL
 
-    rstarLRx = rLR*(SL - uLR)/(SL - ustar); BstarLR = BLR*(SL - uLR)/(SL - ustar)
-    rstarLRy = rLR*(ST - vLR)/(ST - vstar); AstarLR = ALR*(ST - vLR)/(ST - vstar)
-    rstarLR  = rLR*(SL - uLR)/(SL - ustar)*(ST - vLR)/(ST - vstar)
+    rstarLRx = rLR*(SL - uLR)*inv_xL; BstarLR = BLR*(SL - uLR)*inv_xL
+    rstarLRy = rLR*(ST - vLR)*inv_yT; AstarLR = ALR*(ST - vLR)*inv_yT
+    rstarLR  = rLR*(SL - uLR)*inv_xL*(ST - vLR)*inv_yT
     EstarLRx = ustar*BstarLR - vLR*ALR
     EstarLRy = uLR*BLR - vstar*AstarLR
     EstarLR  = ustar*BstarLR - vstar*AstarLR
 
-    rstarRLx = rRL*(SR - uRL)/(SR - ustar); BstarRL = BRL*(SR - uRL)/(SR - ustar)
-    rstarRLy = rRL*(SB - vRL)/(SB - vstar); AstarRL = ARL*(SB - vRL)/(SB - vstar)
-    rstarRL  = rRL*(SR - uRL)/(SR - ustar)*(SB - vRL)/(SB - vstar)
+    rstarRLx = rRL*(SR - uRL)*inv_xR; BstarRL = BRL*(SR - uRL)*inv_xR
+    rstarRLy = rRL*(SB - vRL)*inv_yB; AstarRL = ARL*(SB - vRL)*inv_yB
+    rstarRL  = rRL*(SR - uRL)*inv_xR*(SB - vRL)*inv_yB
     EstarRLx = ustar*BstarRL - vRL*ARL
     EstarRLy = uRL*BRL - vstar*AstarRL
     EstarRL  = ustar*BstarRL - vstar*AstarRL
 
-    rstarRRx = rRR*(SR - uRR)/(SR - ustar); BstarRR = BRR*(SR - uRR)/(SR - ustar)
-    rstarRRy = rRR*(ST - vRR)/(ST - vstar); AstarRR = ARR*(ST - vRR)/(ST - vstar)
-    rstarRR  = rRR*(SR - uRR)/(SR - ustar)*(ST - vRR)/(ST - vstar)
+    rstarRRx = rRR*(SR - uRR)*inv_xR; BstarRR = BRR*(SR - uRR)*inv_xR
+    rstarRRy = rRR*(ST - vRR)*inv_yT; AstarRR = ARR*(ST - vRR)*inv_yT
+    rstarRR  = rRR*(SR - uRR)*inv_xR*(ST - vRR)*inv_yT
     EstarRRx = ustar*BstarRR - vRR*ARR
     EstarRRy = uRR*BRR - vstar*AstarRR
     EstarRR  = ustar*BstarRR - vstar*AstarRR
@@ -1251,20 +1271,22 @@ contains
     rstarRLy = max(rstarRLy, smallr); rstarRRy = max(rstarRRy, smallr)
     rstarLL  = max(rstarLL,  smallr); rstarLR  = max(rstarLR,  smallr)
     rstarRL  = max(rstarRL,  smallr); rstarRR  = max(rstarRR,  smallr)
-    calfvenL = max(abs(ALR)/sqrt(rstarLRx), abs(AstarLR)/sqrt(rstarLR), &
-         &         abs(ALL)/sqrt(rstarLLx), abs(AstarLL)/sqrt(rstarLL), smallc)
-    calfvenR = max(abs(ARR)/sqrt(rstarRRx), abs(AstarRR)/sqrt(rstarRR), &
-         &         abs(ARL)/sqrt(rstarRLx), abs(AstarRL)/sqrt(rstarRL), smallc)
-    calfvenB = max(abs(BLL)/sqrt(rstarLLy), abs(BstarLL)/sqrt(rstarLL), &
-         &         abs(BRL)/sqrt(rstarRLy), abs(BstarRL)/sqrt(rstarRL), smallc)
-    calfvenT = max(abs(BLR)/sqrt(rstarLRy), abs(BstarLR)/sqrt(rstarLR), &
-         &         abs(BRR)/sqrt(rstarRRy), abs(BstarRR)/sqrt(rstarRR), smallc)
+    isqLL = rsqrt(rstarLL); isqLR = rsqrt(rstarLR); isqRL = rsqrt(rstarRL); isqRR = rsqrt(rstarRR)
+    calfvenL = max(abs(ALR)*rsqrt(rstarLRx), abs(AstarLR)*isqLR, &
+         &         abs(ALL)*rsqrt(rstarLLx), abs(AstarLL)*isqLL, smallc)
+    calfvenR = max(abs(ARR)*rsqrt(rstarRRx), abs(AstarRR)*isqRR, &
+         &         abs(ARL)*rsqrt(rstarRLx), abs(AstarRL)*isqRL, smallc)
+    calfvenB = max(abs(BLL)*rsqrt(rstarLLy), abs(BstarLL)*isqLL, &
+         &         abs(BRL)*rsqrt(rstarRLy), abs(BstarRL)*isqRL, smallc)
+    calfvenT = max(abs(BLR)*rsqrt(rstarLRy), abs(BstarLR)*isqLR, &
+         &         abs(BRR)*rsqrt(rstarRRy), abs(BstarRR)*isqRR, smallc)
     SAL = min(ustar - calfvenL, 0.0_dp); SAR = max(ustar + calfvenR, 0.0_dp)
     SAB = min(vstar - calfvenB, 0.0_dp); SAT = max(vstar + calfvenT, 0.0_dp)
-    AstarT = (SAR*AstarRR - SAL*AstarLR)/(SAR - SAL)
-    AstarB = (SAR*AstarRL - SAL*AstarLL)/(SAR - SAL)
-    BstarR = (SAT*BstarRR - SAB*BstarRL)/(SAT - SAB)
-    BstarL = (SAT*BstarLR - SAB*BstarLL)/(SAT - SAB)
+    inv_dx = 1.0_dp/(SAR - SAL); inv_dy = 1.0_dp/(SAT - SAB)
+    AstarT = (SAR*AstarRR - SAL*AstarLR)*inv_dx
+    AstarB = (SAR*AstarRL - SAL*AstarLL)*inv_dx
+    BstarR = (SAT*BstarRR - SAB*BstarRL)*inv_dy
+    BstarL = (SAT*BstarLR - SAB*BstarLL)*inv_dy
 
     if (SB > 0.0_dp) then
        if (SL > 0.0_dp) then
@@ -1272,7 +1294,7 @@ contains
        else if (SR < 0.0_dp) then
           E = ERL
        else
-          E = (SAR*EstarLLx - SAL*EstarRLx + SAR*SAL*(BRL - BLL))/(SAR - SAL)
+          E = (SAR*EstarLLx - SAL*EstarRLx + SAR*SAL*(BRL - BLL))*inv_dx
        endif
     else if (ST < 0.0_dp) then
        if (SL > 0.0_dp) then
@@ -1280,17 +1302,17 @@ contains
        else if (SR < 0.0_dp) then
           E = ERR
        else
-          E = (SAR*EstarLRx - SAL*EstarRRx + SAR*SAL*(BRR - BLR))/(SAR - SAL)
+          E = (SAR*EstarLRx - SAL*EstarRRx + SAR*SAL*(BRR - BLR))*inv_dx
        endif
     else if (SL > 0.0_dp) then
-       E = (SAT*EstarLLy - SAB*EstarLRy - SAT*SAB*(ALR - ALL))/(SAT - SAB)
+       E = (SAT*EstarLLy - SAB*EstarLRy - SAT*SAB*(ALR - ALL))*inv_dy
     else if (SR < 0.0_dp) then
-       E = (SAT*EstarRLy - SAB*EstarRRy - SAT*SAB*(ARR - ARL))/(SAT - SAB)
+       E = (SAT*EstarRLy - SAB*EstarRRy - SAT*SAB*(ARR - ARL))*inv_dy
     else
        E = (SAL*SAB*EstarRR - SAL*SAT*EstarRL - SAR*SAB*EstarLR + SAR*SAT*EstarLL) &
-            & /(SAR - SAL)/(SAT - SAB) &
-            & - SAT*SAB/(SAT - SAB)*(AstarT - AstarB) &
-            & + SAR*SAL/(SAR - SAL)*(BstarR - BstarL)
+            & *inv_dx*inv_dy &
+            & - SAT*SAB*inv_dy*(AstarT - AstarB) &
+            & + SAR*SAL*inv_dx*(BstarR - BstarL)
     endif
 
     return
@@ -1483,8 +1505,7 @@ contains
   !> @brief
   !> Convert a subgrid of conserved variables to primitive variables in shared memory
   !>
-  !> @param[in] head_idx : The head index of the octs at the current AMR level
-  !> @param[in] block_idx : The CUDA block index of the calling thread
+  !> @param[in] nbor : The neighbor octs of this subgrid
   !> @param[in] thread_idx : The index of calling thread within its block
   !> @param[in] gamma : The adiabatic index
   !> @param[out] local_subgrid : The local subgrid in shared memory to write the primitive variables to
@@ -1497,15 +1518,14 @@ contains
 #ifdef MHD
        & bf, &
 #endif
-       & head_idx, block_idx, thread_idx, gamma, smallr, smallc2, dt, load_refined, local_subgrid)
+       & thread_idx, gamma, smallr, smallc2, dt, load_refined, local_subgrid)
     type(oct), device :: grid(*)
     real(kind=dp), device :: constant_gravity(3)
     real(kind=dp), device :: f(1:twotondim,1:ndim,*)
     real(kind=dp), device :: uold(1:twotondim,1:nvar,*)
     real(kind=dp), device :: bold(1:twotondim,1:6,*) ! Unused without MHD
-    integer(kind=4), device :: nbor(1:subgridsize,*)
-    integer(kind=4), value :: head_idx
-    integer(kind=4), value :: block_idx, thread_idx
+    integer(kind=4) :: nbor(1:subgridsize)
+    integer(kind=4), value :: thread_idx
     real(kind=dp), value :: gamma, smallr, smallc2
     real(kind=dp), value :: dt
     logical, value :: load_refined
@@ -1523,7 +1543,7 @@ contains
     integer :: work_idx, ind_nbor
     integer :: i, j, k, i_subgrid_idx, j_subgrid_idx, k_subgrid_idx
     integer :: ib, jb, kb ! cell position bits within its oct (0 or 1 per axis)
-    integer :: cell_idx, source_idx, subgrid_idx
+    integer :: cell_idx, source_idx
     integer :: work_size
     real(kind=dp) :: invD
 #ifdef MHD
@@ -1538,12 +1558,9 @@ contains
        ! Compute the subgrid_indices index, i.e. determine the oct to load
        call index_1Dto3D(work_idx/8, work_size/2, work_size/2, i_subgrid_idx, j_subgrid_idx, k_subgrid_idx)
 
-       ! Get subgrid index
-       subgrid_idx = head_idx + block_idx
-
        ! Get neighbour index
        ind_nbor = work_idx/8 + 1
-       source_idx = nbor(ind_nbor, subgrid_idx)
+       source_idx = nbor(ind_nbor)
 
        ! Now that we have the index to the oct we need to figure out which cell within it to load
        cell_idx = mod(work_idx, 8) + 1
@@ -1567,19 +1584,19 @@ contains
        ! Low-x face of this cell:
        if (i >= 1) then
           source_idx_face = source_idx
-          if (ib == 0) source_idx_face = nbor(ind_nbor - 1, subgrid_idx)
+          if (ib == 0) source_idx_face = nbor(ind_nbor - 1)
           bf%bx(i,j,k) = 0.5_dp*(b0(1) + bold(cell_idx + 1 - 2*ib, 4, source_idx_face))
        endif
        ! Low-y face of this cell:
        if (j >= 1) then
           source_idx_face = source_idx
-          if (jb == 0) source_idx_face = nbor(ind_nbor - nsubgridp2, subgrid_idx)
+          if (jb == 0) source_idx_face = nbor(ind_nbor - nsubgridp2)
           bf%by(i,j,k) = 0.5_dp*(b0(2) + bold(cell_idx + 2*(1 - 2*jb), 5, source_idx_face))
        endif
        ! Low-z face of this cell:
        if (k >= 1) then
           source_idx_face = source_idx
-          if (kb == 0) source_idx_face = nbor(ind_nbor - nsubgridp2sq, subgrid_idx)
+          if (kb == 0) source_idx_face = nbor(ind_nbor - nsubgridp2sq)
           bf%bz(i,j,k) = 0.5_dp*(b0(3) + bold(cell_idx + 4*(1 - 2*kb), 6, source_idx_face))
        endif
 
@@ -2104,9 +2121,9 @@ contains
                                 - (slopes_x%velocity_x + slopes_y%velocity_y + slopes_z%velocity_z) * gamma * cell%pressure
 #ifdef MHD
        ! Lorentz-force source terms.
-       source_term%velocity_x = source_term%velocity_x + (-(B*dBx+C*dCx)/r) + (B*dAy/r) + (C*dAz/r)
-       source_term%velocity_y = source_term%velocity_y + (A*dBx/r) + (-(A*dAy+C*dCy)/r) + (C*dBz/r)
-       source_term%velocity_z = source_term%velocity_z + (A*dCx/r) + (B*dCy/r) + (-(A*dAz+B*dBz)/r)
+       source_term%velocity_x = source_term%velocity_x + ((-(B*dBx+C*dCx)) + (B*dAy) + (C*dAz))*inv_density
+       source_term%velocity_y = source_term%velocity_y + ((A*dBx) + (-(A*dAy+C*dCy)) + (C*dBz))*inv_density
+       source_term%velocity_z = source_term%velocity_z + ((A*dCx) + (B*dCy) + (-(A*dAz+B*dBz)))*inv_density
        if (induction) then
           source_term%velocity_x = 0.0_dp; source_term%velocity_y = 0.0_dp; source_term%velocity_z = 0.0_dp
        end if
@@ -2392,18 +2409,30 @@ contains
           dscalz = dscal_z(n)
           srscal = -uscal*dscalx - vscal*dscaly - wscal*dscalz
           rscal = rscal + srscal*dtdx
-          if (i > 1 .and. (j > 1 .and. j < work_size) .and. (k > 1 .and. k < work_size)) &
-               & right_interfaces_x%scalar(i-2,j-2,k-2,n) = rscal - dscalx
-          if (i < work_size .and. (j > 1 .and. j < work_size) .and. (k > 1 .and. k < work_size)) &
-               & left_interfaces_x%scalar(i-1,j-2,k-2,n) = rscal + dscalx
-          if ((i > 1 .and. i < work_size) .and. j > 1 .and. (k > 1 .and. k < work_size)) &
-               & right_interfaces_y%scalar(i-2,j-2,k-2,n) = rscal - dscaly
-          if ((i > 1 .and. i < work_size) .and. j < work_size .and. (k > 1 .and. k < work_size)) &
-               & left_interfaces_y%scalar(i-2,j-1,k-2,n) = rscal + dscaly
-          if ((i > 1 .and. i < work_size) .and. (j > 1 .and. j < work_size) .and. k > 1) &
-               & right_interfaces_z%scalar(i-2,j-2,k-2,n) = rscal - dscalz
-          if ((i > 1 .and. i < work_size) .and. (j > 1 .and. j < work_size) .and. k < work_size) &
-               & left_interfaces_z%scalar(i-2,j-2,k-1,n) = rscal + dscalz
+          if (i > 1 .and. (j > 1 .and. j < work_size) .and. (k > 1 .and. k < work_size)) then
+             right_interfaces_x%scalar(i-2,j-2,k-2,n) = rscal - dscalx
+             if (right_interfaces_x%scalar(i-2,j-2,k-2,n) < 0.0_dp) right_interfaces_x%scalar(i-2,j-2,k-2,n) = scalar_sub(i,j,k,n)
+          end if
+          if (i < work_size .and. (j > 1 .and. j < work_size) .and. (k > 1 .and. k < work_size)) then
+             left_interfaces_x%scalar(i-1,j-2,k-2,n) = rscal + dscalx
+             if (left_interfaces_x%scalar(i-1,j-2,k-2,n) < 0.0_dp) left_interfaces_x%scalar(i-1,j-2,k-2,n) = scalar_sub(i,j,k,n)
+          end if
+          if ((i > 1 .and. i < work_size) .and. j > 1 .and. (k > 1 .and. k < work_size)) then
+             right_interfaces_y%scalar(i-2,j-2,k-2,n) = rscal - dscaly
+             if (right_interfaces_y%scalar(i-2,j-2,k-2,n) < 0.0_dp) right_interfaces_y%scalar(i-2,j-2,k-2,n) = scalar_sub(i,j,k,n)
+          end if
+          if ((i > 1 .and. i < work_size) .and. j < work_size .and. (k > 1 .and. k < work_size)) then
+             left_interfaces_y%scalar(i-2,j-1,k-2,n) = rscal + dscaly
+             if (left_interfaces_y%scalar(i-2,j-1,k-2,n) < 0.0_dp) left_interfaces_y%scalar(i-2,j-1,k-2,n) = scalar_sub(i,j,k,n)
+          end if
+          if ((i > 1 .and. i < work_size) .and. (j > 1 .and. j < work_size) .and. k > 1) then
+             right_interfaces_z%scalar(i-2,j-2,k-2,n) = rscal - dscalz
+             if (right_interfaces_z%scalar(i-2,j-2,k-2,n) < 0.0_dp) right_interfaces_z%scalar(i-2,j-2,k-2,n) = scalar_sub(i,j,k,n)
+          end if
+          if ((i > 1 .and. i < work_size) .and. (j > 1 .and. j < work_size) .and. k < work_size) then
+             left_interfaces_z%scalar(i-2,j-2,k-1,n) = rscal + dscalz
+             if (left_interfaces_z%scalar(i-2,j-2,k-1,n) < 0.0_dp) left_interfaces_z%scalar(i-2,j-2,k-1,n) = scalar_sub(i,j,k,n)
+          end if
        end do
 #endif
     end do
@@ -2978,10 +3007,10 @@ contains
 #ifdef MHD
        & emfx, emfy, emfz, &
 #endif
-       & head_idx, block_idx, thread_idx, dtdx)
+       & thread_idx, dtdx)
     real(kind=dp), device :: unew(1:twotondim,1:nvar,*)
     real(kind=dp), device :: bnew(1:twotondim,1:6,*) ! Unused without MHD
-    integer(kind=4), device :: nbor(1:subgridsize,*)
+    integer(kind=4) :: nbor(1:subgridsize)
     type(subgrid_3x2x2cell_primitive), intent(in) :: fluxes_x
     type(subgrid_2x3x2cell_primitive), intent(in) :: fluxes_y
     type(subgrid_2x2x3cell_primitive), intent(in) :: fluxes_z
@@ -2990,13 +3019,12 @@ contains
     type(subgrid_3x2x3edge_primitive), intent(in) :: emfy
     type(subgrid_3x3x2edge_primitive), intent(in) :: emfz
 #endif
-    integer(kind=4), value :: head_idx
-    integer, value :: block_idx, thread_idx
+    integer, value :: thread_idx
     real(kind=dp), value :: dtdx
 
     integer :: work_size
     integer :: i, j, k, i_subgrid_idx, j_subgrid_idx, k_subgrid_idx
-    integer :: work_idx, subgrid_idx, oct_idx, cell_idx, ind_nbor
+    integer :: work_idx, oct_idx, cell_idx, ind_nbor
     type(conserved_t) :: update_term
 #if NVAR>5+NENER
     integer :: n
@@ -3012,9 +3040,6 @@ contains
     ! Note that we're now excluding the ghost cells since this operation doesn't need them.
     do work_idx = thread_idx, work_size**3 - 1, blockDim%x
 
-       ! Compute the subgrid index
-       subgrid_idx = head_idx + block_idx
-
        ! Compute the subgrid_indices index, i.e. determine the oct to load
        call index_1Dto3D(work_idx/8, work_size/2, work_size/2, i_subgrid_idx, j_subgrid_idx, k_subgrid_idx)
        i_subgrid_idx = i_subgrid_idx + 1
@@ -3023,7 +3048,7 @@ contains
 
        ! Compute the oct index
        ind_nbor = 1 + i_subgrid_idx + nsubgridp2 * j_subgrid_idx + nsubgridp2sq * k_subgrid_idx
-       oct_idx = nbor(ind_nbor, subgrid_idx)
+       oct_idx = nbor(ind_nbor)
 
        ! Compute the cell index
        cell_idx = mod(work_idx, 8) + 1
@@ -3103,10 +3128,10 @@ contains
 #ifdef MHD
        & emfx, emfy, emfz, &
 #endif
-       & head_idx, block_idx, thread_idx, ngridmax, dtdx)
+       & thread_idx, ngridmax, dtdx)
     type(oct), device :: grid(*)
     integer, device :: father(*)
-    integer, device :: nbor(1:subgridsize,*)
+    integer :: nbor(1:subgridsize)
     real(kind=dp), device :: unew(1:twotondim,1:nvar,*)
     real(kind=dp), device :: bnew(1:twotondim,1:6,*) ! Unused without MHD
     type(subgrid_3x2x2cell_primitive), intent(in) :: fluxes_x
@@ -3117,15 +3142,13 @@ contains
     type(subgrid_3x2x3edge_primitive), intent(in) :: emfy
     type(subgrid_3x3x2edge_primitive), intent(in) :: emfz
 #endif
-    integer, value :: head_idx
-    integer, value :: block_idx
     integer, value :: thread_idx
     integer, value :: ngridmax
     real(kind=dp), value :: dtdx
     real(kind=dp), parameter :: inv_twotondim = 1.0_dp / real(twotondim, kind=dp)
 
     integer :: i, j, k, i_subgrid_idx, j_subgrid_idx, k_subgrid_idx
-    integer :: subgrid_idx, cell_idx, source_idx, father_idx, work_idx
+    integer :: cell_idx, source_idx, father_idx, work_idx
     integer :: interface_array_size, info, ind_nbor
     type(conserved_t) :: flux
     real(kind=dp) :: coarse_flux_scale
@@ -3136,9 +3159,6 @@ contains
 
     interface_array_size = nsubgrid**(ndim-1)
     coarse_flux_scale = dtdx * inv_twotondim
-
-    ! Compute the oct index
-    subgrid_idx = head_idx + block_idx
 
     !============
     ! X direction
@@ -3181,13 +3201,10 @@ contains
 
        ! Update left coarse X cell if necessary
        ind_nbor = 1 + i_subgrid_idx + nsubgridp2 * j_subgrid_idx + nsubgridp2sq * k_subgrid_idx
-       source_idx = nbor(ind_nbor, subgrid_idx)
+       source_idx = nbor(ind_nbor)
        if (source_idx > ngridmax) then
           father_idx = father(source_idx)
-          i = grid(source_idx)%ckey(1) - 2 * grid(father_idx)%ckey(1)
-          j = grid(source_idx)%ckey(2) - 2 * grid(father_idx)%ckey(2)
-          k = grid(source_idx)%ckey(3) - 2 * grid(father_idx)%ckey(3)
-          cell_idx = 1 + i + 2*j + 4*k
+          cell_idx = parent_cell_idx(grid(source_idx)%ckey, grid(father_idx)%ckey)
           info = atomicadd(unew(cell_idx, 1, father_idx), flux%density)
           info = atomicadd(unew(cell_idx, 2, father_idx), flux%momentum_x)
           info = atomicadd(unew(cell_idx, 3, father_idx), flux%momentum_y)
@@ -3237,13 +3254,10 @@ contains
 
        ! Update right coarse X cell if necessary
        ind_nbor = 1 + i_subgrid_idx + nsubgridp2 * j_subgrid_idx + nsubgridp2sq * k_subgrid_idx
-       source_idx = nbor(ind_nbor, subgrid_idx)
+       source_idx = nbor(ind_nbor)
        if (source_idx > ngridmax) then
           father_idx = father(source_idx)
-          i = grid(source_idx)%ckey(1) - 2 * grid(father_idx)%ckey(1)
-          j = grid(source_idx)%ckey(2) - 2 * grid(father_idx)%ckey(2)
-          k = grid(source_idx)%ckey(3) - 2 * grid(father_idx)%ckey(3)
-          cell_idx = 1 + i + 2*j + 4*k
+          cell_idx = parent_cell_idx(grid(source_idx)%ckey, grid(father_idx)%ckey)
           info = atomicadd(unew(cell_idx, 1, father_idx), flux%density)
           info = atomicadd(unew(cell_idx, 2, father_idx), flux%momentum_x)
           info = atomicadd(unew(cell_idx, 3, father_idx), flux%momentum_y)
@@ -3297,13 +3311,10 @@ contains
 
        ! Update left coarse Y cell if necessary
        ind_nbor = 1 + i_subgrid_idx + nsubgridp2 * j_subgrid_idx + nsubgridp2sq * k_subgrid_idx
-       source_idx = nbor(ind_nbor, subgrid_idx)
+       source_idx = nbor(ind_nbor)
        if (source_idx > ngridmax) then
           father_idx = father(source_idx)
-          i = grid(source_idx)%ckey(1) - 2 * grid(father_idx)%ckey(1)
-          j = grid(source_idx)%ckey(2) - 2 * grid(father_idx)%ckey(2)
-          k = grid(source_idx)%ckey(3) - 2 * grid(father_idx)%ckey(3)
-          cell_idx = 1 + i + 2*j + 4*k
+          cell_idx = parent_cell_idx(grid(source_idx)%ckey, grid(father_idx)%ckey)
           info = atomicadd(unew(cell_idx, 1, father_idx), flux%density)
           info = atomicadd(unew(cell_idx, 2, father_idx), flux%momentum_x)
           info = atomicadd(unew(cell_idx, 3, father_idx), flux%momentum_y)
@@ -3353,13 +3364,10 @@ contains
 
        ! Update right coarse Y cell if necessary
        ind_nbor = 1 + i_subgrid_idx + nsubgridp2 * j_subgrid_idx + nsubgridp2sq * k_subgrid_idx
-       source_idx = nbor(ind_nbor, subgrid_idx)
+       source_idx = nbor(ind_nbor)
        if (source_idx > ngridmax) then
           father_idx = father(source_idx)
-          i = grid(source_idx)%ckey(1) - 2 * grid(father_idx)%ckey(1)
-          j = grid(source_idx)%ckey(2) - 2 * grid(father_idx)%ckey(2)
-          k = grid(source_idx)%ckey(3) - 2 * grid(father_idx)%ckey(3)
-          cell_idx = 1 + i + 2*j + 4*k
+          cell_idx = parent_cell_idx(grid(source_idx)%ckey, grid(father_idx)%ckey)
           info = atomicadd(unew(cell_idx, 1, father_idx), flux%density)
           info = atomicadd(unew(cell_idx, 2, father_idx), flux%momentum_x)
           info = atomicadd(unew(cell_idx, 3, father_idx), flux%momentum_y)
@@ -3413,13 +3421,10 @@ contains
 
        ! Update left coarse Z cell if necessary
        ind_nbor = 1 + i_subgrid_idx + nsubgridp2 * j_subgrid_idx + nsubgridp2sq * k_subgrid_idx
-       source_idx = nbor(ind_nbor, subgrid_idx)
+       source_idx = nbor(ind_nbor)
        if (source_idx > ngridmax) then
           father_idx = father(source_idx)
-          i = grid(source_idx)%ckey(1) - 2 * grid(father_idx)%ckey(1)
-          j = grid(source_idx)%ckey(2) - 2 * grid(father_idx)%ckey(2)
-          k = grid(source_idx)%ckey(3) - 2 * grid(father_idx)%ckey(3)
-          cell_idx = 1 + i + 2*j + 4*k
+          cell_idx = parent_cell_idx(grid(source_idx)%ckey, grid(father_idx)%ckey)
           info = atomicadd(unew(cell_idx, 1, father_idx), flux%density)
           info = atomicadd(unew(cell_idx, 2, father_idx), flux%momentum_x)
           info = atomicadd(unew(cell_idx, 3, father_idx), flux%momentum_y)
@@ -3469,13 +3474,10 @@ contains
 
        ! Update right coarse Z cell if necessary
        ind_nbor = 1 + i_subgrid_idx + nsubgridp2 * j_subgrid_idx + nsubgridp2sq * k_subgrid_idx
-       source_idx = nbor(ind_nbor, subgrid_idx)
+       source_idx = nbor(ind_nbor)
        if (source_idx > ngridmax) then
           father_idx = father(source_idx)
-          i = grid(source_idx)%ckey(1) - 2 * grid(father_idx)%ckey(1)
-          j = grid(source_idx)%ckey(2) - 2 * grid(father_idx)%ckey(2)
-          k = grid(source_idx)%ckey(3) - 2 * grid(father_idx)%ckey(3)
-          cell_idx = 1 + i + 2*j + 4*k
+          cell_idx = parent_cell_idx(grid(source_idx)%ckey, grid(father_idx)%ckey)
           info = atomicadd(unew(cell_idx, 1, father_idx), flux%density)
           info = atomicadd(unew(cell_idx, 2, father_idx), flux%momentum_x)
           info = atomicadd(unew(cell_idx, 3, father_idx), flux%momentum_y)
@@ -3492,7 +3494,7 @@ contains
 
 #ifdef MHD
     call coarse_emf_update(grid, bnew, father, nbor, emfx, emfy, emfz, &
-         & head_idx, block_idx, thread_idx, ngridmax, dtdx)
+         & thread_idx, ngridmax, dtdx)
 #endif
 
   end subroutine coarse_cell_update
@@ -3515,7 +3517,7 @@ contains
     fac = real(min(slope_mag,2), kind=dp)
     dlft = fac*(b0 - bm)
     drgt = fac*(bp - b0)
-    dcen = half*(dlft+drgt)/fac; dsgn = sign(one, dcen)
+    dcen = (dlft+drgt)*merge(0.25_dp, half, slope_mag >= 2); dsgn = sign(one, dcen)
     slop = min(abs(dlft),abs(drgt)); dlim = merge(zero, slop, (dlft*drgt) <= zero)
     db = dsgn*min(dlim,abs(dcen))
   end function face_b_tvd_slope
@@ -3842,26 +3844,23 @@ contains
   end subroutine cmpcurrent_mhd
 
   ! Map cache oct to parent coarse cell for coarse/fine corrections.
-  attributes(device) subroutine get_cf_cell(nbor, grid, father, subgrid_idx, ngridmax, &
+  attributes(device) subroutine get_cf_cell(nbor, grid, father, ngridmax, &
        & i, j, k, is_coarse, coct, ccell)
-    integer(kind=4), device :: nbor(1:subgridsize,*)
+    integer(kind=4) :: nbor(1:subgridsize)
     type(oct), device :: grid(*)
     integer, device :: father(*)
-    integer, value :: subgrid_idx, ngridmax, i, j, k
+    integer, value :: ngridmax, i, j, k
     logical, intent(out) :: is_coarse
     integer, intent(out) :: coct, ccell
-    integer :: stencil_idx, nbidx, fidx, ci, cj, ck
+    integer :: stencil_idx, nbidx, fidx
 
     stencil_idx = 1 + i + nsubgridp2*j + nsubgridp2sq*k
-    nbidx = nbor(stencil_idx, subgrid_idx)
+    nbidx = nbor(stencil_idx)
     is_coarse = (nbidx > ngridmax)
     coct = 0; ccell = 1
     if (is_coarse) then
        fidx = father(nbidx)
-       ci = grid(nbidx)%ckey(1) - 2*grid(fidx)%ckey(1)
-       cj = grid(nbidx)%ckey(2) - 2*grid(fidx)%ckey(2)
-       ck = grid(nbidx)%ckey(3) - 2*grid(fidx)%ckey(3)
-       ccell = 1 + ci + 2*cj + 4*ck
+       ccell = parent_cell_idx(grid(nbidx)%ckey, grid(fidx)%ckey)
        coct = fidx
     end if
   end subroutine get_cf_cell
@@ -4305,21 +4304,21 @@ contains
   end subroutine nimhd_scale_fluxes
 
   attributes(device) subroutine coarse_emf_update(grid, bnew, father, nbor, emfx, emfy, emfz, &
-       & head_idx, block_idx, thread_idx, ngridmax, dtdx)
+       & thread_idx, ngridmax, dtdx)
     type(oct), device :: grid(*)
-    integer, device :: father(*), nbor(1:subgridsize,*)
+    integer, device :: father(*)
+    integer(kind=4) :: nbor(1:subgridsize)
     real(kind=dp), device :: bnew(1:twotondim,1:6,*)
     type(subgrid_2x3x3edge_primitive), intent(in) :: emfx
     type(subgrid_3x2x3edge_primitive), intent(in) :: emfy
     type(subgrid_3x3x2edge_primitive), intent(in) :: emfz
-    integer, value :: head_idx, block_idx, thread_idx, ngridmax
+    integer, value :: thread_idx, ngridmax
     real(kind=dp), value :: dtdx
-    integer :: i, j, k, i_subgrid_idx, j_subgrid_idx, k_subgrid_idx, subgrid_idx, info
+    integer :: i, j, k, i_subgrid_idx, j_subgrid_idx, k_subgrid_idx, info
     integer :: oc1, oc2, oc3, cc1, cc2, cc3, work_idx
     real(kind=dp) :: dflux, weight
     logical :: c1, c2, c3
 
-    subgrid_idx = head_idx + block_idx
     ! Coarse/fine EMF correction at oct boundary edges: one thread per oct and edge
     ! orientation, counted from the last thread (the flux corrections use the first ones).
     ! MHD runs with nsubgrid <= 2, so the 3*nsubgrid**3 tasks fit in one pass of the block.
@@ -4333,9 +4332,9 @@ contains
 
        if (mod(work_idx, 3) == 0) then
                 ! 4 EMFz edges
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx,  j_subgrid_idx-1,k_subgrid_idx, c1,oc1,cc1)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx-1,j_subgrid_idx-1,k_subgrid_idx, c2,oc2,cc2)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx-1,j_subgrid_idx,  k_subgrid_idx, c3,oc3,cc3)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx,  j_subgrid_idx-1,k_subgrid_idx, c1,oc1,cc1)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx-1,j_subgrid_idx-1,k_subgrid_idx, c2,oc2,cc2)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx-1,j_subgrid_idx,  k_subgrid_idx, c3,oc3,cc3)
        if (c1 .or. c3) then
           weight=1.0_dp; if(.not.c1 .or. .not.c2 .or. .not.c3) weight=0.5_dp
           dflux=(emfz%edge_e(i,j,k)+emfz%edge_e(i,j,k+1))*0.25_dp*weight*dtdx
@@ -4343,9 +4342,9 @@ contains
           if(c2)then; info=atomicadd(bnew(cc2,4,oc2),dflux);  info=atomicadd(bnew(cc2,5,oc2),-dflux); endif
           if(c3)then; info=atomicadd(bnew(cc3,2,oc3),-dflux); info=atomicadd(bnew(cc3,4,oc3),-dflux); endif
        end if
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx-1,j_subgrid_idx,  k_subgrid_idx, c1,oc1,cc1)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx-1,j_subgrid_idx+1,k_subgrid_idx, c2,oc2,cc2)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx,  j_subgrid_idx+1,k_subgrid_idx, c3,oc3,cc3)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx-1,j_subgrid_idx,  k_subgrid_idx, c1,oc1,cc1)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx-1,j_subgrid_idx+1,k_subgrid_idx, c2,oc2,cc2)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx,  j_subgrid_idx+1,k_subgrid_idx, c3,oc3,cc3)
        if (c1 .or. c3) then
           weight=1.0_dp; if(.not.c1 .or. .not.c2 .or. .not.c3) weight=0.5_dp
           dflux=(emfz%edge_e(i,j+2,k)+emfz%edge_e(i,j+2,k+1))*0.25_dp*weight*dtdx
@@ -4353,9 +4352,9 @@ contains
           if(c2)then; info=atomicadd(bnew(cc2,2,oc2),-dflux); info=atomicadd(bnew(cc2,4,oc2),-dflux); endif
           if(c3)then; info=atomicadd(bnew(cc3,1,oc3),-dflux); info=atomicadd(bnew(cc3,2,oc3),dflux);  endif
        end if
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx,  j_subgrid_idx+1,k_subgrid_idx, c1,oc1,cc1)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx+1,j_subgrid_idx+1,k_subgrid_idx, c2,oc2,cc2)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx+1,j_subgrid_idx,  k_subgrid_idx, c3,oc3,cc3)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx,  j_subgrid_idx+1,k_subgrid_idx, c1,oc1,cc1)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx+1,j_subgrid_idx+1,k_subgrid_idx, c2,oc2,cc2)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx+1,j_subgrid_idx,  k_subgrid_idx, c3,oc3,cc3)
        if (c1 .or. c3) then
           weight=1.0_dp; if(.not.c1 .or. .not.c2 .or. .not.c3) weight=0.5_dp
           dflux=(emfz%edge_e(i+2,j+2,k)+emfz%edge_e(i+2,j+2,k+1))*0.25_dp*weight*dtdx
@@ -4363,9 +4362,9 @@ contains
           if(c2)then; info=atomicadd(bnew(cc2,1,oc2),-dflux); info=atomicadd(bnew(cc2,2,oc2),dflux);  endif
           if(c3)then; info=atomicadd(bnew(cc3,5,oc3),dflux);  info=atomicadd(bnew(cc3,1,oc3),dflux);  endif
        end if
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx+1,j_subgrid_idx,  k_subgrid_idx, c1,oc1,cc1)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx+1,j_subgrid_idx-1,k_subgrid_idx, c2,oc2,cc2)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx,  j_subgrid_idx-1,k_subgrid_idx, c3,oc3,cc3)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx+1,j_subgrid_idx,  k_subgrid_idx, c1,oc1,cc1)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx+1,j_subgrid_idx-1,k_subgrid_idx, c2,oc2,cc2)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx,  j_subgrid_idx-1,k_subgrid_idx, c3,oc3,cc3)
        if (c1 .or. c3) then
           weight=1.0_dp; if(.not.c1 .or. .not.c2 .or. .not.c3) weight=0.5_dp
           dflux=(emfz%edge_e(i+2,j,k)+emfz%edge_e(i+2,j,k+1))*0.25_dp*weight*dtdx
@@ -4376,9 +4375,9 @@ contains
 
        else if (mod(work_idx, 3) == 1) then
                 ! 4 EMFx edges
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx,j_subgrid_idx,  k_subgrid_idx-1, c1,oc1,cc1)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx,j_subgrid_idx-1,k_subgrid_idx-1, c2,oc2,cc2)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx,j_subgrid_idx-1,k_subgrid_idx,   c3,oc3,cc3)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx,j_subgrid_idx,  k_subgrid_idx-1, c1,oc1,cc1)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx,j_subgrid_idx-1,k_subgrid_idx-1, c2,oc2,cc2)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx,j_subgrid_idx-1,k_subgrid_idx,   c3,oc3,cc3)
        if (c1 .or. c3) then
           weight=1.0_dp; if(.not.c1 .or. .not.c2 .or. .not.c3) weight=0.5_dp
           dflux=(emfx%edge_e(i,j,k)+emfx%edge_e(i+1,j,k))*0.25_dp*weight*dtdx
@@ -4386,9 +4385,9 @@ contains
           if(c2)then; info=atomicadd(bnew(cc2,5,oc2),dflux);  info=atomicadd(bnew(cc2,6,oc2),-dflux); endif
           if(c3)then; info=atomicadd(bnew(cc3,3,oc3),-dflux); info=atomicadd(bnew(cc3,5,oc3),-dflux); endif
        end if
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx,j_subgrid_idx-1,k_subgrid_idx,   c1,oc1,cc1)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx,j_subgrid_idx-1,k_subgrid_idx+1, c2,oc2,cc2)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx,j_subgrid_idx,  k_subgrid_idx+1, c3,oc3,cc3)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx,j_subgrid_idx-1,k_subgrid_idx,   c1,oc1,cc1)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx,j_subgrid_idx-1,k_subgrid_idx+1, c2,oc2,cc2)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx,j_subgrid_idx,  k_subgrid_idx+1, c3,oc3,cc3)
        if (c1 .or. c3) then
           weight=1.0_dp; if(.not.c1 .or. .not.c2 .or. .not.c3) weight=0.5_dp
           dflux=(emfx%edge_e(i,j,k+2)+emfx%edge_e(i+1,j,k+2))*0.25_dp*weight*dtdx
@@ -4396,9 +4395,9 @@ contains
           if(c2)then; info=atomicadd(bnew(cc2,3,oc2),-dflux); info=atomicadd(bnew(cc2,5,oc2),-dflux); endif
           if(c3)then; info=atomicadd(bnew(cc3,2,oc3),-dflux); info=atomicadd(bnew(cc3,3,oc3),dflux);  endif
        end if
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx,j_subgrid_idx,  k_subgrid_idx+1, c1,oc1,cc1)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx,j_subgrid_idx+1,k_subgrid_idx+1, c2,oc2,cc2)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx,j_subgrid_idx+1,k_subgrid_idx,   c3,oc3,cc3)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx,j_subgrid_idx,  k_subgrid_idx+1, c1,oc1,cc1)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx,j_subgrid_idx+1,k_subgrid_idx+1, c2,oc2,cc2)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx,j_subgrid_idx+1,k_subgrid_idx,   c3,oc3,cc3)
        if (c1 .or. c3) then
           weight=1.0_dp; if(.not.c1 .or. .not.c2 .or. .not.c3) weight=0.5_dp
           dflux=(emfx%edge_e(i,j+2,k+2)+emfx%edge_e(i+1,j+2,k+2))*0.25_dp*weight*dtdx
@@ -4406,9 +4405,9 @@ contains
           if(c2)then; info=atomicadd(bnew(cc2,2,oc2),-dflux); info=atomicadd(bnew(cc2,3,oc2),dflux);  endif
           if(c3)then; info=atomicadd(bnew(cc3,6,oc3),dflux);  info=atomicadd(bnew(cc3,2,oc3),dflux);  endif
        end if
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx,j_subgrid_idx+1,k_subgrid_idx,   c1,oc1,cc1)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx,j_subgrid_idx+1,k_subgrid_idx-1, c2,oc2,cc2)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx,j_subgrid_idx,  k_subgrid_idx-1, c3,oc3,cc3)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx,j_subgrid_idx+1,k_subgrid_idx,   c1,oc1,cc1)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx,j_subgrid_idx+1,k_subgrid_idx-1, c2,oc2,cc2)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx,j_subgrid_idx,  k_subgrid_idx-1, c3,oc3,cc3)
        if (c1 .or. c3) then
           weight=1.0_dp; if(.not.c1 .or. .not.c2 .or. .not.c3) weight=0.5_dp
           dflux=(emfx%edge_e(i,j+2,k)+emfx%edge_e(i+1,j+2,k))*0.25_dp*weight*dtdx
@@ -4419,9 +4418,9 @@ contains
 
        else
                 ! 4 EMFy edges
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx,  j_subgrid_idx,k_subgrid_idx-1, c1,oc1,cc1)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx-1,j_subgrid_idx,k_subgrid_idx-1, c2,oc2,cc2)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx-1,j_subgrid_idx,k_subgrid_idx,   c3,oc3,cc3)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx,  j_subgrid_idx,k_subgrid_idx-1, c1,oc1,cc1)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx-1,j_subgrid_idx,k_subgrid_idx-1, c2,oc2,cc2)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx-1,j_subgrid_idx,k_subgrid_idx,   c3,oc3,cc3)
        if (c1 .or. c3) then
           weight=1.0_dp; if(.not.c1 .or. .not.c2 .or. .not.c3) weight=0.5_dp
           dflux=(emfy%edge_e(i,j,k)+emfy%edge_e(i,j+1,k))*0.25_dp*weight*dtdx
@@ -4429,9 +4428,9 @@ contains
           if(c2)then; info=atomicadd(bnew(cc2,4,oc2),-dflux); info=atomicadd(bnew(cc2,6,oc2),dflux);  endif
           if(c3)then; info=atomicadd(bnew(cc3,3,oc3),dflux);  info=atomicadd(bnew(cc3,4,oc3),dflux);  endif
        end if
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx-1,j_subgrid_idx,k_subgrid_idx,   c1,oc1,cc1)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx-1,j_subgrid_idx,k_subgrid_idx+1, c2,oc2,cc2)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx,  j_subgrid_idx,k_subgrid_idx+1, c3,oc3,cc3)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx-1,j_subgrid_idx,k_subgrid_idx,   c1,oc1,cc1)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx-1,j_subgrid_idx,k_subgrid_idx+1, c2,oc2,cc2)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx,  j_subgrid_idx,k_subgrid_idx+1, c3,oc3,cc3)
        if (c1 .or. c3) then
           weight=1.0_dp; if(.not.c1 .or. .not.c2 .or. .not.c3) weight=0.5_dp
           dflux=(emfy%edge_e(i,j,k+2)+emfy%edge_e(i,j+1,k+2))*0.25_dp*weight*dtdx
@@ -4439,9 +4438,9 @@ contains
           if(c2)then; info=atomicadd(bnew(cc2,3,oc2),dflux);  info=atomicadd(bnew(cc2,4,oc2),dflux);  endif
           if(c3)then; info=atomicadd(bnew(cc3,1,oc3),dflux);  info=atomicadd(bnew(cc3,3,oc3),-dflux); endif
        end if
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx,  j_subgrid_idx,k_subgrid_idx+1, c1,oc1,cc1)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx+1,j_subgrid_idx,k_subgrid_idx+1, c2,oc2,cc2)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx+1,j_subgrid_idx,k_subgrid_idx,   c3,oc3,cc3)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx,  j_subgrid_idx,k_subgrid_idx+1, c1,oc1,cc1)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx+1,j_subgrid_idx,k_subgrid_idx+1, c2,oc2,cc2)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx+1,j_subgrid_idx,k_subgrid_idx,   c3,oc3,cc3)
        if (c1 .or. c3) then
           weight=1.0_dp; if(.not.c1 .or. .not.c2 .or. .not.c3) weight=0.5_dp
           dflux=(emfy%edge_e(i+2,j,k+2)+emfy%edge_e(i+2,j+1,k+2))*0.25_dp*weight*dtdx
@@ -4449,9 +4448,9 @@ contains
           if(c2)then; info=atomicadd(bnew(cc2,1,oc2),dflux);  info=atomicadd(bnew(cc2,3,oc2),-dflux); endif
           if(c3)then; info=atomicadd(bnew(cc3,6,oc3),-dflux); info=atomicadd(bnew(cc3,1,oc3),-dflux); endif
        end if
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx+1,j_subgrid_idx,k_subgrid_idx,   c1,oc1,cc1)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx+1,j_subgrid_idx,k_subgrid_idx-1, c2,oc2,cc2)
-       call get_cf_cell(nbor,grid,father,subgrid_idx,ngridmax, i_subgrid_idx,  j_subgrid_idx,k_subgrid_idx-1, c3,oc3,cc3)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx+1,j_subgrid_idx,k_subgrid_idx,   c1,oc1,cc1)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx+1,j_subgrid_idx,k_subgrid_idx-1, c2,oc2,cc2)
+       call get_cf_cell(nbor,grid,father,ngridmax, i_subgrid_idx,  j_subgrid_idx,k_subgrid_idx-1, c3,oc3,cc3)
        if (c1 .or. c3) then
           weight=1.0_dp; if(.not.c1 .or. .not.c2 .or. .not.c3) weight=0.5_dp
           dflux=(emfy%edge_e(i+2,j,k)+emfy%edge_e(i+2,j+1,k))*0.25_dp*weight*dtdx
@@ -4607,15 +4606,12 @@ contains
        source_idx = nbor(ind_nbor, head_idx + block_idx)
        if (source_idx > ngridmax) then
           father_idx = father(source_idx)
-          i = grid(source_idx)%ckey(1) - 2*grid(father_idx)%ckey(1)
-          j = grid(source_idx)%ckey(2) - 2*grid(father_idx)%ckey(2)
-          k = grid(source_idx)%ckey(3) - 2*grid(father_idx)%ckey(3)
-          cell_idx = 1 + i + 2*j + 4*k
+          cell_idx = parent_cell_idx(grid(source_idx)%ckey, grid(father_idx)%ckey)
           info = atomicadd(unew(cell_idx,5,father_idx), energy_flux)
        endif
     endif
-    call coarse_emf_update(grid, bnew, father, nbor, emfx, emfy, emfz, &
-         & head_idx, block_idx, thread_idx, ngridmax, dtdx)
+    call coarse_emf_update(grid, bnew, father, nbor(:, head_idx + block_idx), emfx, emfy, emfz, &
+         & thread_idx, ngridmax, dtdx)
   end subroutine nimhd_coarse_cell_update
 
   ! Local resistivities of the split non-ideal MHD solver, given the conservative cell state uu
@@ -4767,7 +4763,7 @@ contains
     real(kind=dp), value :: floor_d, floor_p
     logical :: ok
 
-    real(kind=8) :: err_lft, err_rgt, error
+    real(kind=dp) :: err_lft, err_rgt, error
 
     ok = .false.
 
@@ -4788,6 +4784,83 @@ contains
   end subroutine hydro_crit
   ! =========================================================================
 
+  ! =========================================================================
+  !> Velocity gradient criterion of hydro_refine on the states of the side cells
+  !> and the velocity um and sound speed cm of the middle cell
+  attributes(device) subroutine velocity_crit(cons_lft, cons_rgt, prim_lft, prim_rgt, um, cm, ok, &
+       & gamma, induction, err_grad_u, floor_u)
+    type(conserved_t) :: cons_lft, cons_rgt
+    type(primitive_t) :: prim_lft, prim_rgt
+    real(kind=dp) :: um(1:3)
+    real(kind=dp), value :: cm
+    logical :: ok
+    real(kind=dp), value :: gamma, err_grad_u, floor_u
+    logical, value :: induction
+
+    real(kind=dp) :: vg, vm, vd, cg, cd, error, inv_g, inv_d
+    integer :: idim
+
+    ok = .false.
+
+    ! Reciprocal densities of the side cells, as in conserved_2_primitive
+    inv_g = 1.0_dp / prim_lft%density
+    inv_d = 1.0_dp / prim_rgt%density
+
+    ! Sound speeds of the side cells, zero with induction
+    cg = 0.0_dp; cd = 0.0_dp
+    if (.not. induction) then
+       cg = sqrt(max(gamma*prim_lft%pressure/prim_lft%density, floor_u**2))
+       cd = sqrt(max(gamma*prim_rgt%pressure/prim_rgt%density, floor_u**2))
+    endif
+
+    ! Each velocity component
+    do idim = 1, 3
+       if (idim == 1) then
+          vg = cons_lft%momentum_x*inv_g; vm = um(1); vd = cons_rgt%momentum_x*inv_d
+       else if (idim == 2) then
+          vg = cons_lft%momentum_y*inv_g; vm = um(2); vd = cons_rgt%momentum_y*inv_d
+       else
+          vg = cons_lft%momentum_z*inv_g; vm = um(3); vd = cons_rgt%momentum_z*inv_d
+       endif
+       error = 2.0_dp*max( &
+            & abs((vd-vm)/(cd+cm+abs(vd)+abs(vm)+floor_u)), &
+            & abs((vm-vg)/(cm+cg+abs(vm)+abs(vg)+floor_u)) )
+       if (error > err_grad_u) ok = .true.
+    end do
+
+  end subroutine velocity_crit
+  ! =========================================================================
+
+  ! =========================================================================
+  !> xHII and xHI gradient criteria of hydro_refine on the ion fraction of three cells
+  attributes(device) subroutine xion_crit(x_lft, x_mid, x_rgt, ok, &
+       & err_grad_xHII, floor_xHII, err_grad_xHI, floor_xHI)
+    real(kind=dp), value :: x_lft, x_mid, x_rgt
+    logical :: ok
+    real(kind=dp), value :: err_grad_xHII, floor_xHII
+    real(kind=dp), value :: err_grad_xHI, floor_xHI
+
+    real(kind=dp) :: error
+
+    ok = .false.
+
+    if (err_grad_xHII >= 0.0_dp) then
+       error = 2.0_dp*max( &
+            & abs((x_rgt-x_mid)/(x_rgt+x_mid+floor_xHII)), &
+            & abs((x_mid-x_lft)/(x_mid+x_lft+floor_xHII)) )
+       if (error > err_grad_xHII) ok = .true.
+    endif
+
+    if (err_grad_xHI >= 0.0_dp) then
+       error = 2.0_dp*max( &
+            & abs((x_mid-x_rgt)/(2.0_dp-x_rgt-x_mid+floor_xHI)), &
+            & abs((x_lft-x_mid)/(2.0_dp-x_mid-x_lft+floor_xHI)) )
+       if (error > err_grad_xHI) ok = .true.
+    endif
+
+  end subroutine xion_crit
+  ! =========================================================================
+
 #ifdef MHD
   attributes(device) subroutine hydro_crit_mhd(bc_lft, bc_mid, bc_rgt, ok, &
        & err_grad_b2, floor_b2, err_grad_A, floor_A, err_grad_B, floor_B, err_grad_C, floor_C)
@@ -4798,8 +4871,8 @@ contains
     real(kind=dp), value :: err_grad_C, floor_C
     logical :: ok
 
-    real(kind=8) :: emagg, emagm, emagd
-    real(kind=8) :: pg, pm, pd, vg, vm, vd, cg, cm, cd, error
+    real(kind=dp) :: emagg, emagm, emagd
+    real(kind=dp) :: pg, pm, pd, vg, vm, vd, cg, cm, cd, error
     integer :: idim
 
     ok = .false.
@@ -4857,7 +4930,8 @@ contains
 #ifdef MHD
        & err_grad_b2, floor_b2, err_grad_A, floor_A, err_grad_B, floor_B, err_grad_C, floor_C, &
 #endif
-       & gamma, smallr, smallc2, err_grad_d, err_grad_p, floor_d, floor_p)
+       & gamma, smallr, smallc2, err_grad_d, err_grad_p, floor_d, floor_p, &
+       & induction, do_u, err_grad_u, floor_u, do_xion, iIons, err_grad_xHII, floor_xHII, err_grad_xHI, floor_xHI)
     type(oct), device :: grid(*)
     real(kind=dp), device :: uold(1:twotondim,1:nvar,*)
     real(kind=dp), device :: bold(1:twotondim,1:6,*)
@@ -4868,6 +4942,11 @@ contains
     real(kind=dp), intent(in), value :: gamma, smallr, smallc2
     real(kind=dp), intent(in), value :: err_grad_d, floor_d
     real(kind=dp), intent(in), value :: err_grad_p, floor_p
+    logical, intent(in), value :: induction, do_u, do_xion
+    real(kind=dp), intent(in), value :: err_grad_u, floor_u
+    integer(kind=4), intent(in), value :: iIons
+    real(kind=dp), intent(in), value :: err_grad_xHII, floor_xHII
+    real(kind=dp), intent(in), value :: err_grad_xHI, floor_xHI
 #ifdef MHD
     real(kind=dp), intent(in), value :: err_grad_b2, floor_b2
     real(kind=dp), intent(in), value :: err_grad_A, floor_A
@@ -4877,8 +4956,12 @@ contains
     integer :: cell_idx, oct_idx, block_idx, source_idx, subgrid_idx
     integer :: i, j, k, il, jl, kl, ir, jr, kr
     integer :: icell, inbor, idim, ind_nbor
+#if NENER>0
+    integer :: irad
+#endif
     type(primitive_t) :: prim_lft, prim_mid, prim_rgt
     type(conserved_t) :: cons_lft, cons_mid, cons_rgt
+    real(kind=dp) :: x_lft, x_mid, x_rgt, u_mid(1:3), c_mid
     logical :: ok
 #ifdef MHD
     real(kind=dp) :: bc_lft(1:3), bc_mid(1:3), bc_rgt(1:3)
@@ -4915,6 +4998,12 @@ contains
     cons_mid%momentum_y = uold(cell_idx, 3, oct_idx)
     cons_mid%momentum_z = uold(cell_idx, 4, oct_idx)
     cons_mid%energy     = uold(cell_idx, 5, oct_idx)
+#if NENER>0
+    ! Remove the non-thermal energies, as hydro_refine does
+    do irad = 1, nener
+       cons_mid%energy = cons_mid%energy - uold(cell_idx, 5+irad, oct_idx)
+    end do
+#endif
 #ifdef MHD
     cons_mid%Bx = 0.5_dp*(bold(cell_idx,1,oct_idx)+bold(cell_idx,4,oct_idx))
     cons_mid%By = 0.5_dp*(bold(cell_idx,2,oct_idx)+bold(cell_idx,5,oct_idx))
@@ -4924,6 +5013,16 @@ contains
     bc_mid(3) = cons_mid%Bz
 #endif
     prim_mid = conserved_2_primitive(cons_mid, gamma, smallr, smallc2)
+    if (do_xion) x_mid = uold(cell_idx, iIons, oct_idx) / prim_mid%density
+
+    ! Velocity and sound speed (zero with induction) of the middle cell, for the velocity criterion
+    if (do_u) then
+       u_mid(1) = cons_mid%momentum_x * (1.0_dp / prim_mid%density)
+       u_mid(2) = cons_mid%momentum_y * (1.0_dp / prim_mid%density)
+       u_mid(3) = cons_mid%momentum_z * (1.0_dp / prim_mid%density)
+       c_mid = 0.0_dp
+       if (.not. induction) c_mid = sqrt(max(gamma*prim_mid%pressure/prim_mid%density, floor_u**2))
+    endif
 
     ! Loop over dimensions
     do idim = 1, ndim
@@ -4950,6 +5049,11 @@ contains
        cons_lft%momentum_y = uold(icell, 3, source_idx)
        cons_lft%momentum_z = uold(icell, 4, source_idx)
        cons_lft%energy     = uold(icell, 5, source_idx)
+#if NENER>0
+       do irad = 1, nener
+          cons_lft%energy = cons_lft%energy - uold(icell, 5+irad, source_idx)
+       end do
+#endif
 #ifdef MHD
        cons_lft%Bx = 0.5_dp*(bold(icell,1,source_idx)+bold(icell,4,source_idx))
        cons_lft%By = 0.5_dp*(bold(icell,2,source_idx)+bold(icell,5,source_idx))
@@ -4959,6 +5063,7 @@ contains
        bc_lft(3) = cons_lft%Bz
 #endif
        prim_lft = conserved_2_primitive(cons_lft, gamma, smallr, smallc2)
+       if (do_xion) x_lft = uold(icell, iIons, source_idx) / prim_lft%density
 
        ! Right cell
        icell = hhh(cell_idx, 2 * (idim-1) + 2)
@@ -4969,6 +5074,11 @@ contains
        cons_rgt%momentum_y = uold(icell, 3, source_idx)
        cons_rgt%momentum_z = uold(icell, 4, source_idx)
        cons_rgt%energy     = uold(icell, 5, source_idx)
+#if NENER>0
+       do irad = 1, nener
+          cons_rgt%energy = cons_rgt%energy - uold(icell, 5+irad, source_idx)
+       end do
+#endif
 #ifdef MHD
        cons_rgt%Bx = 0.5_dp*(bold(icell,1,source_idx)+bold(icell,4,source_idx))
        cons_rgt%By = 0.5_dp*(bold(icell,2,source_idx)+bold(icell,5,source_idx))
@@ -4978,12 +5088,26 @@ contains
        bc_rgt(3) = cons_rgt%Bz
 #endif
        prim_rgt = conserved_2_primitive(cons_rgt, gamma, smallr, smallc2)
+       if (do_xion) x_rgt = uold(icell, iIons, source_idx) / prim_rgt%density
 
        ! Check refinement criteria
        call hydro_crit(prim_lft, prim_mid, prim_rgt, ok, err_grad_d, err_grad_p, floor_d, floor_p)
 
        ! If satisfied set flag1 to 1
        if (ok) flag1(cell_idx, oct_idx) = 1
+
+       ! Velocity criterion
+       if (do_u) then
+          call velocity_crit(cons_lft, cons_rgt, prim_lft, prim_rgt, u_mid, c_mid, ok, &
+               & gamma, induction, err_grad_u, floor_u)
+          if (ok) flag1(cell_idx, oct_idx) = 1
+       endif
+
+       ! Ion fraction criteria
+       if (do_xion) then
+          call xion_crit(x_lft, x_mid, x_rgt, ok, err_grad_xHII, floor_xHII, err_grad_xHI, floor_xHI)
+          if (ok) flag1(cell_idx, oct_idx) = 1
+       endif
 
 #ifdef MHD
        ! MHD refinement on magnetic energy and B-component gradients.
@@ -5054,16 +5178,13 @@ contains
     integer(kind=4), device :: father(*)
     real(kind=dp), device :: b(1:twotondim,1:6,*)
     integer(kind=4), intent(in), value :: head_idx, num_octs
-    integer :: oct_idx, father_idx, i, j, k
+    integer :: oct_idx, father_idx
 
     oct_idx = threadIdx%x - 1 + (blockIdx%x - 1) * blockDim%x
     if (oct_idx >= num_octs) return
     oct_idx = head_idx + oct_idx
     father_idx = father(oct_idx)
-    i = grid(oct_idx)%ckey(1) - 2 * grid(father_idx)%ckey(1)
-    j = grid(oct_idx)%ckey(2) - 2 * grid(father_idx)%ckey(2)
-    k = grid(oct_idx)%ckey(3) - 2 * grid(father_idx)%ckey(3)
-    call restrict_face_b(b, oct_idx, 1 + i + 2*j + 4*k, father_idx)
+    call restrict_face_b(b, oct_idx, parent_cell_idx(grid(oct_idx)%ckey, grid(father_idx)%ckey), father_idx)
   end subroutine nimhd_restrict_b_kernel
 #endif
 
@@ -5079,7 +5200,7 @@ contains
     real(kind=dp), intent(in), value :: gamma, smallr, smallc2
 
     integer :: tid, bid, cell_idx, oct_idx
-    integer :: ind, father_idx, i, j, k, ivar, idim
+    integer :: ind, father_idx, ivar, idim
     real(kind=dp) :: eint_sum, ekin, erad, emag
     real(kind=dp) :: density, smalle
     real(kind=dp), parameter :: inv_twotondim = 1.0_dp / real(twotondim, kind=dp)
@@ -5095,10 +5216,7 @@ contains
 
     ! Compute the parent cell idx
     father_idx = father(oct_idx)
-    i = grid(oct_idx)%ckey(1) - 2 * grid(father_idx)%ckey(1)
-    j = grid(oct_idx)%ckey(2) - 2 * grid(father_idx)%ckey(2)
-    k = grid(oct_idx)%ckey(3) - 2 * grid(father_idx)%ckey(3)
-    cell_idx = 1 + i + 2*j + 4*k
+    cell_idx = parent_cell_idx(grid(oct_idx)%ckey, grid(father_idx)%ckey)
 
     ! Reset conservative variables
     ! Average children variables
@@ -5609,30 +5727,34 @@ contains
   !> grid(oct_idx)%refined(cell_idx) = .true.).
   attributes(device) subroutine cmpdt_cell( &
        grid, uold, bold, f, constant_gravity, &
-#ifdef TURB
-       fturb, &
-#endif
        oct_idx, cell_idx, in_range, &
        dx, gamma, smallr, smallc2, courant_factor, induction, &
-       mass_loc, ekin_loc, eint_loc, emag_loc, dt_loc)
+       mass_loc, ekin_loc, eint_loc, emag_loc, dt_loc &
+#ifdef TURB
+       , ctot, grav &
+#endif
+       )
 
     type(oct),     device :: grid(*)
     real(kind=dp), device :: uold(1:twotondim,1:nvar,*)
     real(kind=dp), device :: bold(1:twotondim,1:6,*)
     real(kind=dp), device :: f(1:twotondim,1:ndim,*)
     real(kind=dp), device :: constant_gravity(3)
-#ifdef TURB
-    real(kind=dp), device :: fturb(1:twotondim,1:3,*)
-#endif
     integer,       intent(in)  :: oct_idx, cell_idx
     logical,       intent(in)  :: in_range
     real(kind=dp), intent(in)  :: dx, gamma, smallr, smallc2, courant_factor
     logical,       intent(in)  :: induction
     real(kind=dp), intent(out) :: mass_loc, ekin_loc, eint_loc, emag_loc, dt_loc
+#ifdef TURB
+    ! With TURB, dt_loc has no turbulent force: cmpdt_turb adds it from ctot and grav.
+    real(kind=dp), intent(out) :: ctot, grav
+#else
+    real(kind=dp) :: ctot, grav
+#endif
 
     type(primitive_t) :: primitive
     type(conserved_t) :: conserved
-    real(kind=dp) :: vol_loc, sound_speed, grav, ctot
+    real(kind=dp) :: vol_loc, sound_speed
     real(kind=dp) :: a2, b2sq, c2v, pp, rinv
 #ifdef MHD
     real(kind=dp) :: smallc
@@ -5695,14 +5817,141 @@ contains
 #else
     grav = abs(constant_gravity(1)) + abs(constant_gravity(2)) + abs(constant_gravity(3))
 #endif
-#ifdef TURB
-    grav = grav + abs(fturb(cell_idx,1,oct_idx)) + abs(fturb(cell_idx,2,oct_idx)) + abs(fturb(cell_idx,3,oct_idx))
-#endif
-    grav   = grav*dx/ctot**2
-    grav   = MAX(grav, 0.0001_dp)
-    dt_loc = dx / ctot * (sqrt(1_dp+2_dp*courant_factor*grav)-1_dp)/grav
+    dt_loc = courant_dt(grav, ctot, dx, courant_factor)
 
   end subroutine cmpdt_cell
+
+  !> Courant time step of a cell from its signal speed ctot and acceleration grav.
+  attributes(device) function courant_dt(grav, ctot, dx, courant_factor) result(dt_loc)
+    real(kind=dp), intent(in) :: grav, ctot, dx, courant_factor
+    real(kind=dp) :: dt_loc, g
+
+    g      = grav*dx/ctot**2
+    g      = MAX(g, 0.0001_dp)
+    dt_loc = 2_dp*courant_factor*dx / (ctot * (1_dp+sqrt(1_dp+2_dp*courant_factor*g)))
+  end function courant_dt
+
+#ifdef TURB
+  !> Turbulent force of a cell, interpolated trilinearly from the forcing table afield
+  !> (TURB_GS^3 points over the box), rounded to real(dp).
+  attributes(device) subroutine turb_force_cell(grid, afield, d_skip, oct_idx, cell_idx, dx, boxlen, fcell)
+    type(oct), device :: grid(*)
+    real(kind=8), device :: afield(1:ndim,0:TURB_GS-1,0:TURB_GS-1,0:TURB_GS-1)
+    real(kind=8), device :: d_skip(1:3)
+    integer, intent(in) :: oct_idx, cell_idx
+    real(kind=dp), intent(in) :: dx, boxlen
+    real(kind=dp), intent(out) :: fcell(1:3)
+
+    integer :: idim
+    integer :: bmin(1:3), bmax(1:3)
+    real(kind=8) :: x, rr, dr1(1:3), dr2(1:3)
+
+    ! Cell-centre position -> position in the turbulence grid, with periodic wrap.
+    do idim = 1, ndim
+       x = (2*grid(oct_idx)%ckey(idim) + mod((cell_idx-1)/2**(idim-1), 2) + 0.5d0)*dx - d_skip(idim)
+       rr = x/boxlen*turb_gs_real
+       bmin(idim) = floor(rr)
+       bmax(idim) = ceiling(rr)
+       if (bmin(idim) == TURB_GS) bmin(idim) = 0
+       if (bmax(idim) == TURB_GS) bmax(idim) = 0
+       dr1(idim) = rr - real(floor(rr), kind=8)
+       dr2(idim) = 1d0 - dr1(idim)
+    end do
+
+    ! Trilinear interpolation over the 8 corners, all 3 force components.
+    do idim = 1, 3
+       fcell(idim) = &
+            & afield(idim, bmin(1), bmin(2), bmin(3))*dr2(1)*dr2(2)*dr2(3) + &
+            & afield(idim, bmax(1), bmin(2), bmin(3))*dr1(1)*dr2(2)*dr2(3) + &
+            & afield(idim, bmin(1), bmax(2), bmin(3))*dr2(1)*dr1(2)*dr2(3) + &
+            & afield(idim, bmax(1), bmax(2), bmin(3))*dr1(1)*dr1(2)*dr2(3) + &
+            & afield(idim, bmin(1), bmin(2), bmax(3))*dr2(1)*dr2(2)*dr1(3) + &
+            & afield(idim, bmax(1), bmin(2), bmax(3))*dr1(1)*dr2(2)*dr1(3) + &
+            & afield(idim, bmin(1), bmax(2), bmax(3))*dr2(1)*dr1(2)*dr1(3) + &
+            & afield(idim, bmax(1), bmax(2), bmax(3))*dr1(1)*dr1(2)*dr1(3)
+    end do
+  end subroutine turb_force_cell
+
+  !=====================================================================================
+  ! Turbulent source term.
+  ! Per (cell, oct): subtract kinetic energy, add rho*f*dteff to momentum, recompute
+  ! total energy. Direct port of turb_hydro (turb/turb_hydro.f90); operates on uold.
+  ! f is interpolated from afield, the forcing table of the level at its drive, and is
+  ! zero where the drive's density filter set mask.
+  !=====================================================================================
+  attributes(global) subroutine turb_hydro_kernel(grid, uold, mask, afield, d_skip, head_idx, num_octs, &
+       & dx, boxlen, smallr, smallc, dteff)
+    type(oct), device :: grid(*)
+    real(kind=dp), device :: uold(1:twotondim,1:nvar,*)
+    integer(kind=1), device :: mask(1:twotondim,*)
+    real(kind=8), device :: afield(1:ndim,0:TURB_GS-1,0:TURB_GS-1,0:TURB_GS-1)
+    real(kind=8), device :: d_skip(1:3)
+    integer(kind=4), intent(in), value :: head_idx, num_octs
+    real(kind=dp), intent(in), value :: dx, boxlen, smallr, smallc
+    real(kind=8), intent(in), value :: dteff
+
+    integer :: block_idx, cell_idx, oct_idx, idim
+    real(kind=dp) :: ener, rho, fcell(1:3)
+
+    block_idx = blockIdx%x - 1
+
+    oct_idx = block_idx*blockDim%y + threadIdx%y - 1
+    if (oct_idx >= num_octs) return
+    oct_idx = head_idx + oct_idx
+
+    cell_idx = threadIdx%x
+
+    if (mask(cell_idx, oct_idx) /= 0) then
+       fcell = 0d0
+    else
+       call turb_force_cell(grid, afield, d_skip, oct_idx, cell_idx, dx, boxlen, fcell)
+    end if
+
+    rho = uold(cell_idx, 1, oct_idx)
+
+    ! Remove kinetic energy from total energy
+    ener = uold(cell_idx, 5, oct_idx)
+    do idim = 1, 3
+       ener = max(ener - 0.5_dp*uold(cell_idx, idim+1, oct_idx)**2/max(rho, smallr), rho*smallc**2)
+    end do
+
+    ! Update momentum
+    do idim = 1, 3
+       uold(cell_idx, idim+1, oct_idx) = uold(cell_idx, idim+1, oct_idx) + &
+            & max(rho, smallr)*fcell(idim)*dteff
+    end do
+
+    ! Update total energy
+    do idim = 1, 3
+       ener = max(ener + 0.5_dp*uold(cell_idx, idim+1, oct_idx)**2/max(rho, smallr), rho*smallc**2)
+    end do
+    uold(cell_idx, 5, oct_idx) = ener
+
+  end subroutine turb_hydro_kernel
+
+  !> Adds the turbulent force to the Courant time step dt_loc of cmpdt_cell.
+  attributes(device) subroutine cmpdt_turb(grid, uold, afield, d_skip, oct_idx, cell_idx, &
+       & dx, boxlen, turb_min_rho, courant_factor, ctot, grav, dt_loc)
+    type(oct), device :: grid(*)
+    real(kind=dp), device :: uold(1:twotondim,1:nvar,*)
+    real(kind=8), device :: afield(1:ndim,0:TURB_GS-1,0:TURB_GS-1,0:TURB_GS-1)
+    real(kind=8), device :: d_skip(1:3)
+    integer, intent(in) :: oct_idx, cell_idx
+    real(kind=dp), intent(in) :: dx, boxlen, turb_min_rho, courant_factor, ctot, grav
+    real(kind=dp), intent(inout) :: dt_loc
+
+    real(kind=dp) :: fcell(1:3)
+
+    if (dt_loc == huge(0_dp)) return
+    ! Density filter, on the same uold as the drive.
+    if (real(uold(cell_idx, 1, oct_idx), kind=8) < turb_min_rho) then
+       fcell = 0_dp
+    else
+       call turb_force_cell(grid, afield, d_skip, oct_idx, cell_idx, dx, boxlen, fcell)
+    end if
+    dt_loc = courant_dt(grav + abs(fcell(1)) + abs(fcell(2)) + abs(fcell(3)), ctot, dx, courant_factor)
+  end subroutine cmpdt_turb
+#endif
   ! =========================================================================
 
   ! =========================================================================
@@ -5711,7 +5960,7 @@ contains
   attributes(global) subroutine cmpdt_kernel(grid, uold, bold, f, constant_gravity, &
       & head_idx, num_octs, data_out, dx, gamma, smallr, smallc2, courant_factor, induction &
 #ifdef TURB
-      & , fturb &
+      & , afield, d_skip, boxlen, turb_min_rho &
 #endif
       & )
     type(oct), device :: grid(*)
@@ -5720,7 +5969,10 @@ contains
     real(kind=dp), device :: bold(1:twotondim,1:6,*)
     real(kind=dp), device :: f(1:twotondim,1:ndim,*)
 #ifdef TURB
-    real(kind=dp), device :: fturb(1:twotondim,1:3,*)
+    real(kind=8), device :: afield(1:ndim,0:TURB_GS-1,0:TURB_GS-1,0:TURB_GS-1)
+    real(kind=8), device :: d_skip(1:3)
+    real(kind=dp), value :: boxlen, turb_min_rho
+    real(kind=dp) :: ctot, grav
 #endif
     integer(kind=4), intent(in), value :: head_idx
     integer(kind=4), intent(in), value :: num_octs
@@ -5740,12 +5992,17 @@ contains
     oct_idx   = head_idx + local_oct
 
     call cmpdt_cell(grid, uold, bold, f, constant_gravity, &
-#ifdef TURB
-         fturb, &
-#endif
          oct_idx, cell_idx, local_oct < num_octs, &
          dx, gamma, smallr, smallc2, courant_factor, induction, &
-         m, ek, ei, em, dtl)
+         m, ek, ei, em, dtl &
+#ifdef TURB
+         , ctot, grav &
+#endif
+         )
+#ifdef TURB
+    call cmpdt_turb(grid, uold, afield, d_skip, oct_idx, cell_idx, &
+         & dx, boxlen, turb_min_rho, courant_factor, ctot, grav, dtl)
+#endif
 
     mass_loc = real(m,  kind=8)
     ekin_loc = real(ek, kind=8)
@@ -5781,7 +6038,7 @@ contains
       & head_idx, num_octs, part_mass, part_ekin, part_eint, part_emag, part_dt, &
       & dx, gamma, smallr, smallc2, courant_factor, induction &
 #ifdef TURB
-      & , fturb &
+      & , afield, d_skip, boxlen, turb_min_rho &
 #endif
       & )
     type(oct), device :: grid(*)
@@ -5790,7 +6047,10 @@ contains
     real(kind=dp), device :: bold(1:twotondim,1:6,*)
     real(kind=dp), device :: f(1:twotondim,1:ndim,*)
 #ifdef TURB
-    real(kind=dp), device :: fturb(1:twotondim,1:3,*)
+    real(kind=8), device :: afield(1:ndim,0:TURB_GS-1,0:TURB_GS-1,0:TURB_GS-1)
+    real(kind=8), device :: d_skip(1:3)
+    real(kind=dp), value :: boxlen, turb_min_rho
+    real(kind=dp) :: ctot, grav
 #endif
     integer(kind=4), intent(in), value :: head_idx
     integer(kind=4), intent(in), value :: num_octs
@@ -5812,12 +6072,17 @@ contains
     oct_idx   = head_idx + local_oct
 
     call cmpdt_cell(grid, uold, bold, f, constant_gravity, &
-#ifdef TURB
-         fturb, &
-#endif
          oct_idx, cell_idx, local_oct < num_octs, &
          dx, gamma, smallr, smallc2, courant_factor, induction, &
-         mass_loc, ekin_loc, eint_loc, emag_loc, dt_loc)
+         mass_loc, ekin_loc, eint_loc, emag_loc, dt_loc &
+#ifdef TURB
+         , ctot, grav &
+#endif
+         )
+#ifdef TURB
+    call cmpdt_turb(grid, uold, afield, d_skip, oct_idx, cell_idx, &
+         & dx, boxlen, turb_min_rho, courant_factor, ctot, grav, dt_loc)
+#endif
 
     ! Fused block-wide reduction (4 sums + 1 min) in one pair of syncthreads.
     call block_reduce_sum4_min1(mass_loc, ekin_loc, eint_loc, emag_loc, dt_loc)
@@ -6073,10 +6338,7 @@ contains
     if (neighbor_oct_idx <= ngridmax) return
 
     father_oct_idx = father(neighbor_oct_idx)
-    kx = grid(neighbor_oct_idx)%ckey(1) - 2 * grid(father_oct_idx)%ckey(1)
-    ky = grid(neighbor_oct_idx)%ckey(2) - 2 * grid(father_oct_idx)%ckey(2)
-    kz = grid(neighbor_oct_idx)%ckey(3) - 2 * grid(father_oct_idx)%ckey(3)
-    cell_idx = 1 + kx + 2*ky + 4*kz
+    cell_idx = parent_cell_idx(grid(neighbor_oct_idx)%ckey, grid(father_oct_idx)%ckey)
     do ivar = 1, nvar
        info = atomicadd(unew(cell_idx, ivar, father_oct_idx), -dU(ivar) / real(twotondim, kind=dp))
     end do
@@ -6606,7 +6868,20 @@ contains
   ! NVHPC applies a kernel's launch_bounds to every kernel that follows it in the module,
   ! so kernels without launch_bounds are defined before every kernel that has them.
   ! Double precision is register-limited: cap the registers (threads per block set in gpu_runner.cuf).
-#if defined(MHD) || (defined(NPRE) && NPRE == 4)
+  ! MHD (64 threads at nsubgrid=1, 256 at nsubgrid=2): measured on Orszag-Tang, 512^3 on an H200
+  ! and 256^3 on an A100. The best caps differ between sm_90 and sm_80 (GPU_SM, from CUDA_ARCH);
+  ! other GPUs use no cap.
+#if defined(MHD) && defined(GPU_SM) && GPU_SM == 90 && NPRE == 4 && NSUBGRID == 2
+#define HYDRO_LB launch_bounds(256,3)
+#elif defined(MHD) && defined(GPU_SM) && GPU_SM == 90 && NPRE == 4
+#define HYDRO_LB launch_bounds(64,12)
+#elif defined(MHD) && defined(GPU_SM) && GPU_SM == 90 && NSUBGRID != 2
+#define HYDRO_LB launch_bounds(64,5)
+#elif defined(MHD) && defined(GPU_SM) && GPU_SM == 80 && NPRE != 4 && NSUBGRID == 2
+#define HYDRO_LB launch_bounds(256,1)
+#elif defined(MHD) && defined(GPU_SM) && GPU_SM == 80 && NPRE != 4
+#define HYDRO_LB launch_bounds(64,6)
+#elif defined(MHD) || (defined(NPRE) && NPRE == 4)
 #define HYDRO_LB
 #elif !defined(NSUBGRID) || NSUBGRID == 1
 #define HYDRO_LB launch_bounds(64,16)
@@ -6660,6 +6935,9 @@ contains
 #else
     type(hydro_smem_t), shared :: smem(*)
 #endif
+    ! The subgrid's neighbor octs, read from global memory once per block rather than once per cell.
+    integer(kind=4), shared :: snbor(subgridsize)
+    integer :: w
     real(kind=dp) :: dtdx
     integer :: block_idx  ! The index of this block, corresponds to the subgrid to load
     integer :: thread_idx ! The index of this thread within the block
@@ -6675,6 +6953,10 @@ contains
 
     ! thread guard, probably not needed since num_blocks should always be equal to num_subgrids
     if (block_idx >= num_subgrids) return
+    do w = thread_idx, subgridsize - 1, blockDim%x
+       snbor(w+1) = nbor(w+1, head_idx + block_idx)
+    end do
+    call syncthreads()
 
 #ifdef MHD
     associate(local_subgrid => smem(1)%local_subgrid, &
@@ -6699,14 +6981,14 @@ contains
     ! =======================================================================
     ! Convert from conserved to primitive variables
     ! =======================================================================
-    call subgrid_conserved_2_primitive(grid, uold, bold, f, constant_gravity, nbor, &
+    call subgrid_conserved_2_primitive(grid, uold, bold, f, constant_gravity, snbor, &
 #if NVAR>5+NENER
          & scalar_subgrid, &
 #endif
 #ifdef MHD
          & bf, &
 #endif
-         & head_idx, block_idx, thread_idx, gamma, smallr, smallc2, dt, ilevel < levelmax, local_subgrid)
+         & thread_idx, gamma, smallr, smallc2, dt, ilevel < levelmax, local_subgrid)
 
     ! =======================================================================
     ! Perform tracing step and compute the interface states
@@ -6765,22 +7047,21 @@ contains
     ! =======================================================================
     ! Update the conserved variables at current level.
     ! =======================================================================
-    call conservative_update(unew, bnew, nbor, left_interfaces_x, left_interfaces_y, left_interfaces_z, &
+    call conservative_update(unew, bnew, snbor, left_interfaces_x, left_interfaces_y, left_interfaces_z, &
 #ifdef MHD
          & emfx, emfy, emfz, &
 #endif
-         & head_idx, block_idx, &
          & thread_idx, dtdx)
 
     ! =======================================================================
     ! Update the conserved variables at coarser level.
     ! =======================================================================
     if (ilevel > levelmin) then
-       call coarse_cell_update(grid, unew, bnew, father, nbor, left_interfaces_x, left_interfaces_y, left_interfaces_z, &
+       call coarse_cell_update(grid, unew, bnew, father, snbor, left_interfaces_x, left_interfaces_y, left_interfaces_z, &
 #ifdef MHD
             & emfx, emfy, emfz, &
 #endif
-            & head_idx, block_idx, thread_idx, ngridmax, dtdx)
+            & thread_idx, ngridmax, dtdx)
     endif
 
     end associate

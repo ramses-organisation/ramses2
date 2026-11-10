@@ -1,0 +1,20 @@
+! =========================================================================
+!> @brief
+!> Index of the cell of the father oct that holds an oct, from the
+!> Cartesian keys of the oct and of its father oct
+!>
+attributes(device) function parent_cell_idx(ckey, ckey_father) result(idx)
+  implicit none
+  integer(kind=4), intent(in) :: ckey(1:ndim)
+  integer(kind=4), intent(in) :: ckey_father(1:ndim)
+  integer :: idx
+
+  integer :: i, j, k
+
+  i = ckey(1) - 2 * ckey_father(1)
+  j = ckey(2) - 2 * ckey_father(2)
+  k = ckey(3) - 2 * ckey_father(3)
+  idx = 1 + i + 2*j + 4*k
+
+end function parent_cell_idx
+! =========================================================================

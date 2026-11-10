@@ -199,6 +199,11 @@ ifeq ($(COMPILER),NVHPC)
    ifneq ($(CUB_SCAN_REFINE),0)
       DEFINES += -DCUB_SCAN_REFINE
    endif
+   # GPU_SM (e.g. 90 for sm_90) lets the source pick per-architecture tuning
+   GPU_SM := $(shell echo '$(CUDA_ARCH)' | sed -nE 's/^sm_([0-9]+)[af]?$$/\1/p')
+   ifneq ($(GPU_SM),)
+      DEFINES += -DGPU_SM=$(GPU_SM)
+   endif
    CUDALIBS = nvtx,curand
    ifeq ($(TURB),1)
       CUDALIBS := $(CUDALIBS),cufft
@@ -321,8 +326,8 @@ MODOBJ += init_neq_chem.o clfind_commons.o turb_commons.o mdl_commons.o mdl.o \
 ifeq ($(COMPILER),NVHPC)
    MODOBJ += cub_module_radix_sort_c.o cub_module_radix_sort_f.o \
       cub_inclusive_scan_c.o cub_inclusive_scan_f.o gpu_utils.o gpu_hydro.o \
-      gpu_cooling.o gpu_star.o gpu_feedback.o gpu_rho.o gpu_mg.o gpu_turb.o gpu_refine.o gpu_flag.o gpu_runner.o \
-      gpu_clump.o gpu_sink.o gpu_part.o gpu_manager.o
+      gpu_cooling.o gpu_star.o gpu_feedback.o gpu_rho.o gpu_mg.o gpu_turb.o gpu_refine.o gpu_flag.o gpu_rt.o gpu_runner.o \
+      gpu_neq_cooling.o gpu_clump.o gpu_sink.o gpu_part.o gpu_manager.o
 endif
 ifeq ($(COMPILER),METAL)
    MODOBJ := metal_interface.o metal_bridge.o $(MODOBJ) metal_runner.o
@@ -378,9 +383,9 @@ cub_module_radix_sort_f.o: cub_module_radix_sort.cuf cub_module_radix_sort_c.o
 	nvfortran $(FFLAGS) -c cub_module_radix_sort_c.o $(GPU_PATH)/cub_module_radix_sort.cuf -o cub_module_radix_sort_f.o
 
 %.o:%.cuf
-	$(F90) $(FFLAGS) -c $< -o $@ $(LIBS)
+	$(F90) $(FFLAGS) -c $< -o $@
 %.o:%.f90
-	$(F90) $(FFLAGS) -c $< -o $@ $(LIBS)
+	$(F90) $(FFLAGS) -c $< -o $@
 %.o:%.c
 	$(C) $(CFLAGS) -c $< -o $@
 #############################################################################

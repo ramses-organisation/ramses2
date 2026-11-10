@@ -242,6 +242,17 @@ subroutine m_read_rt_params(pst)
      call mdl_abort(s%mdl)
   endif
 
+#ifdef _CUDA
+  !--------------------------------------------------
+  ! Check the RT options supported on GPU
+  !--------------------------------------------------
+  ! Without rt_advect the GPU cooling runs, and it updates the photon variables only with neq_chem
+  if(s%r%isothermal.and..not.s%r%neq_chem.and..not.rt_advect)then
+     write(*,*)'Error: rt with isothermal and rt_advect=.false. but without neq_chem is not supported on GPU'
+     call mdl_abort(s%mdl)
+  endif
+#endif
+
   !--------------------------------------------------
   ! Reduced light speed. First check if only one light speed fraction set
   ! and if so, set that same light speed fraction at all levels. If more

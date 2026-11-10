@@ -553,9 +553,11 @@ subroutine ensure_ref_rules(s,ilevel)
         end do
      end do
 
+     ! Only cancel new refinements: unflagging a refined cell would
+     ! destroy its child and could orphan finer octs (2:1 violation)
      if(.not. ok)then
         do ind=1,twotondim
-           m%flag1(ind,igrid)=0
+           if(.not.m%grid(igrid)%refined(ind))m%flag1(ind,igrid)=0
         end do
      end if
 

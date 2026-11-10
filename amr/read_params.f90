@@ -397,6 +397,11 @@ subroutine m_read_params(pst)
   integer,dimension(1:MAXBOUND)::bound_zmax=0
   real(kind=8),dimension(1:MAXBOUND)::d_bound=0
   real(kind=8),dimension(1:MAXBOUND)::p_bound=0
+#ifdef MHD
+  real(kind=8),dimension(1:MAXBOUND)::A_bound=0
+  real(kind=8),dimension(1:MAXBOUND)::B_bound=0
+  real(kind=8),dimension(1:MAXBOUND)::C_bound=0
+#endif
   real(kind=8),dimension(1:MAXBOUND)::u_bound=0
   real(kind=8),dimension(1:MAXBOUND)::v_bound=0
   real(kind=8),dimension(1:MAXBOUND)::w_bound=0
@@ -706,6 +711,9 @@ subroutine m_read_params(pst)
 #endif
 #ifdef DO_CR
        & ,cr_fx_bound,cr_fy_bound,cr_fz_bound &
+#endif
+#ifdef MHD
+       & ,A_bound,B_bound,C_bound &
 #endif
        & ,d_bound,u_bound,v_bound,w_bound,p_bound
   ! Cooling / basic chemistry parameters
@@ -1438,11 +1446,13 @@ subroutine m_read_params(pst)
      nml_ok=.false.
   endif
 #endif
-  ! The GPU flags cells on the density, pressure and magnetic gradients only
-  if(err_grad_u>=0.0d0.or.(neq_chem.and.(err_grad_xHI>=0.0d0.or.err_grad_xHII>=0.0d0)))then
-     write(*,*)'Error: err_grad_u, err_grad_xHI and err_grad_xHII are not supported on GPU'
+#if NENER>0
+  ! The GPU does not flag cells on the non-thermal pressure gradients
+  if(any(err_grad_prad(1:nener)>=0.0d0))then
+     write(*,*)'Error: err_grad_prad is not supported on GPU'
      nml_ok=.false.
   endif
+#endif
   ! The GPU has no boundary regions for a non-periodic box
   if(any(.not.periodic(1:ndim)).or.nbound>0)then
      write(*,*)'Error: a non-periodic box (periodic=.false. or nbound>0) is not supported on GPU'
@@ -1458,6 +1468,37 @@ subroutine m_read_params(pst)
      write(*,*)'Error: output_peak_core is not supported on GPU'
      nml_ok=.false.
   endif
+  ! The GPU cooling has no cooling_ism branch
+  if(cooling_ism)then
+     write(*,*)'Error: cooling_ism is not supported on GPU'
+     nml_ok=.false.
+  endif
+  ! The GPU does not reset the ion fractions of derefined cells to equilibrium
+  if(neq_chem.and.upload_equilibrium_x)then
+     write(*,*)'Error: upload_equilibrium_x is not supported on GPU'
+     nml_ok=.false.
+  endif
+#ifdef DO_RTZ
+  ! The GPU has no RTZ chemistry
+  if(neq_chem)then
+     write(*,*)'Error: neq_chem with DO_RTZ is not supported on GPU'
+     nml_ok=.false.
+  endif
+#endif
+#ifdef DO_RT
+  ! The GPU does not exchange the photon variables between ranks
+  if(rt.and.s%g%ncpu>1)then
+     write(*,*)'Error: rt on more than one rank is not supported on GPU'
+     nml_ok=.false.
+  endif
+#ifndef HYDRO
+  ! Builds without HYDRO leave out the photon sort of gpu_refine and the photon fill of new octs
+  if(rt)then
+     write(*,*)'Error: rt in a build without HYDRO=1 is not supported on GPU'
+     nml_ok=.false.
+  endif
+#endif
+#endif
 #endif
 
   ! eta_ohm is a synonym of etamag
@@ -1500,6 +1541,13 @@ subroutine m_read_params(pst)
      write(*,*)'Error: nimhd_solver=explicit or sts only runs on a single rank'
      nml_ok=.false.
   endif
+#ifdef MHD
+  ! Boundaries from condinit or boundana do not set the magnetic field
+  if(any(bound_type(1:nbound)==4).or.any(bound_type(1:nbound)==5))then
+     write(*,*)'Error: bound_type=4 and bound_type=5 are not supported with MHD'
+     nml_ok=.false.
+  endif
+#endif
 
   if(.not. nml_ok)then
      write(*,*)'Too many errors in the namelist'
@@ -1856,6 +1904,11 @@ subroutine m_read_params(pst)
   s%r%v_bound=v_bound
   s%r%w_bound=w_bound
   s%r%p_bound=p_bound
+#ifdef MHD
+  s%r%A_bound=A_bound
+  s%r%B_bound=B_bound
+  s%r%C_bound=C_bound
+#endif
 #if NENER>0
   s%r%prad_bound=prad_bound
 #endif

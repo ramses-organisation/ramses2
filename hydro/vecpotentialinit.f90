@@ -69,7 +69,8 @@ subroutine vecpotentialinit(r,g,x,A,idim,nn)
   do i = 1,nn
      xx = x(i,1)
      yy = x(i,2)
-     A(i) = B0*(cos(4.0*pi*xx)/(4.0*pi)+cos(2.0*pi*yy)/(2.0*pi))
+     A(i) = 0.0
+     if(idim==3)A(i) = B0*(cos(4.0*pi*xx)/(4.0*pi)+cos(2.0*pi*yy)/(2.0*pi))
   end do
 #endif
 
@@ -110,6 +111,7 @@ subroutine vecpotentialinit(r,g,x,A,idim,nn)
      else
         A(i) = B0*(xx - 2.0)
      endif
+     if(idim/=3)A(i) = 0.0
   end do
 #endif
 

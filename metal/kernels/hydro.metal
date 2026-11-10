@@ -1060,7 +1060,7 @@ kernel void cmpdt_kernel(
 #endif
             grav = grav * dx / (ctot*ctot);
             grav = max(grav, 0.0001f);
-            dt_loc = dx / ctot * (sqrt(1.0f + 2.0f*courant_factor*grav) - 1.0f) / grav;
+            dt_loc = 2.0f*courant_factor*dx / (ctot * (1.0f + sqrt(1.0f + 2.0f*courant_factor*grav)));
         }
     }
 

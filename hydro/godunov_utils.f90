@@ -327,7 +327,7 @@ subroutine cmpdt(r,uu,bb,gg,dx,dt)
 
   ! Compute maximum time step for each authorized cell
   dt = r%courant_factor*dx/r%smallc
-  dtcell = dx/ctot*(sqrt(one+two*r%courant_factor*grav)-one)/grav
+  dtcell = two*r%courant_factor*dx/(ctot*(one+sqrt(one+two*r%courant_factor*grav)))
   dt = min(dt,dtcell)
 
 end subroutine cmpdt

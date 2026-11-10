@@ -37,6 +37,9 @@ recursive subroutine r_set_grid_device(pst)
      bold = pst%s%m%bold
 #endif
 #endif
+#ifdef DO_RT
+     rtuold = pst%s%m%rtuold
+#endif
 #ifdef GRAV
      f = pst%s%m%f
      phi = pst%s%m%phi
@@ -72,6 +75,11 @@ recursive subroutine r_set_grid_device(pst)
         call GPU_Error_Check(__FILE__, __LINE__)
         call nvtxEndRange()
      endif
+
+#ifdef DO_RT
+     ! Stellar SED H→D
+     if (pst%s%r%rt .and. pst%s%r%star .and. pst%s%r%rt_star) call gpu_rt_upload_sed(pst%s)
+#endif
 
      ! Sink particle H→D
      if (pst%s%r%sink .and. allocated(pst%s%sink%xp) .and. allocated(sink_xp)) then
@@ -148,6 +156,7 @@ recursive subroutine r_set_grid_device(pst)
      do ind = 1, subgridsize
         call update_nbor_array<<<num_blocks, num_threads>>>(nbor, grid, hash_key, hash_val, pst%s%m%hash_size, &
              & ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, head_idx, num_subgrids, ind)
+        call GPU_Error_Check(__FILE__, __LINE__)
      end do
      call GPU_Error_Check(__FILE__, __LINE__)
      call nvtxEndRange()
@@ -184,6 +193,9 @@ recursive subroutine r_transfer_grid_host(pst)
 #ifdef MHD
      pst%s%m%bold = bold
 #endif
+#endif
+#ifdef DO_RT
+     pst%s%m%rtuold = rtuold
 #endif
 #ifdef GRAV
      pst%s%m%f = f
@@ -287,6 +299,24 @@ subroutine gpu_to_host_part(pst)
   endif
 
 end subroutine gpu_to_host_part
+!###########################################################
+!###########################################################
+!###########################################################
+subroutine gpu_star_to_host(sim)
+  implicit none
+  type(ramses_t)::sim
+  integer::istat
+
+  ! Copy the masses, birth times and metallicities of the stars to the host
+  if (.not. allocated(star_xp) .or. sim%star%npart <= 0) return
+  call nvtxStartRange("Copy star mass, time and metallicity from device to host", color=5)!red
+  istat = cudaMemcpy(sim%star%mp, star_mp, int(sim%star%npart,8))
+  istat = cudaMemcpy(sim%star%tp, star_tp, int(sim%star%npart,8))
+  istat = cudaMemcpy(sim%star%zp, star_zp, int(sim%star%npart,8))
+  call GPU_Error_Check(__FILE__, __LINE__)
+  call nvtxEndRange()
+
+end subroutine gpu_star_to_host
 !###########################################################
 !###########################################################
 !###########################################################
@@ -511,6 +541,9 @@ subroutine gpu_allocate_amr(sim)
 #ifdef HYDRO
   use hydro_parameters, ONLY: nvar
 #endif
+#ifdef DO_RT
+  use rt_parameters, ONLY: nrtvar, nrtgrp
+#endif
 #ifdef TURB
   use turb_commons, ONLY: TURB_GS
 #endif
@@ -579,16 +612,27 @@ subroutine gpu_allocate_amr(sim)
      endif
   endif
 #endif
+#ifdef DO_RT
+  allocate(rtuold(1:twotondim,1:nrtvar,1:sim%m%ngridmax+sim%m%ncachemax))
+  allocate(rtunew(1:twotondim,1:nrtvar,1:sim%m%ngridmax))
+  if(sim%r%rt_advect .or. (sim%r%rt .and. sim%r%star .and. sim%r%rt_star))then
+     allocate(rt_dep_val(1:2*ndim,1:nrtvar,1:sim%m%ncachemax))
+     allocate(rt_dep_src(1:2*ndim,1:sim%m%ncachemax))
+  endif
+  allocate(emissivity(1:twotondim,1:nrtgrp,1:sim%m%ngridmax))
+#endif
 #ifdef TURB
   allocate(afield_d    (1:ndim,0:TURB_GS-1,0:TURB_GS-1,0:TURB_GS-1,1:2))
   allocate(afield_now_d(1:ndim,0:TURB_GS-1,0:TURB_GS-1,0:TURB_GS-1))
   allocate(turb_spec_d (1:ndim,0:TURB_GS-1,0:TURB_GS-1,0:TURB_GS-1,1:2))
   allocate(turb_fft_d  (1:ndim,0:TURB_GS-1,0:TURB_GS-1,0:TURB_GS-1))
-  allocate(fturb(1:twotondim,1:3,1:sim%m%ngridmax+sim%m%ncachemax))
+  allocate(afield_lev_d(1:ndim,0:TURB_GS-1,0:TURB_GS-1,0:TURB_GS-1,sim%r%levelmin:sim%r%nlevelmax))
+  allocate(turb_mask_d(1:twotondim,1:sim%m%ngridmax+sim%m%ncachemax))
   afield_d=0d0
   afield_now_d=0d0
   turb_spec_d=(0d0,0d0)
-  fturb=0d0
+  afield_lev_d=0d0
+  turb_mask_d=0
 #endif
 #ifdef GRAV
   allocate(rho(1:twotondim,1:sim%m%ngridmax+sim%m%ncachemax))

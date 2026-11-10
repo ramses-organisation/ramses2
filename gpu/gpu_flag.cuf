@@ -27,6 +27,7 @@ module flag_device
 contains
 
   include 'gpu_reduce.cuf'
+  include 'gpu_cell.cuf'
 
   ! =========================================================================
   attributes(global) subroutine reset_flag1_kernel(flag1, head_idx, num_octs)
@@ -129,7 +130,7 @@ contains
     integer(kind=4), intent(in), value :: num_octs
 
     integer :: tid, bid, cell_idx, oct_idx
-    integer :: ind, father_idx, i, j, k
+    integer :: ind, father_idx
     logical :: ok
 
     ! Thread and block id
@@ -143,10 +144,7 @@ contains
 
     ! Compute the parent cell idx
     father_idx = father(oct_idx)
-    i = grid(oct_idx)%ckey(1) - 2 * grid(father_idx)%ckey(1)
-    j = grid(oct_idx)%ckey(2) - 2 * grid(father_idx)%ckey(2)
-    k = grid(oct_idx)%ckey(3) - 2 * grid(father_idx)%ckey(3)
-    cell_idx = 1 + i + 2*j + 4*k
+    cell_idx = parent_cell_idx(grid(oct_idx)%ckey, grid(father_idx)%ckey)
 
     ! If any cell is refined or if any cell is flagged then flag parent cell
     ok = .false.
@@ -305,7 +303,8 @@ contains
   ! =========================================================================
 
   ! =========================================================================
-  attributes(global) subroutine enforce_rules(flag1, nbor, head_idx, num_octs, ngridmax)
+  attributes(global) subroutine enforce_rules(flag1, grid, nbor, head_idx, num_octs, ngridmax)
+    type(oct), device :: grid(*)
     integer(kind=4), device :: flag1(1:twotondim,*)
     integer(kind=4), device :: nbor(1:subgridsize,*)
     integer(kind=4), intent(in), value :: head_idx
@@ -352,10 +351,12 @@ contains
        end do
     end do
 
-    ! If one grid is missing, set flag1 to zero (no refinement allowed)
+    ! If one grid is missing, set flag1 to zero (no refinement allowed).
+    ! Only cancel new refinements: unflagging a refined cell would
+    ! destroy its child and could orphan finer octs (2:1 violation)
     if (ok) then
        do ind = 1, twotondim
-          flag1(ind, oct_idx) = 0
+          if (.not. grid(oct_idx)%refined(ind)) flag1(ind, oct_idx) = 0
        end do
     end if
 
