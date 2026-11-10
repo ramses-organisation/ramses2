@@ -5,7 +5,7 @@ module neq_cooling_device
   use hydro_parameters, only: nvar, nion, nener
 #ifdef DO_RT
   use rt_parameters, only: nrtgrp, nrtvar, smallnp
-  use constants, only: one_over_clight
+  use constants, only: one_over_clight, a_r
 #endif
   use oct_commons, only: oct
   use amr_commons, only: run_t
@@ -22,6 +22,7 @@ module neq_cooling_device
 #ifdef DO_RT
   real(kind=8),parameter::Np_min=1d-13, Np_frac=0.2
   real(kind=8),parameter::Fp_frac=0.5
+  integer,parameter::iIR=1
 #endif
 
   !> Table index and interpolation factors of a temperature
@@ -202,6 +203,7 @@ contains
     real(kind=8):: rho
     integer:: iion
     real(kind=8):: recRad, dNpdt_g
+    real(kind=8):: TR, E_rad, kAbs_IR
 #endif
     real(kind=8):: ncr, prime
     type(rate_index_t):: idxT              ! Table index and factors of TK
@@ -250,6 +252,28 @@ contains
     if(r%self_shielding) ss_factor = exp(-nHc/1d-2)
 
 #ifdef DO_RT
+    ! IR dust opacity from the radiation temperature
+    if(r%is_kIR_T) then
+       group_egy_erg(1:nrtgrp) = r%group_egy(1:nrtgrp) * eV2erg
+          ! For the radiation temperature,  weigh the energy in each group
+            ! by its opacity over IR opacity (derived from IR temperature)
+       E_rad = group_egy_erg(iIR) * dNp(iIR)
+       TR = max(0d0,(E_rad*r%rt_c_fraction(ilevel)/a_r)**0.25) ! IR temperature
+       kAbs_IR = r%kappaAbs(iIR) * (TR/10d0)**2
+       do igroup=1,nrtgrp
+          if(igroup .ne. iIR)                                            &
+               E_rad = E_rad + r%kappaAbs(igroup) / kAbs_IR              &
+               * group_egy_erg(igroup) * dNp(igroup)
+       end do
+       TR = max(0d0,(E_rad*r%rt_c_fraction(ilevel)/a_r)**0.25) ! Rad. temperature
+       if(r%rt_T_rad) then      ! Use radiation temperature for everything
+          dT2 = TR/mu ;   TK = TR
+          idxT = get_rate_index(tables, TK)
+       endif
+                 ! Set the IR opacities according to the rad. temperature:
+       kAbs_IR = r%kappaAbs(iIR) * (TR/10d0)**2 * exp(-TR/1d3)
+    endif
+
     ! UPDATE PHOTON DENSITY AND FLUX *************************************
     if(r%rt_advect) then
        rt_c_cgs = tables%rt_c_cgs(ilevel)
@@ -260,6 +284,7 @@ contains
        rho = nHc / r%X_H * mH
                                   ! Set dust absorption rates [s-1]:
        dustAbs(:) =r%kappaAbs(:) *rho*Zsolarc*f_dust*rt_c_cgs
+       if(r%is_kIR_T) dustAbs(iIR) = kAbs_IR*rho*Zsolarc*f_dust*rt_c_cgs
 
        ! ABSORPTION OF PHOTONS BY GAS
        do igroup=1,nrtgrp       ! ----------------Ionization absorption
