@@ -31,7 +31,8 @@ module turb_commons
      real(kind=8), allocatable :: afield_next(:,:,:,:) ! Forcing field at time = t + dt
      real(kind=8), allocatable :: afield_now(:,:,:,:)  ! Forcing field now
 
-     real(kind=8) :: sol_frac         ! Solenoidal fraction
+     real(kind=8) :: comp_amp         ! Longitudinal (compressive) mode amplitude
+     real(kind=8) :: sol_amp          ! Amplitude of each transverse (solenoidal) mode
      real(kind=8) :: turb_last_time   ! Time of old turbulent field
      real(kind=8) :: turb_next_time   ! Time of next turbulent field
      real(kind=8) :: turb_dt          ! Turbulent velocity evolution timestep
@@ -155,7 +156,7 @@ contains
          & (/0.d0, 0.d0, 0.d0/), NEW_LINE(c),&      ! turb_min
          & (/1.d0, 1.d0, 1.d0/), NEW_LINE(c),&      ! turb_max
          & run%turb_T, turb%turb_dt, NEW_LINE(c),&
-         & run%comp_frac, turb%sol_frac, NEW_LINE(c),&
+         & run%comp_frac, 1.d0 - run%comp_frac, NEW_LINE(c),&  ! compressive, solenoidal power
          & turb%kiss64_state, NEW_LINE(c)                ! random number state
 
     ! Now write atomically (safest)
@@ -180,7 +181,7 @@ contains
     ! Copy current field, and add more turbulence
     turb%turb_last = turb%turb_next
     turb%afield_last = turb%afield_next
-    call add_turbulence(turb, turb%turb_next, turb%turb_dt, run%comp_frac)
+    call add_turbulence(turb, turb%turb_next, turb%turb_dt)
 
     ! Subtract decay of turbulence
     call decay_turbulence(turb%turb_decay_frac, turb%turb_last, turb%turb_next)
@@ -351,7 +352,7 @@ subroutine find_conj_pair(i,j,k,ii,jj,kk)
   !=====================================================================================
   !=====================================================================================
   !=====================================================================================
-  subroutine add_turbulence(turb, turb_field, dt, comp_frac)
+  subroutine add_turbulence(turb, turb_field, dt)
     implicit none
     ! Take a complex Fourier field of turbulence, and add a random component
     ! from a Wiener process (in this case Gaussian perturbations) multiplied
@@ -364,7 +365,6 @@ subroutine find_conj_pair(i,j,k,ii,jj,kk)
                                            ! Complex field to add to
     real(kind=8), intent(in)       :: dt   ! Width of Gaussian which drives
                                            ! Wiener process
-    real(kind=8), intent(in)       :: comp_frac
     integer              :: i, j, k         ! Loop variables
     integer              :: halfway         ! Half of grid size
 
@@ -446,13 +446,9 @@ subroutine find_conj_pair(i,j,k,ii,jj,kk)
              unitk_cmplx = cmplx(unitk, kind=8)
              comp_cmplx = unitk_cmplx *  dot_product(unitk_cmplx,complex_vec)
              sol_cmplx = complex_vec - comp_cmplx
-             complex_vec = comp_cmplx*comp_frac + sol_cmplx*turb%sol_frac
-             ! note that there are two degrees of freedom for
-             ! solenoidal/transverse modes, and only one for
-             ! longitudinal/compressive modes,
-             ! and so for comp_frac == sol_frac == 0.5, you get
-             ! F(solenoidal) == 2 * F(compressive)
-             ! as per Federrath et al 2010
+             ! comp_amp and sol_amp make comp_frac the compressive share
+             ! of the forcing power (see init_turb)
+             complex_vec = comp_cmplx*turb%comp_amp + sol_cmplx*turb%sol_amp
              turb_field(1:NDIM,i,j,k) = turb_field(1:NDIM,i,j,k) + &
                   & complex_vec
 #else
@@ -609,20 +605,17 @@ subroutine find_conj_pair(i,j,k,ii,jj,kk)
   !=====================================================================================
   !=====================================================================================
   !=====================================================================================
-  subroutine proj_rms_norm(sol_frac_in, P)
+  subroutine proj_rms_norm(turb, P)
     implicit none
-    ! Calculate the (empirically measured and fitted) normalization for
-    ! projection of random vectors with solenoidal fraction 'sol_frac'
-    real(kind=8), intent(in)      :: sol_frac_in ! Solenoidal fraction
+    ! rms of the projected random vector relative to the unprojected one.
+    ! Each of the NDIM components has the same variance, one along k and
+    ! NDIM-1 across it, so the ratio is exact and the same for every comp_frac.
+    type(turb_t), intent(in)      :: turb
     real(kind=8), intent(out)     :: P           ! Normalization constant
 
-#if NDIM==3
-    P = (0.797d0 * sol_frac_in**2) - (0.529d0 * sol_frac_in) + 0.568d0
-
-    ! for reference, to maintain magnitude of vectors
-    !P = (0.563 * sol_frac_in**2) - (0.258 * sol_frac_in) + 0.487
+#if NDIM>1
+    P = sqrt((turb%comp_amp**2 + (NDIM - 1)*turb%sol_amp**2) / real(NDIM, kind=8))
 #else
-    ! Not tested for NDIM /= 3
     P = 1.0d0
 #endif
 
