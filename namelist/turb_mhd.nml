@@ -44,7 +44,7 @@ tend=100.
 &TURB_PARAMS
 turb=.true.
 turb_seed=1
-comp_frac=0.5
+comp_frac=0.3333333333333333
 forcing_power_spectrum='power_law'
 turb_T=0.29241000937376255
 turb_Ndt=100

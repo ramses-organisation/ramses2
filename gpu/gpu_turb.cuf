@@ -80,7 +80,7 @@ contains
   ! Written by Daniel Han (mini-ramses version October 2026).
   !=====================================================================================
   attributes(global) subroutine turb_add_modes_kernel(spec, iold, inew, mode_cell, mode_own, &
-       & mode_power, mode_unitk, rnd, nmode, dt, comp_frac, sol_frac, decay_frac)
+       & mode_power, mode_unitk, rnd, nmode, dt, comp_amp, sol_amp, decay_frac)
     complex(kind=8), device :: spec(1:ndim,0:TURB_GS**ndim-1,1:2)
     integer(kind=4), device :: mode_cell(*)
     logical, device :: mode_own(*)
@@ -88,7 +88,7 @@ contains
     real(kind=8), device :: mode_unitk(1:ndim,*)
     real(kind=8), device :: rnd(1:3,1:ndim,*)
     integer(kind=4), intent(in), value :: iold, inew, nmode
-    real(kind=8), intent(in), value :: dt, comp_frac, sol_frac, decay_frac
+    real(kind=8), intent(in), value :: dt, comp_amp, sol_amp, decay_frac
 
     integer :: imode, icell, d
     real(kind=8) :: w, mag, arg
@@ -124,7 +124,7 @@ contains
     do d = 1, ndim
        comp_cmplx(d) = unitk_cmplx(d) * dot
        sol_cmplx(d) = complex_vec(d) - comp_cmplx(d)
-       complex_vec(d) = comp_cmplx(d)*comp_frac + sol_cmplx(d)*sol_frac
+       complex_vec(d) = comp_cmplx(d)*comp_amp + sol_cmplx(d)*sol_amp
     end do
 
     ! Add to the current spectrum, then subtract its decay

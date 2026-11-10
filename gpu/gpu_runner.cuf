@@ -574,7 +574,7 @@ contains
        num_blocks = (turb_nmode + num_threads - 1)/num_threads
        call turb_add_modes_kernel<<<num_blocks, num_threads>>>(turb_spec_d, iold, inew, &
             & turb_mode_cell, turb_mode_own, turb_mode_power, turb_mode_unitk, turb_rnd_d, &
-            & turb_nmode, sim%turb%turb_dt, sim%r%comp_frac, sim%turb%sol_frac, &
+            & turb_nmode, sim%turb%turb_dt, sim%turb%comp_amp, sim%turb%sol_amp, &
             & sim%turb%turb_decay_frac)
        call GPU_Error_Check(__FILE__, __LINE__)
     endif
