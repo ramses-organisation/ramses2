@@ -838,6 +838,11 @@ contains
 
   end subroutine gpu_source_hydro
 
+  ! The slope_type=3 pair kernel of hydro_device, with the same condition as in gpu_hydro.cuf
+#if !defined(MHD) && !(NVAR>5+NENER) && defined(NSUBGRID) && (NSUBGRID == 4 || (NSUBGRID == 2 && defined(NPRE) && NPRE == 4))
+#define HYDRO_PAIR
+#endif
+
   !> @brief
   !> Perform the hydro integration on a GPU
   !>
@@ -853,7 +858,7 @@ contains
     use hydro_device, only: hydro_integrator_paper_kernel
 #else
     use hydro_device, only: hydro_integrator_kernel
-#if !defined(MHD) && !(NVAR>5+NENER)
+#ifdef HYDRO_PAIR
     use hydro_device, only: hydro_integrator_pair_kernel
 #endif
 #endif
@@ -946,7 +951,7 @@ contains
     if(nsubgrid == 4)threads_per_block = 640
 #endif
     shmem_bytes = storage_size(smem_probe) / 8
-#if !(NVAR>5+NENER)
+#ifdef HYDRO_PAIR
     if (slope == 3) then
        istat = cudaFuncSetAttribute(hydro_integrator_pair_kernel, &
             & cudaFuncAttributeMaxDynamicSharedMemorySize, shmem_bytes)
@@ -954,7 +959,7 @@ contains
 #endif
     istat = cudaFuncSetAttribute(hydro_integrator_kernel, &
          & cudaFuncAttributeMaxDynamicSharedMemorySize, shmem_bytes)
-#if !(NVAR>5+NENER)
+#ifdef HYDRO_PAIR
     endif
 #endif
     if(istat /= cudaSuccess)then
@@ -962,7 +967,7 @@ contains
             & ') failed: ',cudaGetErrorString(istat)
        error stop
     endif
-#if !(NVAR>5+NENER)
+#ifdef HYDRO_PAIR
     if (slope == 3) then
        call hydro_integrator_pair_kernel<<<num_blocks, threads_per_block, shmem_bytes>>>(grid, uold, unew, bold, bnew, &
             & f, father, nbor, &
@@ -976,7 +981,7 @@ contains
          & head_idx, num_subgrids, sim%m%ngridmax, ilevel, sim%r%levelmin, sim%r%nlevelmax, &
          & gamma, smallr, smallc2, dt, dx, slope, slope_mag, riemann, riemann2d, &
          & switch_llf_dmin, switch_llf_pmin, induction, etamag, constant_gravity)
-#if !(NVAR>5+NENER)
+#ifdef HYDRO_PAIR
     endif
 #endif
 #endif

@@ -427,8 +427,9 @@ contains
     sz = half*(slop*dfz)
   end subroutine slope_unsplit3d
 
-  ! Pure hydro without passive scalars traces pairs of cells at slope_type=3 (trace_3d), in its own kernel.
-#if !defined(MHD) && !(NVAR>5+NENER)
+  ! Pure hydro without passive scalars traces pairs of cells at slope_type=3 (trace_3d), in its own kernel,
+  ! where it is faster: NSUBGRID=4, and NSUBGRID=2 in single precision.
+#if !defined(MHD) && !(NVAR>5+NENER) && defined(NSUBGRID) && (NSUBGRID == 4 || (NSUBGRID == 2 && defined(NPRE) && NPRE == 4))
 #define HYDRO_PAIR
 #endif
 #ifdef HYDRO_PAIR
@@ -7108,8 +7109,15 @@ contains
          & switch_llf_dmin, switch_llf_pmin, induction, etamag, constant_gravity, smem, .false.)
   end subroutine hydro_integrator_kernel
 
-  ! slope_type=3
-  attributes(global) HYDRO_LB subroutine hydro_integrator_pair_kernel(grid, uold, unew, bold, bnew, &
+  ! slope_type=3. In single precision, 64 registers keep two blocks of 512 threads per SM at NSUBGRID=4.
+#if defined(NPRE) && NPRE == 4 && NSUBGRID == 2
+#define HYDRO_PAIR_LB launch_bounds(128,8)
+#elif defined(NPRE) && NPRE == 4
+#define HYDRO_PAIR_LB launch_bounds(512,2)
+#else
+#define HYDRO_PAIR_LB HYDRO_LB
+#endif
+  attributes(global) HYDRO_PAIR_LB subroutine hydro_integrator_pair_kernel(grid, uold, unew, bold, bnew, &
        & f, father, nbor, &
        & head_idx, num_subgrids, ngridmax, ilevel, levelmin, levelmax, &
        & gamma, smallr, smallc2, dt, dx, slope, slope_mag, riemann, riemann2d, &
