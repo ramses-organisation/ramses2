@@ -256,11 +256,6 @@ subroutine m_read_rt_params(pst)
      write(*,*)'Error: is_kIR_T with rt_advect=.true., rt_T_rad=.true. or star=.true. with rt_star=.true. is not supported on GPU'
      call mdl_abort(s%mdl)
   endif
-  ! The GPU chemistry has no recombination radiation and no case A rates
-  if((rt_advect.or.(s%r%star.and.rt_star)).and..not.rt_otsa)then
-     write(*,*)'Error: rt_otsa=.false. with rt_advect=.true. or star=.true. with rt_star=.true. is not supported on GPU'
-     call mdl_abort(s%mdl)
-  endif
   ! Without rt_advect the GPU cooling runs, and it updates the photon variables only with neq_chem
   if(s%r%isothermal.and..not.s%r%neq_chem.and..not.rt_advect)then
      write(*,*)'Error: rt with isothermal and rt_advect=.false. but without neq_chem is not supported on GPU'

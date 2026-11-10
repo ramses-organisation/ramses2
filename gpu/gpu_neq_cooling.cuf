@@ -200,6 +200,8 @@ contains
     real(kind=8):: fluxMag, mom_fact
     real(kind=8):: cdex
     real(kind=8):: rho
+    integer:: iion
+    real(kind=8):: recRad, dNpdt_g
 #endif
     real(kind=8):: ncr, prime
     type(rate_index_t):: idxT              ! Table index and factors of TK
@@ -282,10 +284,40 @@ contains
                             * Zsolarc * f_dust
        endif
 
+       ! EMISSION FROM GAS
+       if(.not. r%rt_otsa) then                            ! Rec. radiation
+          alpha(:) = 0d0       ! None from H2 or from species not in the run
+          alpha(ixHII) = inp_coolrates_table(tables,idxT,tables%tbl_alphaA_HII%rates, &
+                              & tables%tbl_alphaA_HII%primes,TK,.false.,.false.,prime) &
+                       - inp_coolrates_table(tables,idxT,tables%tbl_alphaB_HII%rates, &
+                              & tables%tbl_alphaB_HII%primes,TK,.false.,.false.,prime)
+          if(r%isHe) then
+                  ! alpha(2) A-B becomes negative around 1K, hence the max
+             alpha(ixHeII) = &
+                  MAX(0d0,inp_coolrates_table(tables,idxT,tables%tbl_alphaA_HeII%rates, &
+                              & tables%tbl_alphaA_HeII%primes,TK,.false.,.false.,prime) &
+                         -inp_coolrates_table(tables,idxT,tables%tbl_alphaB_HeII%rates, &
+                              & tables%tbl_alphaB_HeII%primes,TK,.false.,.false.,prime))
+             alpha(ixHeIII) = inp_coolrates_table(tables,idxT,tables%tbl_alphaA_HeIII%rates, &
+                              & tables%tbl_alphaA_HeIII%primes,TK,.false.,.false.,prime) &
+                            - inp_coolrates_table(tables,idxT,tables%tbl_alphaB_HeIII%rates, &
+                              & tables%tbl_alphaB_HeIII%primes,TK,.false.,.false.,prime)
+          endif
+       endif
+
        dmom(1:ndim)=0d0
        do igroup=1,nrtgrp     ! ----------------- Do the update of N and F
+          dNpdt_g = dNpdtc(igroup)
+          if(.not. r%rt_otsa) then         ! Recombination photons of this group
+             recRad = 0d0
+             do iion=1,nion
+                if(r%spec2group(iion) .eq. igroup)                       &
+                     recRad = recRad + alpha(iion) * nI(iion) * ne
+             end do
+             dNpdt_g = recRad + dNpdt_g
+          endif
           dNp(igroup)= MAX(smallNp,                                      &
-                        (ddtc*dNpdtc(igroup)+dNp(igroup))                &
+                        (ddtc*dNpdt_g+dNp(igroup))                       &
                         / (1d0+ddtc*phAbs(igroup)))
 
           dUU = ABS(dNp(igroup)-Npc(igroup))                             &
@@ -444,6 +476,12 @@ contains
     ! Update xHI (also if .not. isH2, for stability)**********************
     alpha(ixHII) = inp_coolrates_table(tables,idxT,tables%tbl_AlphaB_HII%rates, &
                         & tables%tbl_AlphaB_HII%primes, TK,.false.,.false.,prime)
+#ifdef DO_RT
+    ! Case A recombination with the recombination photons in the transport
+    if(.not. r%rt_otsa .and. r%rt_advect)                                &
+         alpha(ixHII) = inp_coolrates_table(tables,idxT,tables%tbl_alphaA_HII%rates, &
+                             & tables%tbl_alphaA_HII%primes, TK,.false.,.false.,prime)
+#endif
     beta(ixHII) = inp_coolrates_table(tables,idxT,tables%tbl_Beta_HI%rates, &
                         & tables%tbl_Beta_HI%primes, TK,.false.,.false.,prime) ! Coll.ion.rate
     cr = alpha(ixHII) * ne * dxion(ixHII) + 2. * de * dxH2    !HI creation
@@ -492,6 +530,14 @@ contains
                              & tables%tbl_alphaB_HeII%primes, TK,.false.,.false.,prime)
        alpha(ixHeIII) = inp_coolrates_table(tables,idxT,tables%tbl_alphaB_HeIII%rates, &
                              & tables%tbl_alphaB_HeIII%primes, TK,.false.,.false.,prime)
+#ifdef DO_RT
+       if(.not. r%rt_otsa .and. r%rt_advect) then    ! Case A, as for H
+          alpha(ixHeII)  = inp_coolrates_table(tables,idxT,tables%tbl_alphaA_HeII%rates, &
+                                & tables%tbl_alphaA_HeII%primes, TK,.false.,.false.,prime)
+          alpha(ixHeIII) = inp_coolrates_table(tables,idxT,tables%tbl_alphaA_HeIII%rates, &
+                                & tables%tbl_alphaA_HeIII%primes, TK,.false.,.false.,prime)
+       endif
+#endif
        beta(ixHeII)  =  inp_coolrates_table(tables,idxT,tables%tbl_beta_HeI%rates, &
                              & tables%tbl_beta_HeI%primes, TK,.false.,.false.,prime)
        beta(ixHeIII) = inp_coolrates_table(tables,idxT,tables%tbl_beta_HeII%rates, &
