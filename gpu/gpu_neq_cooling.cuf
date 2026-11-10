@@ -5,7 +5,7 @@ module neq_cooling_device
   use hydro_parameters, only: nvar, nion, nener
 #ifdef DO_RT
   use rt_parameters, only: nrtgrp, nrtvar, smallnp
-  use constants, only: one_over_clight, a_r
+  use constants, only: one_over_clight, a_r, c_cgs
 #endif
   use oct_commons, only: oct
   use amr_commons, only: run_t
@@ -204,6 +204,8 @@ contains
     integer:: iion
     real(kind=8):: recRad, dNpdt_g
     real(kind=8):: TR, E_rad, kAbs_IR
+    real(kind=8):: kSc_IR, phSc_IR, group_egy_ratio, one_over_egy_IR_erg
+    real(kind=8):: one_over_C_v, dE_T
 #endif
     real(kind=8):: ncr, prime
     type(rate_index_t):: idxT              ! Table index and factors of TK
@@ -272,6 +274,7 @@ contains
        endif
                  ! Set the IR opacities according to the rad. temperature:
        kAbs_IR = r%kappaAbs(iIR) * (TR/10d0)**2 * exp(-TR/1d3)
+       kSc_IR  = r%kappaSc(iIR)  * (TR/10d0)**2 * exp(-TR/1d3)
     endif
 
     ! UPDATE PHOTON DENSITY AND FLUX *************************************
@@ -285,14 +288,20 @@ contains
                                   ! Set dust absorption rates [s-1]:
        dustAbs(:) =r%kappaAbs(:) *rho*Zsolarc*f_dust*rt_c_cgs
        if(r%is_kIR_T) dustAbs(iIR) = kAbs_IR*rho*Zsolarc*f_dust*rt_c_cgs
+        ! Scattering rate; reduce the photon flux, but not photon density:
+       if(r%rt_isIR) then
+          if(.not. r%is_kIR_T) kSc_IR = r%kappaSc(iIR)
+          phSc_IR = kSc_IR*rho*Zsolarc*f_dust*rt_c_cgs
+       endif
 
        ! ABSORPTION OF PHOTONS BY GAS
        do igroup=1,nrtgrp       ! ----------------Ionization absorption
           phAbs(igroup) = SUM(nN(:)*tables%signc(igroup,:,ilevel)*r%ssh2(igroup)) ! s-1
        end do
        ! IR, optical and UV depletion by dust absorption: ----------------
-       do igroup=1,nrtgrp
-          phAbs(igroup) = phAbs(igroup) + dustAbs(igroup)
+       do igroup=1,nrtgrp      ! Deplete photons, since they go into IR
+          if( .not. (r%rt_isIR .and. igroup.eq.iIR) ) & ! IR done elsewhere
+               phAbs(igroup) = phAbs(igroup) + dustAbs(igroup)
        end do
 
        if(r%iPEH_group .gt. 0) then
@@ -351,6 +360,8 @@ contains
              RETURN                                        ! ddtc too big
           endif
           fracMax=MAX(fracMax,dUU)      ! To check if ddt can be increased
+          ! IR scattering acts on the flux and the radiation force only
+          if(r%rt_isIR .and. igroup.eq.iIR) phAbs(igroup) = phAbs(igroup) + phSc_IR
 
           do idim=1,ndim
              dFp(idim,igroup) = &
@@ -375,7 +386,7 @@ contains
           mom_fact = ddtc * phAbs(igroup) &
                * group_egy_erg(igroup) * one_over_clight
 
-          if(r%rt_isoPress) then
+          if(r%rt_isoPress .and. .not. (r%rt_isIR .and. igroup==iIR)) then
              ! rt_isoPress: assume f=1, where f is reduced flux.
              fluxMag=sqrt(sum((dFp(:,igroup))**2))
              if(fluxMag .gt. 0d0) then
@@ -392,6 +403,15 @@ contains
           end do
        end do
        dp_gas = dp_gas + dmom * r%rt_pressBoost      ! update gas momentum
+
+       ! Add absorbed UV/optical energy to IR:----------------------------
+       if(r%rt_isIR) then
+          do igroup=iIR+1,nrtgrp
+             group_egy_ratio = r%group_egy(igroup) / r%group_egy(iIR)
+             dNp(iIR) = dNp(iIR) + dustAbs(igroup) * ddtc                &
+                  * dNp(igroup) * group_egy_ratio
+          end do
+       endif
     endif !if(rt)
 #endif
 
@@ -470,6 +490,49 @@ contains
        TK=dT2*mu
        idxT = get_rate_index(tables, TK)
     endif
+
+#ifdef DO_RT
+    ! Energy exchange of the IR photons and the gas through the dust
+    if(r%rt_isIR) then
+       if(.not. r%is_kIR_T) kAbs_IR = r%kappaAbs(iIR)
+       if(kAbs_IR .gt. 0d0 .and. .not. r%rt_T_rad) then
+          ! Density, light speed and IR photon energy of the exchange
+          rho = nHc / r%X_H * mH
+          rt_c_cgs = tables%rt_c_cgs(ilevel)
+          one_over_Np_FRAC = 1d0 / Np_FRAC
+          group_egy_erg(iIR) = r%group_egy(iIR) * eV2erg
+          one_over_egy_IR_erg = 1d0 / group_egy_erg(iIR)
+          ! Delta (Cv T)= ( c_red/lambda E - c/lambda a T^4)
+          !           / ( 1/Delta t + 4 c/lambda/C_v a T^3 + c_red/lambda)
+          one_over_C_v = mH*mu*(r%gamma-1d0) / (rho*kB)
+          E_rad = group_egy_erg(iIR) * dNp(iIR)
+          dE_T = (rt_c_cgs * E_rad - c_cgs*a_r*TK**4)                    &
+               /(1d0/(kAbs_IR * Zsolarc * rho * ddtc)                    &
+               +4d0*c_cgs * one_over_C_v *a_r*TK**3+rt_c_cgs)
+          dT2 = dT2 + 1d0/mu * one_over_C_v * dE_T
+          dNp(iIR) = dNp(iIR) - dE_T * one_over_egy_IR_erg
+
+          dT2 = max(T2_min_fix,dT2)
+          dNp(iIR) = max(dNp(iIR), smallNp)
+          ! 10% rule for photon density:
+          dUU = ABS(dNp(iIR)-Npc(iIR)) / (Npc(iIR)+Np_MIN)               &
+                                            * one_over_Np_FRAC
+          if(dUU .gt. 1.) then
+             RETURN
+          endif
+          fracMax=MAX(fracMax,dUU)
+
+          dUU   = ABS(dT2-T2c) / (T2c+T_MIN) * one_over_T_FRAC
+          if(dUU .gt. 1.) then                           ! 10% rule for T2
+             RETURN
+          endif
+          fracMax=MAX(fracMax,dUU)
+          TK=dT2*mu
+          idxT = get_rate_index(tables, TK)
+          call reduce_flux(dFp(:,iIR),dNp(iIR)*rt_c_cgs)
+       endif
+    endif
+#endif
 
     ! HYDROGEN UPDATE*****************************************************
     ! Update xH2**********************************************************

@@ -246,11 +246,6 @@ subroutine m_read_rt_params(pst)
   !--------------------------------------------------
   ! Check the RT options supported on GPU
   !--------------------------------------------------
-  ! The GPU chemistry has no IR dust coupling
-  if(rt_isIR)then
-     write(*,*)'Error: rt_isIR is not supported on GPU'
-     call mdl_abort(s%mdl)
-  endif
   ! Without rt_advect the GPU cooling runs, and it updates the photon variables only with neq_chem
   if(s%r%isothermal.and..not.s%r%neq_chem.and..not.rt_advect)then
      write(*,*)'Error: rt with isothermal and rt_advect=.false. but without neq_chem is not supported on GPU'
