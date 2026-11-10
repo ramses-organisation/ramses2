@@ -3,9 +3,7 @@ module hydro_device
   use hydro_parameters
   use oct_commons, only: oct
   use gpu_utils
-#ifdef TURB
   use turb_commons, only: TURB_GS, turb_gs_real
-#endif
   use cudafor
   implicit none
   private :: mix64, fnv64, fnv32, hash_set, hash_get, get_cell_by_key, hash_update, hash_free
@@ -5832,7 +5830,6 @@ contains
     dt_loc = 2_dp*courant_factor*dx / (ctot * (1_dp+sqrt(1_dp+2_dp*courant_factor*g)))
   end function courant_dt
 
-#ifdef TURB
   !> Turbulent force of a cell, interpolated trilinearly from the forcing table afield
   !> (TURB_GS^3 points over the box), rounded to real(dp).
   attributes(device) subroutine turb_force_cell(grid, afield, d_skip, oct_idx, cell_idx, dx, boxlen, fcell)
@@ -5930,6 +5927,7 @@ contains
 
   end subroutine turb_hydro_kernel
 
+#ifdef TURB
   !> Adds the turbulent force to the Courant time step dt_loc of cmpdt_cell.
   attributes(device) subroutine cmpdt_turb(grid, uold, afield, d_skip, oct_idx, cell_idx, &
        & dx, boxlen, turb_min_rho, courant_factor, ctot, grav, dt_loc)
