@@ -224,14 +224,14 @@ subroutine find_conj_pair(i,j,k,ii,jj,kk)
     real (kind=8), intent(out) :: unitk(1:NDIM)
 
     ii = i
-    if (i > limit) ii = TURB_GS - i
+    if (i > limit) ii = i - TURB_GS
 #if NDIM>1
     jj = j
-    if (j > limit) jj = TURB_GS - j
+    if (j > limit) jj = j - TURB_GS
 #endif
 #if NDIM>2
     kk = k
-    if (k > limit) kk = TURB_GS - k
+    if (k > limit) kk = k - TURB_GS
 #endif
 
 #if NDIM==1
