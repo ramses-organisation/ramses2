@@ -2841,7 +2841,7 @@ contains
        flux = riemann_fluxes(left_interface, right_interface, gamma, smallr, smallc2, riemann_local)
 #if NVAR>5+NENER
 #ifdef MHD
-       call hll_mhd_wavespeeds(left_interface, right_interface, gamma, smallr, smallc2, SL, SR)
+       call hll_mhd_wavespeeds(left_interface, right_interface, gamma, smallr, smallc2, riemann_local, SL, SR)
        if (riemann_local .eq. solver_upwind) then
           SR = abs(0.5_dp*(left_interface%velocity_x + right_interface%velocity_x))
           SL = -SR
@@ -3561,10 +3561,12 @@ contains
   end subroutine hll_hydro_wavespeeds
 
 #ifdef MHD
-  ! Fast-magnetosonic HLL wave speeds for passive-scalar MHD fluxes.
-  attributes(device) subroutine hll_mhd_wavespeeds(left, right, gamma, smallr, smallc2, SL, SR)
+  ! Fast-magnetosonic HLL wave speeds, or for LLF (-lmax, lmax) with the Rusanov speed of
+  ! hll_mhd_fluxes(llf=.true.).
+  attributes(device) subroutine hll_mhd_wavespeeds(left, right, gamma, smallr, smallc2, riemann, SL, SR)
     type(primitive_t), intent(in) :: left, right
     real(kind=dp), value :: gamma, smallr, smallc2
+    integer, value :: riemann
     real(kind=dp), intent(out) :: SL, SR
     real(kind=dp) :: smallp, bx_mean, rl, rr, pl, pr, ul, ur
     real(kind=dp) :: blx, bly, blz, brx, bry, brz
@@ -3582,8 +3584,13 @@ contains
     d2l = 0.5_dp*(b2l/rl + c2l); cfleft = sqrt(d2l + sqrt(max(d2l**2 - c2l*blx*blx/rl, 0.0_dp)))
     b2r = compute_bsquared(brx, bry, brz); c2r = gamma*pr/rr
     d2r = 0.5_dp*(b2r/rr + c2r); cfright = sqrt(d2r + sqrt(max(d2r**2 - c2r*brx*brx/rr, 0.0_dp)))
-    SL = min(min(ul, ur) - max(cfleft, cfright), 0.0_dp)
-    SR = max(max(ul, ur) + max(cfleft, cfright), 0.0_dp)
+    if (riemann .eq. solver_llf) then
+       SR = max(abs(ul) + cfleft, abs(ur) + cfright)
+       SL = -SR
+    else
+       SL = min(min(ul, ur) - max(cfleft, cfright), 0.0_dp)
+       SR = max(max(ul, ur) + max(cfleft, cfright), 0.0_dp)
+    endif
   end subroutine hll_mhd_wavespeeds
 
   ! Permute edge corner state into the 2D Riemann frame (x edges).
