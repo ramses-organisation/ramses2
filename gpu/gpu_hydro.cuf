@@ -208,19 +208,38 @@ module hydro_device
   integer, parameter :: uct_product_record = 5+uct_product_nscalar
   integer, parameter :: uct_product_vt1 = uct_product_record+4, uct_product_bn = uct_product_record+6
 
-  ! UCT launch configuration, measured on Orszag-Tang at 512^3 on an H200: threads per block, and
-  ! the resident blocks per SM in the launch bounds of each kernel. NVHPC applies the bounds of a
-  ! kernel to the kernels that follow it, so every UCT kernel gives its own, except the double
-  ! precision NSUBGRID=2 face kernel, which is fastest without: it inherits the bounds of
-  ! hydro_integrator_kernel, none or launch_bounds(256,1), which admit its 128 threads.
-#if NSUBGRID == 2
+  ! UCT launch configuration: threads per block, and the resident blocks per SM in the launch bounds
+  ! of each kernel. Measured on Orszag-Tang at 512^3 on an H200 and on an A100 (256^3 in double
+  ! precision); the A100 (sm_80, GPU_SM from CUDA_ARCH) has its own values, other GPUs use the H200
+  ! ones. NVHPC applies the bounds of a kernel to the kernels that follow it, so every UCT kernel
+  ! gives its own, except the double precision NSUBGRID=2 face kernel, which is fastest without: it
+  ! inherits the bounds of hydro_integrator_kernel, none or launch_bounds(256,1), which admit its threads.
+#if defined(GPU_SM) && GPU_SM == 80 && NSUBGRID == 2
+#define UCT_THREADS 192
+#define UCT_GHOST_THREADS 256
+#elif NSUBGRID == 2
 #define UCT_THREADS 128
 #define UCT_GHOST_THREADS 256
 #else
 #define UCT_THREADS 64
 #define UCT_GHOST_THREADS 64
 #endif
-#if NPRE == 4 && NSUBGRID == 2
+#if defined(GPU_SM) && GPU_SM == 80 && NPRE == 4 && NSUBGRID == 2
+#define UCT_FACE_LB launch_bounds(UCT_THREADS,4)
+#define UCT_GHOST_LB launch_bounds(UCT_GHOST_THREADS,3)
+#define UCT_UPDATE_LB launch_bounds(UCT_THREADS,8)
+#define UCT_AMR_UPDATE_LB launch_bounds(UCT_THREADS,7)
+#elif defined(GPU_SM) && GPU_SM == 80 && NPRE == 4
+#define UCT_FACE_LB launch_bounds(UCT_THREADS,12)
+#define UCT_GHOST_LB launch_bounds(UCT_GHOST_THREADS,4)
+#define UCT_UPDATE_LB launch_bounds(UCT_THREADS,24)
+#define UCT_AMR_UPDATE_LB launch_bounds(UCT_THREADS,4)
+#elif defined(GPU_SM) && GPU_SM == 80 && NSUBGRID == 2
+#define UCT_FACE_LB
+#define UCT_GHOST_LB launch_bounds(UCT_GHOST_THREADS,2)
+#define UCT_UPDATE_LB launch_bounds(UCT_THREADS,4)
+#define UCT_AMR_UPDATE_LB launch_bounds(UCT_THREADS,4)
+#elif NPRE == 4 && NSUBGRID == 2
 #define UCT_FACE_LB launch_bounds(UCT_THREADS,7)
 #define UCT_GHOST_LB launch_bounds(UCT_GHOST_THREADS,3)
 #define UCT_UPDATE_LB launch_bounds(UCT_THREADS,9)
