@@ -1458,6 +1458,17 @@ subroutine m_read_params(pst)
      write(*,*)'Error: a non-periodic box (periodic=.false. or nbound>0) is not supported on GPU'
      nml_ok=.false.
   endif
+  ! The uct-hlld face products are not exchanged between ranks, and PAPER has no uct-hlld kernel
+  if(riemann=='uct-hlld'.and.s%g%ncpu>1)then
+     write(*,*)'Error: riemann=uct-hlld is supported on one MPI rank only on GPU'
+     nml_ok=.false.
+  endif
+#ifdef PAPER
+  if(riemann=='uct-hlld')then
+     write(*,*)'Error: riemann=uct-hlld is not supported with PAPER'
+     nml_ok=.false.
+  endif
+#endif
   ! The GPU core finder writes no clump catalogue and keeps no core peak ids
   if(s%r%core_form.and.(output_peak_grid.or.output_peak_part.or.output_peak_star.or. &
        & output_peak_sink.or.output_peak_tree.or.output_peak_core))then
@@ -1734,7 +1745,7 @@ subroutine m_read_params(pst)
   if(riemann=='hlld')s%r%riemann=solver_hlld
   if(riemann=='roe')s%r%riemann=solver_roe
   if(riemann=='upwind')s%r%riemann=solver_upwind
-#ifdef _METAL
+#if defined(_METAL) || defined(_CUDA)
   if(riemann=='uct-hlld')s%r%riemann=solver_uct_hlld
 #endif
 #endif

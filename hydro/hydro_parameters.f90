@@ -33,7 +33,7 @@ module hydro_parameters
   integer,parameter::solver_hlld=4
   integer,parameter::solver_roe=5
   integer,parameter::solver_upwind=6
-#ifdef _METAL
+#if defined(_METAL) || defined(_CUDA)
   integer,parameter::solver_uct_hlld=7
 #endif
 
