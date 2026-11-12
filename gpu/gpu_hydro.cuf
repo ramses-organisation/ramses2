@@ -1210,7 +1210,7 @@ contains
     rmin = min(rLL, rLR, rRL, rRR)
     pmin = min(pLL, pLR, pRL, pRR)
     if (switch_llf_dmin > 0.0_dp) switch_to_llf = rmin < switch_llf_dmin
-    if (switch_llf_pmin > 0.0_dp) switch_to_llf = pmin < switch_llf_pmin
+    if (switch_llf_pmin > 0.0_dp .and. pmin < switch_llf_pmin) switch_to_llf = .true.
     if (switch_to_llf) then
        Smax = max(abs(SR), abs(ST), abs(SL), abs(SB))
        E = 0.25_dp*(ERR + ERL + ELR + ELL) &
@@ -2832,7 +2832,7 @@ contains
           pmin = min(left_interface%pressure, right_interface%pressure)
           switch_to_llf = .false.
           if (switch_llf_dmin_d > 0.0_dp) switch_to_llf = rmin < switch_llf_dmin_d
-          if (switch_llf_pmin_d > 0.0_dp) switch_to_llf = pmin < switch_llf_pmin_d
+          if (switch_llf_pmin_d > 0.0_dp .and. pmin < switch_llf_pmin_d) switch_to_llf = .true.
           if (switch_to_llf) riemann_local = solver_llf
        end if
 #endif
