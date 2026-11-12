@@ -26,6 +26,7 @@ subroutine vecpotentialinit(r,g,x,A,idim,nn)
 #define CURRENTSHEET 7
 #define CR_LOOP 8
 #define BELTRAMI 9
+#define CPAW 12
 
   integer::i
 #if INIT==LOOP
@@ -33,6 +34,9 @@ subroutine vecpotentialinit(r,g,x,A,idim,nn)
 #endif
 #if INIT==OT
   real(kind=8)::B0, pi, xx, yy
+#endif
+#if INIT==CPAW
+  real(kind=8)::c, ss
 #endif
 #if INIT==PONO
   real(kind=8)::A0, twopi, xx, yy, zz, rr, tt
@@ -71,6 +75,17 @@ subroutine vecpotentialinit(r,g,x,A,idim,nn)
      yy = x(i,2)
      A(i) = 0.0
      if(idim==3)A(i) = B0*(cos(4.0*pi*xx)/(4.0*pi)+cos(2.0*pi*yy)/(2.0*pi))
+  end do
+#endif
+
+#if INIT==CPAW
+  ! dB = 0.1 (sin(s) e1 + cos(s) e2), s = 2 pi (x+y), e1 = (-1,1,0)/sqrt(2), e2 = z.
+  c = 0.1d0/(2.0d0*ACOS(-1.0d0)*sqrt(2.0d0))
+  do i = 1,nn
+     ss = 2.0d0*ACOS(-1.0d0)*(x(i,1)+x(i,2))
+     if(idim==1)A(i) = -c*sin(ss)/sqrt(2.0d0)
+     if(idim==2)A(i) = +c*sin(ss)/sqrt(2.0d0)
+     if(idim==3)A(i) = c*cos(ss)
   end do
 #endif
 

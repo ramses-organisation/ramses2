@@ -1458,6 +1458,17 @@ subroutine m_read_params(pst)
      write(*,*)'Error: a non-periodic box (periodic=.false. or nbound>0) is not supported on GPU'
      nml_ok=.false.
   endif
+  ! The UCT face products are not exchanged between ranks, and PAPER has no UCT kernel
+  if(riemann(1:4)=='uct-'.and.s%g%ncpu>1)then
+     write(*,*)'Error: riemann=',trim(riemann),' is supported on one MPI rank only on GPU'
+     nml_ok=.false.
+  endif
+#ifdef PAPER
+  if(riemann(1:4)=='uct-')then
+     write(*,*)'Error: riemann=',trim(riemann),' is not supported with PAPER'
+     nml_ok=.false.
+  endif
+#endif
   ! The GPU core finder writes no clump catalogue and keeps no core peak ids
   if(s%r%core_form.and.(output_peak_grid.or.output_peak_part.or.output_peak_star.or. &
        & output_peak_sink.or.output_peak_tree.or.output_peak_core))then
@@ -1531,6 +1542,18 @@ subroutine m_read_params(pst)
      write(*,*)'Error: nimhd_alpha must be at least 0.5'
      nml_ok=.false.
   endif
+#if !defined(MHD) || !(defined(_CUDA) || defined(_METAL))
+  if(riemann=='uct-hlld')then
+     write(*,*)'Error: riemann=uct-hlld is only supported by the GPU MHD solver'
+     nml_ok=.false.
+  endif
+#endif
+#if !defined(MHD) || !defined(_CUDA)
+  if(riemann=='uct-llf'.or.riemann=='uct-hll')then
+     write(*,*)'Error: riemann=',trim(riemann),' is only supported by the CUDA MHD solver'
+     nml_ok=.false.
+  endif
+#endif
 #if !defined(_CUDA) || !defined(MHD) || NDIM!=3
   if(nimhd_solver/='unsplit')then
      write(*,*)'Error: nimhd_solver=explicit or sts is only supported by the 3D CUDA MHD solver'
@@ -1734,8 +1757,12 @@ subroutine m_read_params(pst)
   if(riemann=='hlld')s%r%riemann=solver_hlld
   if(riemann=='roe')s%r%riemann=solver_roe
   if(riemann=='upwind')s%r%riemann=solver_upwind
-#ifdef _METAL
+#if defined(_METAL) || defined(_CUDA)
   if(riemann=='uct-hlld')s%r%riemann=solver_uct_hlld
+#endif
+#ifdef _CUDA
+  if(riemann=='uct-llf')s%r%riemann=solver_uct_llf
+  if(riemann=='uct-hll')s%r%riemann=solver_uct_hll
 #endif
 #endif
 #ifdef MHD

@@ -5,15 +5,15 @@
  * Fortran layout (gfortran, NDIM=3, twotondim=8, nhilbert=1):
  *   integer(kind=8) hkey(1)       ! offset  0, 8 bytes
  *   integer(kind=4) ckey(3)       ! offset  8, 12 bytes
- *   logical         refined(8)    ! offset 20, 32 bytes  (logical = 4-byte default)
- *   integer(kind=4) lev           ! offset 52, 4 bytes
- *   integer(kind=4) superoct      ! offset 56, 4 bytes
- *                                 ! total : 60 bytes, no padding
+ *   logical(kind=1) refined(8)    ! offset 20, 8 bytes
+ *   integer(kind=4) lev           ! offset 28, 4 bytes
+ *   integer(kind=4) superoct      ! offset 32, 4 bytes
+ *                                 ! total : 36 bytes, padded to 40
  */
 typedef struct {
     long hkey;        /* integer(kind=8), nhilbert=1 */
     int  ckey[3];     /* integer(kind=4), ndim=3     */
-    int  refined[8];  /* logical (4-byte), twotondim=8 */
+    unsigned char refined[8];  /* logical(kind=1), twotondim=8 */
     int  lev;
     int  superoct;
 } oct_t;

@@ -390,7 +390,7 @@ cub_module_radix_sort_f.o: cub_module_radix_sort.cuf cub_module_radix_sort_c.o
 	$(C) $(CFLAGS) -c $< -o $@
 #############################################################################
 # Metal-specific build rules
-metal_bridge.o: $(METAL_PATH)/metal_bridge.mm $(METAL_PATH)/metal_config.h
+metal_bridge.o: $(METAL_PATH)/metal_bridge.mm $(METAL_PATH)/metal_types.h $(METAL_PATH)/metal_config.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 hydro.air: $(METAL_KPATH)/hydro.metal $(if $(filter 1,$(MHD)),$(METAL_KPATH)/mhd_uct.metal $(METAL_PATH)/metal_config.h) $(METAL_PATH)/metal_types.h $(METAL_KPATH)/metal_utils.h
 	$(METALC) $(METALFLAGS) -c $< -o $@
