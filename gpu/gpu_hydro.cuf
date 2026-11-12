@@ -4214,7 +4214,7 @@ contains
 
     llf = .false.
     if (switch_llf_dmin_d > 0.0_dp) llf = min(left%density, right%density) < switch_llf_dmin_d
-    if (switch_llf_pmin_d > 0.0_dp) llf = min(left%pressure, right%pressure) < switch_llf_pmin_d
+    if (switch_llf_pmin_d > 0.0_dp .and. min(left%pressure, right%pressure) < switch_llf_pmin_d) llf = .true.
     solver = solver_hlld
     if (uct_riemann_d == solver_uct_hll) solver = solver_hll
     if (llf .or. uct_riemann_d == solver_uct_llf) solver = solver_llf
