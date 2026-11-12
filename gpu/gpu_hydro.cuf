@@ -234,7 +234,7 @@ module hydro_device
 #define UCT_GHOST_LB launch_bounds(UCT_GHOST_THREADS,4)
 #define UCT_UPDATE_LB launch_bounds(UCT_THREADS,24)
 #define UCT_AMR_UPDATE_LB launch_bounds(UCT_THREADS,4)
-#elif defined(GPU_SM) && GPU_SM == 80 && NSUBGRID == 2
+#elif defined(GPU_SM) && GPU_SM == 80 && NPRE != 4 && NSUBGRID == 2
 #define UCT_FACE_LB
 #define UCT_GHOST_LB launch_bounds(UCT_GHOST_THREADS,2)
 #define UCT_UPDATE_LB launch_bounds(UCT_THREADS,4)
