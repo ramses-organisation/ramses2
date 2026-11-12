@@ -380,7 +380,7 @@ subroutine core_formation(mdl,r,g,m,p,c,nstep_coarse,mcore_loc)
 #endif
   integer(kind=8),dimension(0:g%ncpu)::ncore_cum
   integer,dimension(1:g%ncpu)::ncore_cpu
-  integer::i,j,icpu,ncore_loc,ilevel,igrid,ind
+  integer::i,j,icpu,ncore_loc,ilevel,igrid,ind,idim
   real(kind=8)::scale_nH,scale_T2,scale_l,scale_d,scale_t,scale_v
   real(kind=8)::mseed_core
 
@@ -416,6 +416,12 @@ subroutine core_formation(mdl,r,g,m,p,c,nstep_coarse,mcore_loc)
         p%xp(p%npart,1)=c%peak_com(j,1)
         p%xp(p%npart,2)=c%peak_com(j,2)
         p%xp(p%npart,3)=c%peak_com(j,3)
+        do idim=1,ndim
+           if(r%periodic(idim))then
+              if(p%xp(p%npart,idim)< 0.0d0           )p%xp(p%npart,idim)=p%xp(p%npart,idim)+r%box_size(idim)
+              if(p%xp(p%npart,idim)>=r%box_size(idim))p%xp(p%npart,idim)=p%xp(p%npart,idim)-r%box_size(idim)
+           endif
+        end do
         ! Compute core particle velocity from peak velocity
         p%vp(p%npart,1)=c%peak_vel(j,1)-c%peak_acc(j,1)*0.5d0*g%dtnew(c%peak_level(j))
         p%vp(p%npart,2)=c%peak_vel(j,2)-c%peak_acc(j,2)*0.5d0*g%dtnew(c%peak_level(j))
