@@ -63,6 +63,7 @@ struct mr_edge_pair_t {
 };
 
 bool mr_switch_to_llf(float rmin, float pmin, float switch_dmin, float switch_pmin) {
+    // Either enabled threshold switches the solver to LLF.
     bool use_llf = false;
     if (switch_dmin > 0.0f) use_llf = rmin < switch_dmin;
     if (switch_pmin > 0.0f && pmin < switch_pmin) use_llf = true;
