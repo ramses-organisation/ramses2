@@ -234,7 +234,7 @@ module hydro_device
 #define UCT_GHOST_LB launch_bounds(UCT_GHOST_THREADS,4)
 #define UCT_UPDATE_LB launch_bounds(UCT_THREADS,24)
 #define UCT_AMR_UPDATE_LB launch_bounds(UCT_THREADS,4)
-#elif defined(GPU_SM) && GPU_SM == 80 && NSUBGRID == 2
+#elif defined(GPU_SM) && GPU_SM == 80 && NPRE != 4 && NSUBGRID == 2
 #define UCT_FACE_LB
 #define UCT_GHOST_LB launch_bounds(UCT_GHOST_THREADS,2)
 #define UCT_UPDATE_LB launch_bounds(UCT_THREADS,4)
@@ -1363,7 +1363,7 @@ contains
     rmin = min(rLL, rLR, rRL, rRR)
     pmin = min(pLL, pLR, pRL, pRR)
     if (switch_llf_dmin > 0.0_dp) switch_to_llf = rmin < switch_llf_dmin
-    if (switch_llf_pmin > 0.0_dp) switch_to_llf = pmin < switch_llf_pmin
+    if (switch_llf_pmin > 0.0_dp .and. pmin < switch_llf_pmin) switch_to_llf = .true.
     if (switch_to_llf) then
        Smax = max(abs(SR), abs(ST), abs(SL), abs(SB))
        E = 0.25_dp*(ERR + ERL + ELR + ELL) &
@@ -3078,7 +3078,7 @@ contains
           pmin = min(left_interface%pressure, right_interface%pressure)
           switch_to_llf = .false.
           if (switch_llf_dmin_d > 0.0_dp) switch_to_llf = rmin < switch_llf_dmin_d
-          if (switch_llf_pmin_d > 0.0_dp) switch_to_llf = pmin < switch_llf_pmin_d
+          if (switch_llf_pmin_d > 0.0_dp .and. pmin < switch_llf_pmin_d) switch_to_llf = .true.
           if (switch_to_llf) riemann_local = solver_llf
        end if
 #endif
@@ -4214,7 +4214,7 @@ contains
 
     llf = .false.
     if (switch_llf_dmin_d > 0.0_dp) llf = min(left%density, right%density) < switch_llf_dmin_d
-    if (switch_llf_pmin_d > 0.0_dp) llf = min(left%pressure, right%pressure) < switch_llf_pmin_d
+    if (switch_llf_pmin_d > 0.0_dp .and. min(left%pressure, right%pressure) < switch_llf_pmin_d) llf = .true.
     solver = solver_hlld
     if (uct_riemann_d == solver_uct_hll) solver = solver_hll
     if (llf .or. uct_riemann_d == solver_uct_llf) solver = solver_llf
