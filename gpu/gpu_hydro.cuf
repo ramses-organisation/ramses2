@@ -184,6 +184,110 @@ module hydro_device
      type(subgrid_3x3x2edge_corner)     :: corner_z
   end type mhd_smem_t
 
+  ! UCT-HLLD (Mignone & Del Zanna 2021). Face records hold the HLLD weights, the upwinded
+  ! transverse velocities and the half-step normal field that build the edge EMF.
+  type, public :: uct_record_t
+     real(kind=dp) :: aL, dL, dR
+     real(kind=dp) :: vt1, vt2, Bn
+  end type uct_record_t
+
+  ! Faces on the transverse halo of the subgrid; the four corner strips are not needed.
+  integer, parameter :: uct_shell_faces = (2*nsubgrid+1)*(8*nsubgrid)
+  integer, parameter :: uct_shell_total = 3*uct_shell_faces
+  ! Faces an AMR subgrid reads that a ghost oct may own: its high faces, then the halo faces.
+  integer, parameter :: uct_ghost_candidates = 3*(2*nsubgrid)**2 + uct_shell_total
+  ! Size of the face-B index set (uct_bn_cell).
+  integer, parameter :: uct_bn_cells = (2*nsubgrid+1)**3 + 9*(2*nsubgrid+1)**2
+#if NVAR>5+NENER
+  integer, parameter :: uct_product_nscalar = nscalar
+#else
+  integer, parameter :: uct_product_nscalar = 0
+#endif
+  ! Per owned face: five gas fluxes, the scalar fluxes, then aL, dL, dR, vt1, vt2, Bn.
+  integer, parameter :: uct_product_fields = 11+uct_product_nscalar
+  integer, parameter :: uct_product_record = 5+uct_product_nscalar
+  integer, parameter :: uct_product_vt1 = uct_product_record+4, uct_product_bn = uct_product_record+6
+
+  ! UCT launch configuration: threads per block, and the resident blocks per SM in the launch bounds
+  ! of each kernel. Measured on Orszag-Tang at 512^3 on an H200 and on an A100 (256^3 in double
+  ! precision); the A100 (sm_80, GPU_SM from CUDA_ARCH) has its own values, other GPUs use the H200
+  ! ones. NVHPC applies the bounds of a kernel to the kernels that follow it, so every UCT kernel
+  ! gives its own, except the double precision NSUBGRID=2 face kernel, which is fastest without: it
+  ! inherits the bounds of hydro_integrator_kernel, none or launch_bounds(256,1), which admit its threads.
+#if defined(GPU_SM) && GPU_SM == 80 && NSUBGRID == 2
+#define UCT_THREADS 192
+#define UCT_GHOST_THREADS 256
+#elif NSUBGRID == 2
+#define UCT_THREADS 128
+#define UCT_GHOST_THREADS 256
+#else
+#define UCT_THREADS 64
+#define UCT_GHOST_THREADS 64
+#endif
+#if defined(GPU_SM) && GPU_SM == 80 && NPRE == 4 && NSUBGRID == 2
+#define UCT_FACE_LB launch_bounds(UCT_THREADS,4)
+#define UCT_GHOST_LB launch_bounds(UCT_GHOST_THREADS,3)
+#define UCT_UPDATE_LB launch_bounds(UCT_THREADS,8)
+#define UCT_AMR_UPDATE_LB launch_bounds(UCT_THREADS,7)
+#elif defined(GPU_SM) && GPU_SM == 80 && NPRE == 4
+#define UCT_FACE_LB launch_bounds(UCT_THREADS,12)
+#define UCT_GHOST_LB launch_bounds(UCT_GHOST_THREADS,4)
+#define UCT_UPDATE_LB launch_bounds(UCT_THREADS,24)
+#define UCT_AMR_UPDATE_LB launch_bounds(UCT_THREADS,4)
+#elif defined(GPU_SM) && GPU_SM == 80 && NSUBGRID == 2
+#define UCT_FACE_LB
+#define UCT_GHOST_LB launch_bounds(UCT_GHOST_THREADS,2)
+#define UCT_UPDATE_LB launch_bounds(UCT_THREADS,4)
+#define UCT_AMR_UPDATE_LB launch_bounds(UCT_THREADS,4)
+#elif NPRE == 4 && NSUBGRID == 2
+#define UCT_FACE_LB launch_bounds(UCT_THREADS,7)
+#define UCT_GHOST_LB launch_bounds(UCT_GHOST_THREADS,3)
+#define UCT_UPDATE_LB launch_bounds(UCT_THREADS,9)
+#define UCT_AMR_UPDATE_LB launch_bounds(UCT_THREADS,7)
+#elif NPRE == 4
+#define UCT_FACE_LB launch_bounds(UCT_THREADS,14)
+#define UCT_GHOST_LB launch_bounds(UCT_GHOST_THREADS,4)
+#define UCT_UPDATE_LB launch_bounds(UCT_THREADS,20)
+#define UCT_AMR_UPDATE_LB launch_bounds(UCT_THREADS,4)
+#elif NSUBGRID == 2
+#define UCT_FACE_LB
+#define UCT_GHOST_LB launch_bounds(UCT_GHOST_THREADS,2)
+#define UCT_UPDATE_LB launch_bounds(UCT_THREADS,6)
+#define UCT_AMR_UPDATE_LB launch_bounds(UCT_THREADS,6)
+#else
+#define UCT_FACE_LB launch_bounds(UCT_THREADS,8)
+#define UCT_GHOST_LB launch_bounds(UCT_GHOST_THREADS,4)
+#define UCT_UPDATE_LB launch_bounds(UCT_THREADS,16)
+#define UCT_AMR_UPDATE_LB launch_bounds(UCT_THREADS,12)
+#endif
+  integer, parameter :: uct_threads = UCT_THREADS, uct_ghost_threads = UCT_GHOST_THREADS
+
+  type, public :: uct_face_smem_t
+     type(subgrid_6x6x6cell_primitive)  :: local_subgrid
+#if NVAR>5+NENER
+     real(kind=dp) :: scalar_subgrid(0:2*nsubgrid+3, 0:2*nsubgrid+3, 0:2*nsubgrid+3, 1:nscalar)
+#endif
+     type(subgrid_3x2x2cell_primitive)  :: left_interfaces_x, right_interfaces_x
+     type(subgrid_2x3x2cell_primitive)  :: left_interfaces_y, right_interfaces_y
+     type(subgrid_2x2x3cell_primitive)  :: left_interfaces_z, right_interfaces_z
+     type(subgrid_face_b_t)             :: bf
+  end type uct_face_smem_t
+
+  type, public :: uct_ghost_smem_t
+     type(uct_face_smem_t) :: f
+     type(primitive_t) :: shell_left(0:uct_shell_total-1), shell_right(0:uct_shell_total-1)
+  end type uct_ghost_smem_t
+
+  type, public :: uct_update_smem_t
+     type(subgrid_3x2x2cell_primitive)  :: left_interfaces_x
+     type(subgrid_2x3x2cell_primitive)  :: left_interfaces_y
+     type(subgrid_2x2x3cell_primitive)  :: left_interfaces_z
+     type(subgrid_face_b_t)             :: bf
+     type(subgrid_2x3x3edge_primitive)  :: emfx
+     type(subgrid_3x2x3edge_primitive)  :: emfy
+     type(subgrid_3x3x2edge_primitive)  :: emfz
+  end type uct_update_smem_t
+
 #endif
 
 #ifndef MHD
@@ -199,6 +303,9 @@ module hydro_device
 #endif
   real(kind=dp), device :: switch_llf_dmin_d
   real(kind=dp), device :: switch_llf_pmin_d
+#ifdef MHD
+  integer, device :: uct_riemann_d
+#endif
 #if NENER>0
   real(kind=dp), device :: gamma_rad_d(1:nener+1)
 #endif
@@ -884,10 +991,13 @@ contains
     return
   end function upwind_mhd_fluxes
 
-  ! 1D HLLD MHD Riemann flux (Miyoshi & Kusano; x-normal).
-  attributes(device) function hlld_mhd_fluxes(left, right, gamma, smallr, smallc2) result(flux)
+  ! 1D HLLD MHD Riemann flux (Miyoshi & Kusano; x-normal). With record (uct-hlld), also the UCT
+  ! record of the face; where the rotational fan collapses, flux and record take the HLLC-type
+  ! form, and they fall back to LLF if the record is not finite.
+  attributes(device) function hlld_mhd_fluxes(left, right, gamma, smallr, smallc2, record) result(flux)
     type(primitive_t), intent(in) :: left, right
     real(kind=dp), value :: gamma, smallr, smallc2
+    type(uct_record_t), intent(out), optional :: record
     type(conserved_t) :: flux
     type(primitive_t) :: ls, rs
     real(kind=dp) :: smallp, entho, A, sgnm
@@ -898,7 +1008,8 @@ contains
     real(kind=dp) :: rstarr, er, vstarr, Bstarr, wstarr, Cstarr, vdotBstarr, etotstarr, sqrrstarr, calfvenr, SAR
     real(kind=dp) :: vstarstar, wstarstar, Bstarstar, Cstarstar, vdotBstarstar, etotstarstarl, etotstarstarr
     real(kind=dp) :: ro, uo, vo, wo, Bo, Co, Ptoto, etoto, vdotBo
-    real(kind=dp) :: inv_rl, inv_rr, inv_rc, inv_sl, inv_sr, inv_estar, inv_sqrsum
+    real(kind=dp) :: inv_rl, inv_rr, inv_rc, inv_sl, inv_sr, inv_estar, inv_sqrsum, inv_span
+    logical :: use_hllc
 
     smallp = smallc2 / gamma
     entho = 1.0_dp / (gamma - 1.0_dp)
@@ -984,6 +1095,42 @@ contains
     etotstarr = ((SR - ur)*etotr - Ptotr*ur + Ptotstar*ustar + A*(vdotBr - vdotBstarr))*inv_sr
     sqrrstarr = sqrt(rstarr); calfvenr = abs(A)/sqrrstarr; SAR = ustar + calfvenr
 
+    use_hllc = .false.
+    if (present(record)) then
+       use_hllc = SL < 0.0_dp .and. SR > 0.0_dp .and. &
+            & (SAL - SL < 1.0e-4_dp*(ustar - SL) .or. SAR - SR > -1.0e-4_dp*(SR - ustar))
+       if (use_hllc) then
+          call set_uct_hll_record(record, vl, vr, wl, wr, A, SL, SR)
+       else
+          call set_uct_hlld_record(record, ul, ur, vl, vr, wl, wr, A, SL, SR, ustar, SAL, SAR)
+       endif
+       if (.not. (uct_finite(SL) .and. uct_finite(SR) .and. uct_finite(ustar) .and. &
+            & uct_finite(SAL) .and. uct_finite(SAR) .and. uct_finite(record%aL) .and. &
+            & uct_finite(record%dL) .and. uct_finite(record%dR) .and. &
+            & uct_finite(record%vt1) .and. uct_finite(record%vt2) .and. uct_finite(record%Bn))) then
+          flux = hll_mhd_fluxes(left, right, gamma, smallr, smallc2, .true.)
+          record = hll_uct_record(left, right, gamma, smallr, smallc2, solver_llf)
+          return
+       endif
+    endif
+    if (use_hllc) then
+       inv_span = 1.0_dp/(SR - SL)
+       Bstarl = (SR*Br - SL*Bl + Bl*ul - A*vl - Br*ur + A*vr)*inv_span
+       Cstarl = (SR*Cr - SL*Cl + Cl*ul - A*wl - Cr*ur + A*wr)*inv_span
+       Bstarr = Bstarl
+       Cstarr = Cstarl
+       vstarl = vl - A*(Bstarl - Bl)/(rl*(SL - ul))
+       wstarl = wl - A*(Cstarl - Cl)/(rl*(SL - ul))
+       vstarr = vr - A*(Bstarr - Br)/(rr*(SR - ur))
+       wstarr = wr - A*(Cstarr - Cr)/(rr*(SR - ur))
+       vdotBstarl = ustar*A + vstarl*Bstarl + wstarl*Cstarl
+       vdotBstarr = ustar*A + vstarr*Bstarr + wstarr*Cstarr
+       etotstarl = ((SL - ul)*etotl - Ptotl*ul + Ptotstar*ustar + A*(vdotBl - vdotBstarl))*inv_sl
+       etotstarr = ((SR - ur)*etotr - Ptotr*ur + Ptotstar*ustar + A*(vdotBr - vdotBstarr))*inv_sr
+       SAL = ustar
+       SAR = ustar
+    endif
+
     ! Double-star region.
     inv_sqrsum = 1.0_dp/(sqrrstarl + sqrrstarr)
     vstarstar = (sqrrstarl*vstarl + sqrrstarr*vstarr + sgnm*(Bstarr - Bstarl))*inv_sqrsum
@@ -995,7 +1142,13 @@ contains
     etotstarstarr = etotstarr + sgnm*sqrrstarr*(vdotBstarr - vdotBstarstar)
 
     ! Sample Riemann solution at x/t=0.
-    if (SL > 0.0_dp) then
+    if (use_hllc .and. ustar >= 0.0_dp) then
+       ro = rstarl; uo = ustar; vo = vstarl; wo = wstarl; Bo = Bstarl; Co = Cstarl
+       Ptoto = Ptotstar; etoto = etotstarl; vdotBo = vdotBstarl
+    else if (use_hllc) then
+       ro = rstarr; uo = ustar; vo = vstarr; wo = wstarr; Bo = Bstarr; Co = Cstarr
+       Ptoto = Ptotstar; etoto = etotstarr; vdotBo = vdotBstarr
+    else if (SL > 0.0_dp) then
        ro = rl; uo = ul; vo = vl; wo = wl; Bo = Bl; Co = Cl; Ptoto = Ptotl; etoto = etotl; vdotBo = vdotBl
     else if (SAL > 0.0_dp) then
        ro = rstarl; uo = ustar; vo = vstarl; wo = wstarl; Bo = Bstarl; Co = Cstarl
@@ -1517,7 +1670,7 @@ contains
 #ifdef MHD
        & bf, &
 #endif
-       & thread_idx, gamma, smallr, smallc2, dt, load_refined, local_subgrid)
+       & thread_idx, gamma, smallr, smallc2, dt, load_refined, local_subgrid, nbox)
     type(oct), device :: grid(*)
     real(kind=dp), device :: constant_gravity(3)
     real(kind=dp), device :: f(1:twotondim,1:ndim,*)
@@ -1529,6 +1682,8 @@ contains
     real(kind=dp), value :: dt
     logical, value :: load_refined
     type(subgrid_6x6x6cell_primitive), intent(inout) :: local_subgrid
+    ! If present, load only the cells with all indices below nbox (x fastest).
+    integer, intent(in), optional :: nbox
 #if NVAR>5+NENER
     real(kind=dp) :: scalar_sub(0:2*nsubgrid+3, 0:2*nsubgrid+3, 0:2*nsubgrid+3, 1:nscalar)
     integer :: n
@@ -1543,7 +1698,7 @@ contains
     integer :: i, j, k, i_subgrid_idx, j_subgrid_idx, k_subgrid_idx
     integer :: ib, jb, kb ! cell position bits within its oct (0 or 1 per axis)
     integer :: cell_idx, source_idx
-    integer :: work_size
+    integer :: work_size, nwork
     real(kind=dp) :: invD
 #ifdef MHD
     integer :: source_idx_face
@@ -1551,24 +1706,35 @@ contains
 #endif
 
     work_size = 2*nsubgrid+4
+    nwork = work_size**3
+    if (present(nbox)) nwork = nbox**3
 
-    do work_idx = thread_idx, work_size**3 - 1, blockDim%x
+    do work_idx = thread_idx, nwork - 1, blockDim%x
 
-       ! Compute the subgrid_indices index, i.e. determine the oct to load
-       call index_1Dto3D(work_idx/8, work_size/2, work_size/2, i_subgrid_idx, j_subgrid_idx, k_subgrid_idx)
+       if (present(nbox)) then
+          call index_1Dto3D(work_idx, nbox, nbox, i, j, k)
+          i_subgrid_idx = i/2; j_subgrid_idx = j/2; k_subgrid_idx = k/2
+          ib = i - 2*i_subgrid_idx; jb = j - 2*j_subgrid_idx; kb = k - 2*k_subgrid_idx
+          cell_idx = 1 + ib + 2*jb + 4*kb
+          ind_nbor = 1 + i_subgrid_idx + nsubgridp2*j_subgrid_idx + nsubgridp2sq*k_subgrid_idx
+       else
+          ! Compute the subgrid_indices index, i.e. determine the oct to load
+          call index_1Dto3D(work_idx/8, work_size/2, work_size/2, i_subgrid_idx, j_subgrid_idx, k_subgrid_idx)
 
-       ! Get neighbour index
-       ind_nbor = work_idx/8 + 1
+          ! Get neighbour index
+          ind_nbor = work_idx/8 + 1
+
+          ! Now that we have the index to the oct we need to figure out which cell within it to load
+          cell_idx = mod(work_idx, 8) + 1
+
+          ! Lastly, we need to figure out where in the subgrid the cell we will load goes
+          call index_1Dto3D(cell_idx - 1, 2, 2, ib, jb, kb)
+          i = ib + 2*i_subgrid_idx
+          j = jb + 2*j_subgrid_idx
+          k = kb + 2*k_subgrid_idx
+       endif
+
        source_idx = nbor(ind_nbor)
-
-       ! Now that we have the index to the oct we need to figure out which cell within it to load
-       cell_idx = mod(work_idx, 8) + 1
-
-       ! Lastly, we need to figure out where in the subgrid the cell we will load goes
-       call index_1Dto3D(cell_idx - 1, 2, 2, ib, jb, kb)
-       i = ib + 2*i_subgrid_idx
-       j = jb + 2*j_subgrid_idx
-       k = kb + 2*k_subgrid_idx
 
 #ifdef MHD
        ! Six face-B components from bold.
@@ -1860,7 +2026,11 @@ contains
 #ifdef HYDRO_PAIR
        & pair, &
 #endif
-       & left_interfaces_z, right_interfaces_z, gamma, smallr, smallc2, dtdx, slope)
+       & left_interfaces_z, right_interfaces_z, gamma, smallr, smallc2, dtdx, slope &
+#ifdef MHD
+       & , shell_left, shell_right, owned_only &
+#endif
+       & )
     type(subgrid_6x6x6cell_primitive), intent(inout) :: local_subgrid ! The subgrid that this block is working on in shared memory
     integer, value :: thread_idx
     real(kind=dp), value :: gamma, smallr, smallc2, dtdx
@@ -1880,9 +2050,9 @@ contains
     real(kind=dp) :: smallp
     integer :: work_idx   ! Loop index for unit of work
     integer :: i, j, k    ! Cell indices
-    integer :: work_size
+    integer :: work_size, nwork
 #ifndef MHD
-    integer :: ncell, nwork, face_idx, face_work, face_i, face_j
+    integer :: ncell, face_idx, face_work, face_i, face_j
 #endif
 #ifdef HYDRO_PAIR
     integer :: ncolumn
@@ -1897,9 +2067,16 @@ contains
 #endif
 #ifdef MHD
     type(subgrid_face_b_t), intent(in) :: bf
-    type(subgrid_2x3x3edge_corner), intent(inout) :: corner_x
-    type(subgrid_3x2x3edge_corner), intent(inout) :: corner_y
-    type(subgrid_3x3x2edge_corner), intent(inout) :: corner_z
+    ! Corner states feed the 2D Riemann EMF; shell states feed UCT. Each path passes only its own.
+    type(subgrid_2x3x3edge_corner), intent(inout), optional :: corner_x
+    type(subgrid_3x2x3edge_corner), intent(inout), optional :: corner_y
+    type(subgrid_3x3x2edge_corner), intent(inout), optional :: corner_z
+    type(primitive_t), intent(inout), optional :: shell_left(0:uct_shell_total-1)
+    type(primitive_t), intent(inout), optional :: shell_right(0:uct_shell_total-1)
+    ! Trace only the cells whose states feed the owned (low) faces of the subgrid.
+    logical, intent(in), optional :: owned_only
+    logical :: owned
+    integer :: m, w2, ta, tb
     real(kind=dp), value :: smallc
     integer, value :: slope_mag
     logical, value :: induction
@@ -1915,6 +2092,8 @@ contains
     real(kind=dp) :: ELL,ELR,ERL,ERR,FLL,FLR,FRL,FRR,GLL,GLR,GRL,GRR
     real(kind=dp) :: sr0, uu,vv,ww,Aa,Bb,Cc
     logical :: okp_x, okm_x, oka_x, okp_y, okm_y, oka_y, okp_z, okm_z, oka_z
+    logical :: shell_face
+    type(primitive_t) :: qface
 
     ! Edge E recomputed inline (no edge_e shared buffer).
 #endif
@@ -1972,10 +2151,33 @@ contains
     ! Note that we're now excluding the outermost shell of cells since this
     ! stencil operation requires 1 ghost cell. This also requires the
     ! transformation from the basic 3D indexing as shown below to shift the indices from going from 0-5 to 1-6
-    do work_idx = thread_idx, work_size**3 - 1, blockDim%x
-       ! Compute the 3D indices, note the tranformation so that we're indexing 1-6 and not 0-5
-       call index_1Dto3D(work_idx, work_size, work_size, i, j, k)
-       i = i + 1; j = j + 1; k = k + 1
+    nwork = work_size**3
+    m = 2*nsubgrid
+    owned = .false.
+    if (present(owned_only)) owned = owned_only
+    if (owned) nwork = m**3 + 3*m**2
+    do work_idx = thread_idx, nwork - 1, blockDim%x
+       if (owned) then
+          ! Interior cells, then the low halo layer in x, y and z.
+          if (work_idx < m**3) then
+             call index_1Dto3D(work_idx, m, m, i, j, k)
+             i = i + 2; j = j + 2; k = k + 2
+          else
+             w2 = work_idx - m**3
+             call index_1Dto2D(mod(w2, m**2), m, ta, tb)
+             if (w2 < m**2) then
+                i = 1; j = ta + 2; k = tb + 2
+             else if (w2 < 2*m**2) then
+                i = ta + 2; j = 1; k = tb + 2
+             else
+                i = ta + 2; j = tb + 2; k = 1
+             endif
+          endif
+       else
+          ! Compute the 3D indices, note the tranformation so that we're indexing 1-6 and not 0-5
+          call index_1Dto3D(work_idx, work_size, work_size, i, j, k)
+          i = i + 1; j = j + 1; k = k + 1
+       endif
 #else
     ! Interior cells, then the six face layers.
     do work_idx = thread_idx, nwork - 1, blockDim%x
@@ -2251,6 +2453,49 @@ contains
        end if
 
 #ifdef MHD
+       if (present(shell_left)) then
+          ! x faces on the y/z halo strips
+          shell_face = ((j == 1 .or. j == work_size) .and. k > 1 .and. k < work_size) .or. &
+               & ((k == 1 .or. k == work_size) .and. j > 1 .and. j < work_size)
+          if (shell_face .and. i > 1) then
+             qface = shell_state(cell, slopes_x, -1.0_dp, local_subgrid%density(i,j,k), local_subgrid%pressure(i,j,k), smallr, smallp)
+             qface%Bx = AL; qface%By = B - dBx; qface%Bz = C - dCx
+             shell_right(uct_shell_index(0, i-2, j-2, k-2)) = qface
+          endif
+          if (shell_face .and. i < work_size) then
+             qface = shell_state(cell, slopes_x, 1.0_dp, local_subgrid%density(i,j,k), local_subgrid%pressure(i,j,k), smallr, smallp)
+             qface%Bx = AR; qface%By = B + dBx; qface%Bz = C + dCx
+             shell_left(uct_shell_index(0, i-1, j-2, k-2)) = qface
+          endif
+          ! y faces on the x/z halo strips
+          shell_face = ((i == 1 .or. i == work_size) .and. k > 1 .and. k < work_size) .or. &
+               & ((k == 1 .or. k == work_size) .and. i > 1 .and. i < work_size)
+          if (shell_face .and. j > 1) then
+             qface = shell_state(cell, slopes_y, -1.0_dp, local_subgrid%density(i,j,k), local_subgrid%pressure(i,j,k), smallr, smallp)
+             qface%Bx = A - dAy; qface%By = BL; qface%Bz = C - dCy
+             shell_right(uct_shell_index(1, j-2, i-2, k-2)) = qface
+          endif
+          if (shell_face .and. j < work_size) then
+             qface = shell_state(cell, slopes_y, 1.0_dp, local_subgrid%density(i,j,k), local_subgrid%pressure(i,j,k), smallr, smallp)
+             qface%Bx = A + dAy; qface%By = BR; qface%Bz = C + dCy
+             shell_left(uct_shell_index(1, j-1, i-2, k-2)) = qface
+          endif
+          ! z faces on the x/y halo strips
+          shell_face = ((i == 1 .or. i == work_size) .and. j > 1 .and. j < work_size) .or. &
+               & ((j == 1 .or. j == work_size) .and. i > 1 .and. i < work_size)
+          if (shell_face .and. k > 1) then
+             qface = shell_state(cell, slopes_z, -1.0_dp, local_subgrid%density(i,j,k), local_subgrid%pressure(i,j,k), smallr, smallp)
+             qface%Bx = A - dAz; qface%By = B - dBz; qface%Bz = CL
+             shell_right(uct_shell_index(2, k-2, i-2, j-2)) = qface
+          endif
+          if (shell_face .and. k < work_size) then
+             qface = shell_state(cell, slopes_z, 1.0_dp, local_subgrid%density(i,j,k), local_subgrid%pressure(i,j,k), smallr, smallp)
+             qface%Bx = A + dAz; qface%By = B + dBz; qface%Bz = CR
+             shell_left(uct_shell_index(2, k-1, i-2, j-2)) = qface
+          endif
+       endif
+
+       corner_states: if (present(corner_x)) then
        ! Store corner states into shared edge-corner buffers.
        okp_x = i <= 2*nsubgrid+1; okm_x = i >= 2; oka_x = okm_x .and. okp_x
        okp_y = j <= 2*nsubgrid+1; okm_y = j >= 2; oka_y = okm_y .and. okp_y
@@ -2393,6 +2638,7 @@ contains
           if (corner_z%density(i-2,j-2,k-2,iqRR) < smallr) corner_z%density(i-2,j-2,k-2,iqRR) = r
           if (corner_z%pressure(i-2,j-2,k-2,iqRR) < smallp) corner_z%pressure(i-2,j-2,k-2,iqRR) = p
        end if
+       end if corner_states
 #endif
 #if NVAR>5+NENER
        ! Uses the ORIGINAL cell velocities (re-read from local_subgrid once,
@@ -2841,7 +3087,7 @@ contains
        flux = riemann_fluxes(left_interface, right_interface, gamma, smallr, smallc2, riemann_local)
 #if NVAR>5+NENER
 #ifdef MHD
-       call hll_mhd_wavespeeds(left_interface, right_interface, gamma, smallr, smallc2, SL, SR)
+       call hll_mhd_wavespeeds(left_interface, right_interface, gamma, smallr, smallc2, riemann_local, SL, SR)
        if (riemann_local .eq. solver_upwind) then
           SR = abs(0.5_dp*(left_interface%velocity_x + right_interface%velocity_x))
           SL = -SR
@@ -3561,10 +3807,12 @@ contains
   end subroutine hll_hydro_wavespeeds
 
 #ifdef MHD
-  ! Fast-magnetosonic HLL wave speeds for passive-scalar MHD fluxes.
-  attributes(device) subroutine hll_mhd_wavespeeds(left, right, gamma, smallr, smallc2, SL, SR)
+  ! Fast-magnetosonic HLL wave speeds, or for LLF (-lmax, lmax) with the Rusanov speed of
+  ! hll_mhd_fluxes(llf=.true.).
+  attributes(device) subroutine hll_mhd_wavespeeds(left, right, gamma, smallr, smallc2, riemann, SL, SR)
     type(primitive_t), intent(in) :: left, right
     real(kind=dp), value :: gamma, smallr, smallc2
+    integer, value :: riemann
     real(kind=dp), intent(out) :: SL, SR
     real(kind=dp) :: smallp, bx_mean, rl, rr, pl, pr, ul, ur
     real(kind=dp) :: blx, bly, blz, brx, bry, brz
@@ -3582,8 +3830,13 @@ contains
     d2l = 0.5_dp*(b2l/rl + c2l); cfleft = sqrt(d2l + sqrt(max(d2l**2 - c2l*blx*blx/rl, 0.0_dp)))
     b2r = compute_bsquared(brx, bry, brz); c2r = gamma*pr/rr
     d2r = 0.5_dp*(b2r/rr + c2r); cfright = sqrt(d2r + sqrt(max(d2r**2 - c2r*brx*brx/rr, 0.0_dp)))
-    SL = min(min(ul, ur) - max(cfleft, cfright), 0.0_dp)
-    SR = max(max(ul, ur) + max(cfleft, cfright), 0.0_dp)
+    if (riemann .eq. solver_llf) then
+       SR = max(abs(ul) + cfleft, abs(ur) + cfright)
+       SL = -SR
+    else
+       SL = min(min(ul, ur) - max(cfleft, cfright), 0.0_dp)
+       SR = max(max(ul, ur) + max(cfleft, cfright), 0.0_dp)
+    endif
   end subroutine hll_mhd_wavespeeds
 
   ! Permute edge corner state into the 2D Riemann frame (x edges).
@@ -3863,6 +4116,712 @@ contains
        coct = fidx
     end if
   end subroutine get_cf_cell
+
+  ! ==========================================================================
+  ! UCT-HLLD (Mignone & Del Zanna 2021)
+  ! ==========================================================================
+
+  ! Record of the HLL (solver_hll) or LLF (solver_llf) flux.
+  attributes(device) function hll_uct_record(left, right, gamma, smallr, smallc2, solver) result(record)
+    type(primitive_t), intent(in) :: left, right
+    real(kind=dp), value :: gamma, smallr, smallc2
+    integer, value :: solver
+    type(uct_record_t) :: record
+    real(kind=dp) :: SL, SR
+    call hll_mhd_wavespeeds(left, right, gamma, smallr, smallc2, solver, SL, SR)
+    call set_uct_hll_record(record, left%velocity_y, right%velocity_y, left%velocity_z, right%velocity_z, &
+         & 0.5_dp*(left%Bx + right%Bx), SL, SR)
+  end function hll_uct_record
+
+  ! HLL record for a collapsed rotational fan.
+  attributes(device) subroutine set_uct_hll_record(record, vl, vr, wl, wr, A, SL, SR)
+    type(uct_record_t), intent(out) :: record
+    real(kind=dp), value :: vl, vr, wl, wr, A, SL, SR
+    real(kind=dp) :: den
+    den = SR - SL
+    record%aL = SR/den
+    record%dL = -SL*SR/den
+    record%dR = record%dL
+    record%vt1 = (SR*vl - SL*vr)/den
+    record%vt2 = (SR*wl - SL*wr)/den
+    record%Bn = A
+  end subroutine set_uct_hll_record
+
+  ! Mignone & Del Zanna (2021), Eqs. (44)-(46); vt is the outer-fast-wave HLL average.
+  attributes(device) subroutine set_uct_hlld_record(record, ul, ur, vl, vr, wl, wr, A, &
+       & SL, SR, ustar, SAL, SAR)
+    type(uct_record_t), intent(out) :: record
+    real(kind=dp), value :: ul, ur, vl, vr, wl, wr, A, SL, SR, ustar, SAL, SAR
+    real(kind=dp) :: ap, am, asum, eps, den, scale, nustar, nuL, nuR, tchiL, tchiR
+
+    ap = max(SR, 0.0_dp)
+    am = -min(SL, 0.0_dp)
+    asum = ap + am
+    if (asum > 0.0_dp) then
+       record%vt1 = (ap*vl + am*vr)/asum
+       record%vt2 = (ap*wl + am*wr)/asum
+    else
+       record%vt1 = 0.5_dp*(vl + vr)
+       record%vt2 = 0.5_dp*(wl + wr)
+    endif
+    eps = max(1.0e-9_dp, 16.0_dp*epsilon(1.0_dp))
+    den = abs(SAR) + abs(SAL)
+    nustar = 0.0_dp
+    if (abs(SAR - SAL) > eps*abs(SR - SL) .and. den > 0.0_dp) nustar = (SAR + SAL)/den
+    den = abs(SAL) + abs(SL)
+    nuL = 0.0_dp
+    if (den > 0.0_dp) nuL = (SAL + SL)/den
+    den = abs(SAR) + abs(SR)
+    nuR = 0.0_dp
+    if (den > 0.0_dp) nuR = (SAR + SR)/den
+    den = SAL + SL - 2.0_dp*ustar
+    scale = max(abs(SAL), abs(SL), abs(ustar))
+    if (abs(den) > eps*scale) then
+       tchiL = (ul - ustar)*(SL - ustar)/den
+    else
+       tchiL = 0.5_dp*(ul - ustar)
+    endif
+    den = SAR + SR - 2.0_dp*ustar
+    scale = max(abs(SAR), abs(SR), abs(ustar))
+    if (abs(den) > eps*scale) then
+       tchiR = (ur - ustar)*(SR - ustar)/den
+    else
+       tchiR = 0.5_dp*(ur - ustar)
+    endif
+    record%aL = 0.5_dp*(1.0_dp + nustar)
+    record%dL = 0.5_dp*(nuL - nustar)*tchiL + 0.5_dp*(abs(SAL) - nustar*SAL)
+    record%dR = 0.5_dp*(nuR - nustar)*tchiR + 0.5_dp*(abs(SAR) - nustar*SAR)
+    record%Bn = A
+  end subroutine set_uct_hlld_record
+
+  attributes(device) function uct_finite(x) result(finite)
+    real(kind=dp), value :: x
+    logical :: finite
+    finite = abs(x) <= huge(x)
+  end function uct_finite
+
+  ! One UCT face solve with the solver of riemann (uct-hlld, uct-hll or uct-llf) and the per-interface
+  ! LLF switch of riemann_driver; solver is the one used (solver_hlld, solver_hll or solver_llf). A face
+  ! whose HLLD record is not finite falls back to LLF inside hlld_mhd_fluxes; its scalar flux keeps the
+  ! hlld (upwind) form.
+  attributes(device) function uct_face_solve(left, right, gamma, smallr, smallc2, record, solver) result(flux)
+    type(primitive_t), intent(in) :: left, right
+    real(kind=dp), value :: gamma, smallr, smallc2
+    type(uct_record_t), intent(out) :: record
+    integer, intent(out) :: solver
+    type(conserved_t) :: flux
+    logical :: llf
+
+    llf = .false.
+    if (switch_llf_dmin_d > 0.0_dp) llf = min(left%density, right%density) < switch_llf_dmin_d
+    if (switch_llf_pmin_d > 0.0_dp) llf = min(left%pressure, right%pressure) < switch_llf_pmin_d
+    solver = solver_hlld
+    if (uct_riemann_d == solver_uct_hll) solver = solver_hll
+    if (llf .or. uct_riemann_d == solver_uct_llf) solver = solver_llf
+    if (solver == solver_hlld) then
+       flux = hlld_mhd_fluxes(left, right, gamma, smallr, smallc2, record)
+    else
+       flux = hll_mhd_fluxes(left, right, gamma, smallr, smallc2, solver == solver_llf)
+       record = hll_uct_record(left, right, gamma, smallr, smallc2, solver)
+    endif
+  end function uct_face_solve
+
+  ! Index of a halo face; (t1,t2) are the transverse indices, one of them outside [0,2*nsubgrid-1].
+  attributes(device) function uct_shell_index(orientation, normal, t1, t2) result(idx)
+    integer, value :: orientation, normal, t1, t2
+    integer :: idx, perimeter
+    integer, parameter :: m = 2*nsubgrid
+    if (t2 == -1) then
+       perimeter = t1
+    else if (t2 == m) then
+       perimeter = m + t1
+    else if (t1 == -1) then
+       perimeter = 2*m + t2
+    else
+       perimeter = 3*m + t2
+    endif
+    idx = orientation*uct_shell_faces + normal + (m+1)*perimeter
+  end function uct_shell_index
+
+  ! Hydro part of a traced face state, with the first-order fallback of trace_3d.
+  attributes(device) function shell_state(cell, slopes, sgn, r0, p0, smallr, smallp) result(q)
+    type(primitive_t), intent(in) :: cell, slopes
+    real(kind=dp), value :: sgn, r0, p0, smallr, smallp
+    type(primitive_t) :: q
+    q%density    = cell%density    + sgn*slopes%density
+    q%velocity_x = cell%velocity_x + sgn*slopes%velocity_x
+    q%velocity_y = cell%velocity_y + sgn*slopes%velocity_y
+    q%velocity_z = cell%velocity_z + sgn*slopes%velocity_z
+    q%pressure   = cell%pressure   + sgn*slopes%pressure
+    if (q%density < smallr) q%density = r0
+    if (q%pressure < smallp) q%pressure = p0
+  end function shell_state
+
+  ! Face state in the face-normal frame (x normal), from the interface arrays.
+  attributes(device) subroutine uct_gather_face(lx, rx, ly, ry, lz, rz, orientation, i, j, k, ql, qr)
+    type(subgrid_3x2x2cell_primitive), intent(in) :: lx, rx
+    type(subgrid_2x3x2cell_primitive), intent(in) :: ly, ry
+    type(subgrid_2x2x3cell_primitive), intent(in) :: lz, rz
+    integer, value :: orientation, i, j, k
+    type(primitive_t), intent(out) :: ql, qr
+
+    if (orientation == 0) then
+       ql%density = lx%density(i,j,k); ql%pressure = lx%pressure(i,j,k)
+       ql%velocity_x = lx%velocity_x(i,j,k); ql%velocity_y = lx%velocity_y(i,j,k); ql%velocity_z = lx%velocity_z(i,j,k)
+       ql%Bx = lx%Bx(i,j,k); ql%By = lx%By(i,j,k); ql%Bz = lx%Bz(i,j,k)
+       qr%density = rx%density(i,j,k); qr%pressure = rx%pressure(i,j,k)
+       qr%velocity_x = rx%velocity_x(i,j,k); qr%velocity_y = rx%velocity_y(i,j,k); qr%velocity_z = rx%velocity_z(i,j,k)
+       qr%Bx = rx%Bx(i,j,k); qr%By = rx%By(i,j,k); qr%Bz = rx%Bz(i,j,k)
+    else if (orientation == 1) then
+       ql%density = ly%density(i,j,k); ql%pressure = ly%pressure(i,j,k)
+       ql%velocity_x = ly%velocity_y(i,j,k); ql%velocity_y = ly%velocity_x(i,j,k); ql%velocity_z = ly%velocity_z(i,j,k)
+       ql%Bx = ly%By(i,j,k); ql%By = ly%Bx(i,j,k); ql%Bz = ly%Bz(i,j,k)
+       qr%density = ry%density(i,j,k); qr%pressure = ry%pressure(i,j,k)
+       qr%velocity_x = ry%velocity_y(i,j,k); qr%velocity_y = ry%velocity_x(i,j,k); qr%velocity_z = ry%velocity_z(i,j,k)
+       qr%Bx = ry%By(i,j,k); qr%By = ry%Bx(i,j,k); qr%Bz = ry%Bz(i,j,k)
+    else
+       ql%density = lz%density(i,j,k); ql%pressure = lz%pressure(i,j,k)
+       ql%velocity_x = lz%velocity_z(i,j,k); ql%velocity_y = lz%velocity_x(i,j,k); ql%velocity_z = lz%velocity_y(i,j,k)
+       ql%Bx = lz%Bz(i,j,k); ql%By = lz%Bx(i,j,k); ql%Bz = lz%By(i,j,k)
+       qr%density = rz%density(i,j,k); qr%pressure = rz%pressure(i,j,k)
+       qr%velocity_x = rz%velocity_z(i,j,k); qr%velocity_y = rz%velocity_x(i,j,k); qr%velocity_z = rz%velocity_y(i,j,k)
+       qr%Bx = rz%Bz(i,j,k); qr%By = rz%Bx(i,j,k); qr%Bz = rz%By(i,j,k)
+    endif
+  end subroutine uct_gather_face
+
+  ! Lab-frame state into the face-normal frame.
+  attributes(device) function uct_rotate_face(q, orientation) result(r)
+    type(primitive_t), intent(in) :: q
+    integer, value :: orientation
+    type(primitive_t) :: r
+    r = q
+    if (orientation == 1) then
+       r%velocity_x = q%velocity_y; r%velocity_y = q%velocity_x
+       r%Bx = q%By; r%By = q%Bx
+    else if (orientation == 2) then
+       r%velocity_x = q%velocity_z; r%velocity_y = q%velocity_x; r%velocity_z = q%velocity_y
+       r%Bx = q%Bz; r%By = q%Bx; r%Bz = q%By
+    endif
+  end function uct_rotate_face
+
+  ! Face-normal-frame flux back to the lab frame.
+  attributes(device) function uct_unrotate_flux(f, orientation) result(r)
+    type(conserved_t), intent(in) :: f
+    integer, value :: orientation
+    type(conserved_t) :: r
+    r = f
+    if (orientation == 1) then
+       r%momentum_x = f%momentum_y; r%momentum_y = f%momentum_x
+       r%Bx = f%By; r%By = f%Bx
+    else if (orientation == 2) then
+       r%momentum_x = f%momentum_y; r%momentum_y = f%momentum_z; r%momentum_z = f%momentum_x
+       r%Bx = f%By; r%By = f%Bz; r%Bz = f%Bx
+    endif
+  end function uct_unrotate_flux
+
+#if NVAR>5+NENER
+  attributes(device) subroutine uct_scalar_fluxes(lx, rx, ly, ry, lz, rz, orientation, i, j, k, &
+       & ql, qr, flux, solver, gamma, smallr, smallc2, fscal)
+    type(subgrid_3x2x2cell_primitive), intent(in) :: lx, rx
+    type(subgrid_2x3x2cell_primitive), intent(in) :: ly, ry
+    type(subgrid_2x2x3cell_primitive), intent(in) :: lz, rz
+    integer, value :: orientation, i, j, k, solver
+    type(primitive_t), intent(in) :: ql, qr
+    type(conserved_t), intent(in) :: flux
+    real(kind=dp), value :: gamma, smallr, smallc2
+    real(kind=dp), intent(out) :: fscal(1:nscalar)
+    real(kind=dp) :: SL, SR, rhoL, rhoR, sl_n, sr_n
+    integer :: n
+
+    call hll_mhd_wavespeeds(ql, qr, gamma, smallr, smallc2, solver, SL, SR)
+    rhoL = max(ql%density, smallr)
+    rhoR = max(qr%density, smallr)
+    do n = 1, nscalar
+       if (orientation == 0) then
+          sl_n = lx%scalar(i,j,k,n); sr_n = rx%scalar(i,j,k,n)
+       else if (orientation == 1) then
+          sl_n = ly%scalar(i,j,k,n); sr_n = ry%scalar(i,j,k,n)
+       else
+          sl_n = lz%scalar(i,j,k,n); sr_n = rz%scalar(i,j,k,n)
+       endif
+       fscal(n) = scalar_flux(solver, flux%density, SL, SR, rhoL, ql%velocity_x, sl_n, rhoR, qr%velocity_x, sr_n)
+    end do
+  end subroutine uct_scalar_fluxes
+#endif
+
+  ! Oct and cell owning face (orientation, normal, t1, t2): the cell whose low face it is.
+  ! (t1,t2) are the face-frame (y,z): (y,z) for x faces, (x,z) for y faces, (x,y) for z faces.
+  attributes(device) subroutine uct_face_owner(nbor, orientation, normal, t1, t2, oct_idx, cell_idx)
+    integer(kind=4) :: nbor(1:subgridsize)
+    integer, value :: orientation, normal, t1, t2
+    integer, intent(out) :: oct_idx, cell_idx
+    integer :: i, j, k
+    if (orientation == 0) then
+       i = normal; j = t1; k = t2
+    else if (orientation == 1) then
+       i = t1; j = normal; k = t2
+    else
+       i = t1; j = t2; k = normal
+    endif
+    i = i + 2; j = j + 2; k = k + 2
+    oct_idx = nbor(1 + i/2 + nsubgridp2*(j/2) + nsubgridp2sq*(k/2))
+    cell_idx = 1 + mod(i,2) + 2*mod(j,2) + 4*mod(k,2)
+  end subroutine uct_face_owner
+
+  attributes(device) function face_b_get(bf, orientation, normal, t1, t2) result(value)
+    type(subgrid_face_b_t), intent(in) :: bf
+    integer, value :: orientation, normal, t1, t2
+    real(kind=dp) :: value
+    if (orientation == 0) then
+       value = bf%bx(normal+2, t1+2, t2+2)
+    else if (orientation == 1) then
+       value = bf%by(t1+2, normal+2, t2+2)
+    else
+       value = bf%bz(t1+2, t2+2, normal+2)
+    endif
+  end function face_b_get
+
+  attributes(device) function vanleer_slope(qm, q0, qp) result(dq)
+    real(kind=dp), value :: qm, q0, qp
+    real(kind=dp) :: dq, dl, dr
+    dl = q0 - qm; dr = qp - q0
+    dq = 0.0_dp
+    if (dl*dr > 0.0_dp) dq = 2.0_dp*dl*dr/(dl + dr)
+  end function vanleer_slope
+
+  ! Edge values of the face-normal B on both sides of the edge, along the varying transverse index.
+  attributes(device) subroutine face_b_pair(bf, orientation, normal, edge, fixed, vary_t1, slope_mag, left, right)
+    type(subgrid_face_b_t), intent(in) :: bf
+    integer, value :: orientation, normal, edge, fixed, vary_t1, slope_mag
+    real(kind=dp), intent(out) :: left, right
+    real(kind=dp) :: qm, q0, qp, qpp
+    if (vary_t1 == 1) then
+       qm = face_b_get(bf, orientation, normal, edge-2, fixed); q0 = face_b_get(bf, orientation, normal, edge-1, fixed)
+       qp = face_b_get(bf, orientation, normal, edge, fixed); qpp = face_b_get(bf, orientation, normal, edge+1, fixed)
+    else
+       qm = face_b_get(bf, orientation, normal, fixed, edge-2); q0 = face_b_get(bf, orientation, normal, fixed, edge-1)
+       qp = face_b_get(bf, orientation, normal, fixed, edge); qpp = face_b_get(bf, orientation, normal, fixed, edge+1)
+    endif
+    left = q0 + 0.5_dp*face_b_tvd_slope(qm, q0, qp, slope_mag)
+    right = qp - 0.5_dp*face_b_tvd_slope(q0, qp, qpp, slope_mag)
+  end subroutine face_b_pair
+
+  ! Mignone & Del Zanna (2021) Eq. (33); the code EMF is v x B, opposite to the paper's electric field.
+  attributes(device) function uct_edge_emf(f1lo, f1hi, f2lo, f2hi, v1L, v1R, b2L, b2R, v2L, v2R, b1L, b1R) result(E)
+    type(uct_record_t), intent(in) :: f1lo, f1hi, f2lo, f2hi
+    real(kind=dp), value :: v1L, v1R, b2L, b2R, v2L, v2R, b1L, b1R
+    real(kind=dp) :: E, a1L, a1R, d1L, d1R, a2L, a2R, d2L, d2R
+    a1L = 0.5_dp*(f1lo%aL + f1hi%aL); a1R = 1.0_dp - a1L
+    d1L = 0.5_dp*(f1lo%dL + f1hi%dL); d1R = 0.5_dp*(f1lo%dR + f1hi%dR)
+    a2L = 0.5_dp*(f2lo%aL + f2hi%aL); a2R = 1.0_dp - a2L
+    d2L = 0.5_dp*(f2lo%dL + f2hi%dL); d2R = 0.5_dp*(f2lo%dR + f2hi%dR)
+    E = a1L*v1L*b2L + a1R*v1R*b2R - a2L*v2L*b1L - a2R*v2R*b1R &
+         & + d1L*b2L - d1R*b2R - d2L*b1L + d2R*b1R
+  end function uct_edge_emf
+
+  ! Owned faces (the low faces of the subgrid cells): solve once and store the fluxes and record
+  ! in the owner oct's products.
+  attributes(device) subroutine riemann_uct_owned(lx, rx, ly, ry, lz, rz, products, &
+       & nbor, thread_idx, gamma, smallr, smallc2, induction)
+    type(subgrid_3x2x2cell_primitive), intent(in) :: lx, rx
+    type(subgrid_2x3x2cell_primitive), intent(in) :: ly, ry
+    type(subgrid_2x2x3cell_primitive), intent(in) :: lz, rz
+    real(kind=dp), device :: products(1:twotondim,1:3*uct_product_fields,*)
+    integer(kind=4) :: nbor(1:subgridsize)
+    integer, value :: thread_idx
+    real(kind=dp), value :: gamma, smallr, smallc2
+    logical, value :: induction
+    integer :: work_idx, ncell, orientation, i, j, k, oct_idx, cell_idx, solver
+    type(primitive_t) :: ql, qr
+    type(conserved_t) :: flux
+    type(uct_record_t) :: record
+
+    ncell = (2*nsubgrid)**3
+    do work_idx = thread_idx, 3*ncell - 1, blockDim%x
+       orientation = work_idx/ncell
+       call index_1Dto3D(mod(work_idx, ncell), 2*nsubgrid, 2*nsubgrid, i, j, k)
+       oct_idx = nbor(1 + (1+i/2) + nsubgridp2*(1+j/2) + nsubgridp2sq*(1+k/2))
+       cell_idx = 1 + mod(i,2) + 2*mod(j,2) + 4*mod(k,2)
+       call uct_gather_face(lx, rx, ly, ry, lz, rz, orientation, i, j, k, ql, qr)
+       flux = uct_face_solve(ql, qr, gamma, smallr, smallc2, record, solver)
+       call store_uct_fluxes(lx, rx, ly, ry, lz, rz, orientation, i, j, k, ql, qr, flux, solver, &
+            & products, oct_idx, cell_idx, gamma, smallr, smallc2, induction)
+       call store_uct_record(products, cell_idx, oct_idx, orientation, record)
+    end do
+  end subroutine riemann_uct_owned
+
+  ! Store the lab-frame gas and scalar fluxes of face (i,j,k), from its face-frame flux fface,
+  ! in the owner's products.
+  attributes(device) subroutine store_uct_fluxes(lx, rx, ly, ry, lz, rz, orientation, i, j, k, ql, qr, &
+       & fface, solver, products, oct_idx, cell_idx, gamma, smallr, smallc2, induction)
+    type(subgrid_3x2x2cell_primitive), intent(in) :: lx, rx
+    type(subgrid_2x3x2cell_primitive), intent(in) :: ly, ry
+    type(subgrid_2x2x3cell_primitive), intent(in) :: lz, rz
+    integer, value :: orientation, i, j, k, oct_idx, cell_idx, solver
+    type(primitive_t), intent(in) :: ql, qr
+    type(conserved_t), intent(in) :: fface
+    real(kind=dp), device :: products(1:twotondim,1:3*uct_product_fields,*)
+    real(kind=dp), value :: gamma, smallr, smallc2
+    logical, value :: induction
+    type(conserved_t) :: flux
+    integer :: base
+#if NVAR>5+NENER
+    real(kind=dp) :: fscal(1:nscalar)
+    integer :: n
+#endif
+
+#if NVAR>5+NENER
+    call uct_scalar_fluxes(lx, rx, ly, ry, lz, rz, orientation, i, j, k, ql, qr, fface, solver, &
+         & gamma, smallr, smallc2, fscal)
+#endif
+    flux = uct_unrotate_flux(fface, orientation)
+    if (induction) then
+       flux%density = 0.0_dp; flux%momentum_x = 0.0_dp; flux%momentum_y = 0.0_dp
+       flux%momentum_z = 0.0_dp; flux%energy = 0.0_dp
+#if NVAR>5+NENER
+       fscal = 0.0_dp
+#endif
+    endif
+    base = orientation*uct_product_fields
+    products(cell_idx, base+1, oct_idx) = flux%density
+    products(cell_idx, base+2, oct_idx) = flux%momentum_x
+    products(cell_idx, base+3, oct_idx) = flux%momentum_y
+    products(cell_idx, base+4, oct_idx) = flux%momentum_z
+    products(cell_idx, base+5, oct_idx) = flux%energy
+#if NVAR>5+NENER
+    do n = 1, nscalar
+       products(cell_idx, base+5+n, oct_idx) = fscal(n)
+    end do
+#endif
+  end subroutine store_uct_fluxes
+
+  attributes(device) subroutine store_uct_record(products, cell_idx, oct_idx, orientation, record)
+    real(kind=dp), device :: products(1:twotondim,1:3*uct_product_fields,*)
+    integer, value :: cell_idx, oct_idx, orientation
+    type(uct_record_t), intent(in) :: record
+    integer :: base
+    base = orientation*uct_product_fields + uct_product_record
+    products(cell_idx, base+1, oct_idx) = record%aL
+    products(cell_idx, base+2, oct_idx) = record%dL
+    products(cell_idx, base+3, oct_idx) = record%dR
+    products(cell_idx, base+4, oct_idx) = record%vt1
+    products(cell_idx, base+5, oct_idx) = record%vt2
+    products(cell_idx, base+6, oct_idx) = record%Bn
+  end subroutine store_uct_record
+
+  attributes(device) function uct_face_record(products, nbor, orientation, normal, t1, t2) result(record)
+    real(kind=dp), device :: products(1:twotondim,1:3*uct_product_fields,*)
+    integer(kind=4) :: nbor(1:subgridsize)
+    integer, value :: orientation, normal, t1, t2
+    type(uct_record_t) :: record
+    integer :: oct_idx, cell_idx, base
+    call uct_face_owner(nbor, orientation, normal, t1, t2, oct_idx, cell_idx)
+    base = orientation*uct_product_fields + uct_product_record
+    record%aL = products(cell_idx, base+1, oct_idx)
+    record%dL = products(cell_idx, base+2, oct_idx)
+    record%dR = products(cell_idx, base+3, oct_idx)
+    record%vt1 = products(cell_idx, base+4, oct_idx)
+    record%vt2 = products(cell_idx, base+5, oct_idx)
+    record%Bn = products(cell_idx, base+6, oct_idx)
+  end function uct_face_record
+
+  ! Upwinded transverse velocity (slot 0 or 1 of the records) on both sides of an edge, from the
+  ! faces along the varying transverse index. On an AMR level (amr) an outer sample is used, and
+  ! the slope limited, only if its owner is on the level.
+  attributes(device) subroutine uct_product_velocity_pair(products, nbor, amr, first_oct, last_oct, &
+       & orientation, normal, edge, fixed, vary_t1, slot, left, right)
+    real(kind=dp), device :: products(1:twotondim,1:3*uct_product_fields,*)
+    integer(kind=4) :: nbor(1:subgridsize)
+    logical, value :: amr
+    integer, value :: first_oct, last_oct, orientation, normal, edge, fixed, vary_t1, slot
+    real(kind=dp), intent(out) :: left, right
+    real(kind=dp) :: q(0:3)
+    integer :: has(0:3)
+    integer :: field, n, oct_idx, cell_idx
+    field = orientation*uct_product_fields + uct_product_vt1 + slot
+    do n = 0, 3
+       if (vary_t1 == 1) then
+          call uct_face_owner(nbor, orientation, normal, edge-2+n, fixed, oct_idx, cell_idx)
+       else
+          call uct_face_owner(nbor, orientation, normal, fixed, edge-2+n, oct_idx, cell_idx)
+       endif
+       has(n) = 1
+       if (amr .and. (oct_idx < first_oct .or. oct_idx > last_oct)) has(n) = 0
+       q(n) = 0.0_dp
+       if (n == 1 .or. n == 2 .or. has(n) == 1) q(n) = products(cell_idx, field, oct_idx)
+    end do
+    left = q(1)
+    if (has(0) == 1) left = q(1) + 0.5_dp*vanleer_slope(q(0), q(1), q(2))
+    right = q(2)
+    if (has(3) == 1) right = q(2) - 0.5_dp*vanleer_slope(q(1), q(2), q(3))
+  end subroutine uct_product_velocity_pair
+
+  ! Cell (i,j,k) of item work_idx of the face-B index set: the cells 2..2*nsubgrid+2, then the
+  ! layers 0, 1 and 2*nsubgrid+3 in x (slab 0), y and z, which skip their own normal faces.
+  attributes(device) subroutine uct_bn_cell(work_idx, i, j, k, slab)
+    integer, value :: work_idx
+    integer, intent(out) :: i, j, k, slab
+    integer, parameter :: nc = 2*nsubgrid+1
+    integer :: w2, a, b, c, outer
+    slab = -1
+    if (work_idx < nc**3) then
+       call index_1Dto3D(work_idx, nc, nc, a, b, c)
+       i = a + 2; j = b + 2; k = c + 2
+    else
+       w2 = work_idx - nc**3
+       slab = w2/(3*nc**2)
+       call index_1Dto3D(mod(w2, 3*nc**2), 3, nc, a, b, c)
+       outer = a
+       if (a == 2) outer = 2*nsubgrid+3
+       if (slab == 0) then
+          i = outer; j = b + 2; k = c + 2
+       else if (slab == 1) then
+          i = b + 2; j = outer; k = c + 2
+       else
+          i = b + 2; j = c + 2; k = outer
+       endif
+    endif
+  end subroutine uct_bn_cell
+
+  ! Face B for the edge reconstruction from the owners' products, over the index set read by
+  ! face_b_pair and cmpcurrent_mhd: the half-step value, or t^n for a face owned by a ghost oct
+  ! (set by set_uct_ghost_face_bn).
+  attributes(device) subroutine load_uct_face_bn(products, nbor, bf, thread_idx)
+    real(kind=dp), device :: products(1:twotondim,1:3*uct_product_fields,*)
+    integer(kind=4) :: nbor(1:subgridsize)
+    type(subgrid_face_b_t), intent(inout) :: bf
+    integer, value :: thread_idx
+    integer :: work_idx, slab, i, j, k, cell_idx, oct_idx
+
+    do work_idx = thread_idx, uct_bn_cells - 1, blockDim%x
+       call uct_bn_cell(work_idx, i, j, k, slab)
+       cell_idx = 1 + mod(i,2) + 2*mod(j,2) + 4*mod(k,2)
+       oct_idx = nbor(1 + i/2 + nsubgridp2*(j/2) + nsubgridp2sq*(k/2))
+       if (slab /= 0) bf%bx(i,j,k) = products(cell_idx, uct_product_bn, oct_idx)
+       if (slab /= 1) bf%by(i,j,k) = products(cell_idx, uct_product_fields+uct_product_bn, oct_idx)
+       if (slab /= 2) bf%bz(i,j,k) = products(cell_idx, 2*uct_product_fields+uct_product_bn, oct_idx)
+    end do
+  end subroutine load_uct_face_bn
+
+  ! AMR level: the t^n face B, the mean of the values on both sides, in the Bn slot of every face a
+  ! subgrid reads that a ghost oct owns (the half-step value from interpolated cells is less
+  ! accurate). Every subgrid reading a face stores the same value, with atomic exchanges.
+  attributes(device) subroutine set_uct_ghost_face_bn(products, bold, nbor, first_oct, last_oct, thread_idx)
+    real(kind=dp), device :: products(1:twotondim,1:3*uct_product_fields,*)
+    real(kind=dp), device :: bold(1:twotondim,1:6,*)
+    integer(kind=4) :: nbor(1:subgridsize)
+    integer, value :: first_oct, last_oct, thread_idx
+    integer :: work_idx, slab, i, j, k, ib, jb, kb, cell_idx, ind, oct_idx
+    real(kind=dp) :: old
+
+    do work_idx = thread_idx, uct_bn_cells - 1, blockDim%x
+       call uct_bn_cell(work_idx, i, j, k, slab)
+       ib = mod(i,2); jb = mod(j,2); kb = mod(k,2)
+       cell_idx = 1 + ib + 2*jb + 4*kb
+       ind = 1 + i/2 + nsubgridp2*(j/2) + nsubgridp2sq*(k/2)
+       oct_idx = nbor(ind)
+       if (oct_idx >= first_oct .and. oct_idx <= last_oct) cycle
+       if (slab /= 0) old = atomicexch(products(cell_idx, uct_product_bn, oct_idx), &
+            & 0.5_dp*(bold(cell_idx, 1, oct_idx) + bold(cell_idx + 1 - 2*ib, 4, nbor(ind - (1 - ib)))))
+       if (slab /= 1) old = atomicexch(products(cell_idx, uct_product_fields+uct_product_bn, oct_idx), &
+            & 0.5_dp*(bold(cell_idx, 2, oct_idx) + bold(cell_idx + 2*(1 - 2*jb), 5, nbor(ind - nsubgridp2*(1 - jb)))))
+       if (slab /= 2) old = atomicexch(products(cell_idx, 2*uct_product_fields+uct_product_bn, oct_idx), &
+            & 0.5_dp*(bold(cell_idx, 3, oct_idx) + bold(cell_idx + 4*(1 - 2*kb), 6, nbor(ind - nsubgridp2sq*(1 - kb)))))
+    end do
+  end subroutine set_uct_ghost_face_bn
+
+  ! Gas fluxes of all subgrid faces from the owners' products, in the left_* layout of riemann_driver.
+  attributes(device) subroutine load_uct_product_fluxes(products, nbor, lx, ly, lz, thread_idx)
+    real(kind=dp), device :: products(1:twotondim,1:3*uct_product_fields,*)
+    integer(kind=4) :: nbor(1:subgridsize)
+    integer, value :: thread_idx
+    type(subgrid_3x2x2cell_primitive), intent(inout) :: lx
+    type(subgrid_2x3x2cell_primitive), intent(inout) :: ly
+    type(subgrid_2x2x3cell_primitive), intent(inout) :: lz
+    integer :: work_idx, nface, i, j, k, oct_idx, cell_idx, b
+#if NVAR>5+NENER
+    integer :: n
+#endif
+
+    nface = (2*nsubgrid+1)*(2*nsubgrid)**2
+    do work_idx = thread_idx, 3*nface - 1, blockDim%x
+       if (work_idx < nface) then
+          call index_1Dto3D(work_idx, 2*nsubgrid+1, 2*nsubgrid, i, j, k)
+          call uct_face_owner(nbor, 0, i, j, k, oct_idx, cell_idx)
+          b = 0
+          lx%density(i,j,k) = products(cell_idx, b+1, oct_idx); lx%velocity_x(i,j,k) = products(cell_idx, b+2, oct_idx)
+          lx%velocity_y(i,j,k) = products(cell_idx, b+3, oct_idx); lx%velocity_z(i,j,k) = products(cell_idx, b+4, oct_idx)
+          lx%pressure(i,j,k) = products(cell_idx, b+5, oct_idx)
+#if NVAR>5+NENER
+          do n = 1, nscalar
+             lx%scalar(i,j,k,n) = products(cell_idx, b+5+n, oct_idx)
+          end do
+#endif
+       else if (work_idx < 2*nface) then
+          call index_1Dto3D(work_idx - nface, 2*nsubgrid, 2*nsubgrid+1, i, j, k)
+          call uct_face_owner(nbor, 1, j, i, k, oct_idx, cell_idx)
+          b = uct_product_fields
+          ly%density(i,j,k) = products(cell_idx, b+1, oct_idx); ly%velocity_x(i,j,k) = products(cell_idx, b+2, oct_idx)
+          ly%velocity_y(i,j,k) = products(cell_idx, b+3, oct_idx); ly%velocity_z(i,j,k) = products(cell_idx, b+4, oct_idx)
+          ly%pressure(i,j,k) = products(cell_idx, b+5, oct_idx)
+#if NVAR>5+NENER
+          do n = 1, nscalar
+             ly%scalar(i,j,k,n) = products(cell_idx, b+5+n, oct_idx)
+          end do
+#endif
+       else
+          call index_1Dto3D(work_idx - 2*nface, 2*nsubgrid, 2*nsubgrid, i, j, k)
+          call uct_face_owner(nbor, 2, k, i, j, oct_idx, cell_idx)
+          b = 2*uct_product_fields
+          lz%density(i,j,k) = products(cell_idx, b+1, oct_idx); lz%velocity_x(i,j,k) = products(cell_idx, b+2, oct_idx)
+          lz%velocity_y(i,j,k) = products(cell_idx, b+3, oct_idx); lz%velocity_z(i,j,k) = products(cell_idx, b+4, oct_idx)
+          lz%pressure(i,j,k) = products(cell_idx, b+5, oct_idx)
+#if NVAR>5+NENER
+          do n = 1, nscalar
+             lz%scalar(i,j,k,n) = products(cell_idx, b+5+n, oct_idx)
+          end do
+#endif
+       endif
+    end do
+  end subroutine load_uct_product_fluxes
+
+  ! Edge EMFs from the owners' records.
+  attributes(device) subroutine cmp_mag_flx_uct_product(products, nbor, amr, first_oct, last_oct, &
+       & bf, slope_mag, emfx, emfy, emfz, thread_idx)
+    real(kind=dp), device :: products(1:twotondim,1:3*uct_product_fields,*)
+    integer(kind=4) :: nbor(1:subgridsize)
+    logical, value :: amr
+    integer, value :: first_oct, last_oct, slope_mag, thread_idx
+    type(subgrid_face_b_t), intent(in) :: bf
+    type(subgrid_2x3x3edge_primitive), intent(inout) :: emfx
+    type(subgrid_3x2x3edge_primitive), intent(inout) :: emfy
+    type(subgrid_3x3x2edge_primitive), intent(inout) :: emfz
+    integer :: work_idx, emf_size, I, J, K
+    type(uct_record_t) :: f1lo, f1hi, f2lo, f2hi
+    real(kind=dp) :: v1L, v1R, b2L, b2R, v2L, v2R, b1L, b1R
+
+    emf_size = (2*nsubgrid+1)**2*(2*nsubgrid)
+    do work_idx = thread_idx, 3*emf_size - 1, blockDim%x
+       if (work_idx < emf_size) then
+          call index_1Dto3D(work_idx, 2*nsubgrid+1, 2*nsubgrid+1, I, J, K)
+          f1lo = uct_face_record(products, nbor, 0, I, J-1, K)
+          f1hi = uct_face_record(products, nbor, 0, I, J, K)
+          f2lo = uct_face_record(products, nbor, 1, J, I-1, K)
+          f2hi = uct_face_record(products, nbor, 1, J, I, K)
+          call uct_product_velocity_pair(products, nbor, amr, first_oct, last_oct, 1, J, I, K, 1, 0, v1L, v1R)
+          call face_b_pair(bf, 1, J, I, K, 1, slope_mag, b2L, b2R)
+          call uct_product_velocity_pair(products, nbor, amr, first_oct, last_oct, 0, I, J, K, 1, 0, v2L, v2R)
+          call face_b_pair(bf, 0, I, J, K, 1, slope_mag, b1L, b1R)
+          emfz%edge_e(I,J,K) = uct_edge_emf(f1lo, f1hi, f2lo, f2hi, v1L, v1R, b2L, b2R, v2L, v2R, b1L, b1R)
+       else if (work_idx < 2*emf_size) then
+          call index_1Dto3D(work_idx - emf_size, 2*nsubgrid+1, 2*nsubgrid, I, J, K)
+          f1lo = uct_face_record(products, nbor, 2, K, I-1, J)
+          f1hi = uct_face_record(products, nbor, 2, K, I, J)
+          f2lo = uct_face_record(products, nbor, 0, I, J, K-1)
+          f2hi = uct_face_record(products, nbor, 0, I, J, K)
+          call uct_product_velocity_pair(products, nbor, amr, first_oct, last_oct, 0, I, K, J, 0, 1, v1L, v1R)
+          call face_b_pair(bf, 0, I, K, J, 0, slope_mag, b2L, b2R)
+          call uct_product_velocity_pair(products, nbor, amr, first_oct, last_oct, 2, K, I, J, 1, 0, v2L, v2R)
+          call face_b_pair(bf, 2, K, I, J, 1, slope_mag, b1L, b1R)
+          emfy%edge_e(I,J,K) = uct_edge_emf(f1lo, f1hi, f2lo, f2hi, v1L, v1R, b2L, b2R, v2L, v2R, b1L, b1R)
+       else
+          call index_1Dto3D(work_idx - 2*emf_size, 2*nsubgrid, 2*nsubgrid+1, I, J, K)
+          f1lo = uct_face_record(products, nbor, 1, J, I, K-1)
+          f1hi = uct_face_record(products, nbor, 1, J, I, K)
+          f2lo = uct_face_record(products, nbor, 2, K, I, J-1)
+          f2hi = uct_face_record(products, nbor, 2, K, I, J)
+          call uct_product_velocity_pair(products, nbor, amr, first_oct, last_oct, 2, K, J, I, 0, 1, v1L, v1R)
+          call face_b_pair(bf, 2, K, J, I, 0, slope_mag, b2L, b2R)
+          call uct_product_velocity_pair(products, nbor, amr, first_oct, last_oct, 1, J, K, I, 0, 1, v2L, v2R)
+          call face_b_pair(bf, 1, J, K, I, 0, slope_mag, b1L, b1R)
+          emfx%edge_e(I,J,K) = uct_edge_emf(f1lo, f1hi, f2lo, f2hi, v1L, v1R, b2L, b2R, v2L, v2R, b1L, b1R)
+       endif
+    end do
+    call syncthreads()
+  end subroutine cmp_mag_flx_uct_product
+
+  ! Candidate face c of uct_ghost_candidates: high faces of the subgrid (normal = 2*nsubgrid),
+  ! then the halo faces in uct_shell_index order.
+  attributes(device) subroutine uct_ghost_candidate(c, orientation, normal, t1, t2)
+    integer, value :: c
+    integer, intent(out) :: orientation, normal, t1, t2
+    integer, parameter :: m = 2*nsubgrid
+    integer :: s, r, perimeter
+    if (c < 3*m**2) then
+       orientation = c/m**2
+       normal = m
+       call index_1Dto2D(mod(c, m**2), m, t1, t2)
+    else
+       s = c - 3*m**2
+       orientation = s/uct_shell_faces
+       r = mod(s, uct_shell_faces)
+       normal = mod(r, m+1)
+       perimeter = r/(m+1)
+       if (perimeter < m) then
+          t1 = perimeter; t2 = -1
+       else if (perimeter < 2*m) then
+          t1 = perimeter - m; t2 = m
+       else if (perimeter < 3*m) then
+          t1 = -1; t2 = perimeter - 2*m
+       else
+          t1 = m; t2 = perimeter - 3*m
+       endif
+    endif
+  end subroutine uct_ghost_candidate
+
+  ! Solve the listed ghost-owned faces and store them in the owner's products: fluxes and record
+  ! for a high face of the subgrid, the record for a halo face.
+  attributes(device) subroutine solve_uct_ghost_faces(lx, rx, ly, ry, lz, rz, shell_left, shell_right, &
+       & products, nbor, slist, nlist, thread_idx, gamma, smallr, smallc2, induction)
+    type(subgrid_3x2x2cell_primitive), intent(in) :: lx, rx
+    type(subgrid_2x3x2cell_primitive), intent(in) :: ly, ry
+    type(subgrid_2x2x3cell_primitive), intent(in) :: lz, rz
+    type(primitive_t), intent(in) :: shell_left(0:uct_shell_total-1), shell_right(0:uct_shell_total-1)
+    real(kind=dp), device :: products(1:twotondim,1:3*uct_product_fields,*)
+    integer(kind=4) :: nbor(1:subgridsize)
+    integer, intent(in) :: slist(*)
+    integer, value :: nlist, thread_idx
+    real(kind=dp), value :: gamma, smallr, smallc2
+    logical, value :: induction
+    integer, parameter :: m = 2*nsubgrid
+    integer :: w, c, orientation, normal, t1, t2, i, j, k, oct_idx, cell_idx, base
+    integer :: solver
+    type(primitive_t) :: ql, qr
+    type(conserved_t) :: flux
+    type(uct_record_t) :: record
+    real(kind=dp) :: old
+
+    do w = thread_idx, nlist - 1, blockDim%x
+       c = slist(w+1)
+       call uct_ghost_candidate(c, orientation, normal, t1, t2)
+       call uct_face_owner(nbor, orientation, normal, t1, t2, oct_idx, cell_idx)
+       if (c < 3*m**2) then
+          if (orientation == 0) then
+             i = normal; j = t1; k = t2
+          else if (orientation == 1) then
+             i = t1; j = normal; k = t2
+          else
+             i = t1; j = t2; k = normal
+          endif
+          call uct_gather_face(lx, rx, ly, ry, lz, rz, orientation, i, j, k, ql, qr)
+       else
+          ql = uct_rotate_face(shell_left(c - 3*m**2), orientation)
+          qr = uct_rotate_face(shell_right(c - 3*m**2), orientation)
+       endif
+       flux = uct_face_solve(ql, qr, gamma, smallr, smallc2, record, solver)
+       if (c < 3*m**2) call store_uct_fluxes(lx, rx, ly, ry, lz, rz, orientation, i, j, k, ql, qr, flux, solver, &
+            & products, oct_idx, cell_idx, gamma, smallr, smallc2, induction)
+       ! Every subgrid next to the ghost oct stores this record, with the same values: atomic
+       ! exchanges keep the concurrent stores well defined.
+       base = orientation*uct_product_fields + uct_product_record
+       old = atomicexch(products(cell_idx, base+1, oct_idx), record%aL)
+       old = atomicexch(products(cell_idx, base+2, oct_idx), record%dL)
+       old = atomicexch(products(cell_idx, base+3, oct_idx), record%dR)
+       old = atomicexch(products(cell_idx, base+4, oct_idx), record%vt1)
+       old = atomicexch(products(cell_idx, base+5, oct_idx), record%vt2)
+       old = atomicexch(products(cell_idx, base+6, oct_idx), record%Bn)
+    end do
+  end subroutine solve_uct_ghost_faces
 
 #endif
 
@@ -6860,6 +7819,55 @@ contains
 #endif
   ! =========================================================================
 
+#ifndef PAPER
+#ifdef MHD
+  ! Subgrids of an AMR level with an oct of their stencil off the level (a ghost oct).
+  attributes(global) subroutine uct_ghost_list_kernel(nbor, ghost_list, ghost_count, head_idx, num_subgrids)
+    integer, device :: nbor(1:subgridsize,*)
+    integer(kind=4), device :: ghost_list(*)
+    integer(kind=4), device :: ghost_count
+    integer(kind=4), intent(in), value :: head_idx, num_subgrids
+    integer :: s, w, first_oct, last_oct, oct_idx, ghost, n
+
+    s = (blockIdx%x - 1)*blockDim%x + threadIdx%x
+    if (s > num_subgrids) return
+    first_oct = (head_idx - 1)*nsubgridtondim + 1
+    last_oct = (head_idx + num_subgrids - 1)*nsubgridtondim
+    ghost = 0
+    do w = 1, subgridsize
+       oct_idx = nbor(w, head_idx + s - 1)
+       if (oct_idx < first_oct .or. oct_idx > last_oct) ghost = 1
+    end do
+    if (ghost == 1) then
+       n = atomicadd(ghost_count, 1)
+       ghost_list(n+1) = head_idx + s - 1
+    endif
+  end subroutine uct_ghost_list_kernel
+
+  ! AMR level, after the ghost-face kernel: t^n face B of the ghost-owned faces the listed subgrids read.
+  attributes(global) subroutine uct_ghost_bn_kernel(bold, nbor, products, ghost_list, head_idx, num_subgrids)
+    real(kind=dp), device :: bold(1:twotondim,1:6,*)
+    integer, device :: nbor(1:subgridsize,*)
+    real(kind=dp), device :: products(1:twotondim,1:3*uct_product_fields,*)
+    integer(kind=4), device :: ghost_list(*)
+    integer(kind=4), intent(in), value :: head_idx, num_subgrids
+    integer(kind=4), shared :: snbor(subgridsize)
+    integer :: thread_idx, subgrid_idx, first_oct, last_oct, w
+
+    thread_idx = threadIdx%x - 1
+    subgrid_idx = ghost_list(blockIdx%x)
+    first_oct = (head_idx - 1)*nsubgridtondim + 1
+    last_oct = (head_idx + num_subgrids - 1)*nsubgridtondim
+    do w = thread_idx, subgridsize - 1, blockDim%x
+       snbor(w+1) = nbor(w+1, subgrid_idx)
+    end do
+    call syncthreads()
+    call set_uct_ghost_face_bn(products, bold, snbor, first_oct, last_oct, thread_idx)
+  end subroutine uct_ghost_bn_kernel
+
+#endif
+#endif
+
   !
   ! Fused MHD Godunov+CT kernel; working buffers live in shared memory.
 
@@ -7156,6 +8164,271 @@ contains
 
 #endif
 
+#ifndef PAPER
+#ifdef MHD
+
+  ! Solve every owned face of the level once and store the fluxes and records in products.
+  attributes(global) UCT_FACE_LB subroutine uct_face_kernel(grid, uold, bold, f, nbor, products, &
+       & head_idx, num_subgrids, gamma, smallr, smallc2, dt, dx, slope, slope_mag, &
+       & induction, constant_gravity)
+    type(oct), device :: grid(*)
+    integer, device :: nbor(1:subgridsize,*)
+    real(kind=dp), device :: constant_gravity(1:3)
+    real(kind=dp), device :: f(1:twotondim,1:ndim,*)
+    real(kind=dp), device :: uold(1:twotondim,1:nvar,*)
+    real(kind=dp), device :: bold(1:twotondim,1:6,*)
+    real(kind=dp), device :: products(1:twotondim,1:3*uct_product_fields,*)
+    integer(kind=4), intent(in), value :: head_idx, num_subgrids
+    real(kind=dp), intent(in), value :: gamma, smallr, smallc2, dt, dx
+    integer, intent(in), value :: slope, slope_mag
+    logical, intent(in), value :: induction
+    type(uct_face_smem_t), shared :: smem(*)
+    integer(kind=4), shared :: snbor(subgridsize)
+    real(kind=dp) :: dtdx, smallc
+    integer :: block_idx, thread_idx, w
+
+    block_idx = blockIdx%x - 1
+    thread_idx = threadIdx%x - 1
+    if (block_idx >= num_subgrids) return
+    dtdx = dt/dx
+    smallc = sqrt(smallc2)
+    do w = thread_idx, subgridsize - 1, blockDim%x
+       snbor(w+1) = nbor(w+1, head_idx + block_idx)
+    end do
+    call syncthreads()
+
+    associate(local_subgrid => smem(1)%local_subgrid, &
+#if NVAR>5+NENER
+         & scalar_subgrid => smem(1)%scalar_subgrid, &
+#endif
+         & left_interfaces_x => smem(1)%left_interfaces_x, right_interfaces_x => smem(1)%right_interfaces_x, &
+         & left_interfaces_y => smem(1)%left_interfaces_y, right_interfaces_y => smem(1)%right_interfaces_y, &
+         & left_interfaces_z => smem(1)%left_interfaces_z, right_interfaces_z => smem(1)%right_interfaces_z, &
+         & bf => smem(1)%bf)
+
+    call subgrid_conserved_2_primitive(grid, uold, bold, f, constant_gravity, snbor, &
+#if NVAR>5+NENER
+         & scalar_subgrid, &
+#endif
+         & bf, thread_idx, gamma, smallr, smallc2, dt, .false., local_subgrid, nbox=2*nsubgrid+3)
+
+    call trace_3d(local_subgrid, thread_idx, &
+#if NVAR>5+NENER
+         & scalar_sub=scalar_subgrid, &
+#endif
+         & bf=bf, smallc=smallc, slope_mag=slope_mag, induction=induction, &
+         & left_interfaces_x=left_interfaces_x, right_interfaces_x=right_interfaces_x, &
+         & left_interfaces_y=left_interfaces_y, right_interfaces_y=right_interfaces_y, &
+         & left_interfaces_z=left_interfaces_z, right_interfaces_z=right_interfaces_z, &
+         & gamma=gamma, smallr=smallr, smallc2=smallc2, dtdx=dtdx, slope=slope, owned_only=.true.)
+
+    call riemann_uct_owned(left_interfaces_x, right_interfaces_x, left_interfaces_y, right_interfaces_y, &
+         & left_interfaces_z, right_interfaces_z, products, snbor, &
+         & thread_idx, gamma, smallr, smallc2, induction)
+
+    end associate
+  end subroutine uct_face_kernel
+
+  ! AMR level: the faces a listed subgrid reads whose owner is a ghost oct. Every subgrid next to
+  ! the ghost oct solves them from the same cells, so the values stored are identical.
+  attributes(global) UCT_GHOST_LB subroutine uct_ghost_face_kernel(grid, uold, bold, f, nbor, products, &
+       & ghost_list, head_idx, num_subgrids, gamma, smallr, smallc2, dt, dx, slope, slope_mag, &
+       & induction, constant_gravity)
+    type(oct), device :: grid(*)
+    integer, device :: nbor(1:subgridsize,*)
+    real(kind=dp), device :: constant_gravity(1:3)
+    real(kind=dp), device :: f(1:twotondim,1:ndim,*)
+    real(kind=dp), device :: uold(1:twotondim,1:nvar,*)
+    real(kind=dp), device :: bold(1:twotondim,1:6,*)
+    real(kind=dp), device :: products(1:twotondim,1:3*uct_product_fields,*)
+    integer(kind=4), device :: ghost_list(*)
+    integer(kind=4), intent(in), value :: head_idx, num_subgrids
+    real(kind=dp), intent(in), value :: gamma, smallr, smallc2, dt, dx
+    integer, intent(in), value :: slope, slope_mag
+    logical, intent(in), value :: induction
+    type(uct_ghost_smem_t), shared :: smem(*)
+    integer(kind=4), shared :: snbor(subgridsize)
+    integer, shared :: slist(uct_ghost_candidates), scount
+    real(kind=dp) :: dtdx, smallc
+    integer :: thread_idx, subgrid_idx, first_oct, last_oct, w, c, n
+    integer :: orientation, normal, t1, t2, oct_idx, cell_idx
+
+    thread_idx = threadIdx%x - 1
+    subgrid_idx = ghost_list(blockIdx%x)
+    dtdx = dt/dx
+    smallc = sqrt(smallc2)
+    first_oct = (head_idx - 1)*nsubgridtondim + 1
+    last_oct = (head_idx + num_subgrids - 1)*nsubgridtondim
+    if (thread_idx == 0) scount = 0
+    do w = thread_idx, subgridsize - 1, blockDim%x
+       snbor(w+1) = nbor(w+1, subgrid_idx)
+    end do
+    call syncthreads()
+    do c = thread_idx, uct_ghost_candidates - 1, blockDim%x
+       call uct_ghost_candidate(c, orientation, normal, t1, t2)
+       call uct_face_owner(snbor, orientation, normal, t1, t2, oct_idx, cell_idx)
+       if (oct_idx < first_oct .or. oct_idx > last_oct) then
+          n = atomicadd(scount, 1)
+          slist(n+1) = c
+       endif
+    end do
+    call syncthreads()
+    if (scount == 0) return
+
+    associate(local_subgrid => smem(1)%f%local_subgrid, &
+#if NVAR>5+NENER
+         & scalar_subgrid => smem(1)%f%scalar_subgrid, &
+#endif
+         & left_interfaces_x => smem(1)%f%left_interfaces_x, right_interfaces_x => smem(1)%f%right_interfaces_x, &
+         & left_interfaces_y => smem(1)%f%left_interfaces_y, right_interfaces_y => smem(1)%f%right_interfaces_y, &
+         & left_interfaces_z => smem(1)%f%left_interfaces_z, right_interfaces_z => smem(1)%f%right_interfaces_z, &
+         & bf => smem(1)%f%bf)
+
+    call subgrid_conserved_2_primitive(grid, uold, bold, f, constant_gravity, snbor, &
+#if NVAR>5+NENER
+         & scalar_subgrid, &
+#endif
+         & bf, thread_idx, gamma, smallr, smallc2, dt, .false., local_subgrid)
+
+    call trace_3d(local_subgrid, thread_idx, &
+#if NVAR>5+NENER
+         & scalar_sub=scalar_subgrid, &
+#endif
+         & bf=bf, smallc=smallc, slope_mag=slope_mag, induction=induction, &
+         & left_interfaces_x=left_interfaces_x, right_interfaces_x=right_interfaces_x, &
+         & left_interfaces_y=left_interfaces_y, right_interfaces_y=right_interfaces_y, &
+         & left_interfaces_z=left_interfaces_z, right_interfaces_z=right_interfaces_z, &
+         & gamma=gamma, smallr=smallr, smallc2=smallc2, dtdx=dtdx, slope=slope, &
+         & shell_left=smem(1)%shell_left, shell_right=smem(1)%shell_right)
+
+    call solve_uct_ghost_faces(left_interfaces_x, right_interfaces_x, left_interfaces_y, right_interfaces_y, &
+         & left_interfaces_z, right_interfaces_z, smem(1)%shell_left, smem(1)%shell_right, &
+         & products, snbor, slist, scount, thread_idx, gamma, smallr, smallc2, induction)
+
+    end associate
+  end subroutine uct_ghost_face_kernel
+
+  ! Edge EMFs and the conservative update from the face products, when levelmin = levelmax.
+  attributes(global) UCT_UPDATE_LB subroutine uct_update_kernel(unew, bnew, nbor, products, &
+       & head_idx, num_subgrids, dt, dx, slope_mag, etamag)
+    real(kind=dp), device :: unew(1:twotondim,1:nvar,*)
+    real(kind=dp), device :: bnew(1:twotondim,1:6,*)
+    integer(kind=4), device :: nbor(1:subgridsize,*)
+    real(kind=dp), device :: products(1:twotondim,1:3*uct_product_fields,*)
+    integer(kind=4), intent(in), value :: head_idx, num_subgrids
+    real(kind=dp), intent(in), value :: dt, dx, etamag
+    integer, intent(in), value :: slope_mag
+    type(uct_update_smem_t), shared :: smem(*)
+    integer(kind=4), shared :: snbor(subgridsize)
+    integer :: block_idx, thread_idx, w
+
+    block_idx = blockIdx%x - 1
+    thread_idx = threadIdx%x - 1
+    if (block_idx >= num_subgrids) return
+    do w = thread_idx, subgridsize - 1, blockDim%x
+       snbor(w+1) = nbor(w+1, head_idx + block_idx)
+    end do
+    call syncthreads()
+
+    associate(left_interfaces_x => smem(1)%left_interfaces_x, &
+         & left_interfaces_y => smem(1)%left_interfaces_y, left_interfaces_z => smem(1)%left_interfaces_z, &
+         & bf => smem(1)%bf, emfx => smem(1)%emfx, emfy => smem(1)%emfy, emfz => smem(1)%emfz)
+
+    call load_uct_face_bn(products, snbor, bf, thread_idx)
+    call load_uct_product_fluxes(products, snbor, &
+         & left_interfaces_x, left_interfaces_y, left_interfaces_z, thread_idx)
+    call syncthreads()
+
+    call cmp_mag_flx_uct_product(products, snbor, .false., 0, 0, bf, slope_mag, &
+         & emfx, emfy, emfz, thread_idx)
+
+    if (etamag > 0.0_dp) then
+       call cmpcurrent_mhd(bf, emfx, emfy, emfz, etamag, dx, thread_idx)
+    endif
+
+    call conservative_update(unew, bnew, snbor, left_interfaces_x, left_interfaces_y, left_interfaces_z, &
+         & emfx, emfy, emfz, thread_idx, dt/dx)
+
+    end associate
+  end subroutine uct_update_kernel
+
+  ! As uct_update_kernel, when levelmax > levelmin: the faces owned by ghost octs keep their t^n
+  ! field (uct_ghost_bn_kernel), the fluxes and EMFs next to refined cells are zeroed, and above
+  ! levelmin the coarser cells are corrected.
+  attributes(global) UCT_AMR_UPDATE_LB subroutine uct_update_amr_kernel(grid, unew, bnew, father, nbor, &
+       & products, head_idx, num_subgrids, ngridmax, ilevel, levelmin, levelmax, dt, dx, slope_mag, etamag)
+    type(oct), device :: grid(*)
+    integer, device :: father(*)
+    real(kind=dp), device :: unew(1:twotondim,1:nvar,*)
+    real(kind=dp), device :: bnew(1:twotondim,1:6,*)
+    integer(kind=4), device :: nbor(1:subgridsize,*)
+    real(kind=dp), device :: products(1:twotondim,1:3*uct_product_fields,*)
+    integer(kind=4), intent(in), value :: head_idx, num_subgrids
+    integer, intent(in), value :: ngridmax, ilevel, levelmin, levelmax
+    real(kind=dp), intent(in), value :: dt, dx, etamag
+    integer, intent(in), value :: slope_mag
+    type(uct_update_smem_t), shared :: smem(*)
+    integer(kind=4), shared :: snbor(subgridsize)
+    logical(kind=1), shared :: refined(1:2*nsubgrid+2, 1:2*nsubgrid+2, 1:2*nsubgrid+2)
+    integer :: block_idx, thread_idx, w, i, j, k, oct_idx, first_oct, last_oct, coarse
+    real(kind=dp) :: dtdx
+
+    block_idx = blockIdx%x - 1
+    thread_idx = threadIdx%x - 1
+    if (block_idx >= num_subgrids) return
+    dtdx = dt/dx
+    first_oct = (head_idx - 1)*nsubgridtondim + 1
+    last_oct = (head_idx + num_subgrids - 1)*nsubgridtondim
+    coarse = 0
+    do w = thread_idx, subgridsize - 1, blockDim%x
+       snbor(w+1) = nbor(w+1, head_idx + block_idx)
+       if (snbor(w+1) > ngridmax) coarse = 1
+    end do
+    coarse = syncthreads_or(coarse)
+    if (ilevel < levelmax) then
+       do w = thread_idx, (2*nsubgrid+2)**3 - 1, blockDim%x
+          call index_1Dto3D(w, 2*nsubgrid+2, 2*nsubgrid+2, i, j, k)
+          i = i + 1; j = j + 1; k = k + 1
+          oct_idx = snbor(1 + i/2 + nsubgridp2*(j/2) + nsubgridp2sq*(k/2))
+          refined(i,j,k) = grid(oct_idx)%refined(1 + mod(i,2) + 2*mod(j,2) + 4*mod(k,2))
+       end do
+    endif
+
+    associate(left_interfaces_x => smem(1)%left_interfaces_x, &
+         & left_interfaces_y => smem(1)%left_interfaces_y, left_interfaces_z => smem(1)%left_interfaces_z, &
+         & bf => smem(1)%bf, emfx => smem(1)%emfx, emfy => smem(1)%emfy, emfz => smem(1)%emfz)
+
+    call load_uct_face_bn(products, snbor, bf, thread_idx)
+    call load_uct_product_fluxes(products, snbor, &
+         & left_interfaces_x, left_interfaces_y, left_interfaces_z, thread_idx)
+    call syncthreads()
+
+    call cmp_mag_flx_uct_product(products, snbor, .true., first_oct, last_oct, bf, slope_mag, &
+         & emfx, emfy, emfz, thread_idx)
+
+    if (etamag > 0.0_dp) then
+       call cmpcurrent_mhd(bf, emfx, emfy, emfz, etamag, dx, thread_idx)
+    endif
+
+    if (ilevel < levelmax) then
+       call zero_fine_fluxes(refined, left_interfaces_x, left_interfaces_y, left_interfaces_z, thread_idx)
+       call zero_fine_emf(refined, emfx, emfy, emfz, thread_idx)
+    endif
+
+    call conservative_update(unew, bnew, snbor, left_interfaces_x, left_interfaces_y, left_interfaces_z, &
+         & emfx, emfy, emfz, thread_idx, dtdx)
+
+    ! Only subgrids next to a coarser cell have a coarse correction.
+    if (ilevel > levelmin .and. coarse /= 0) then
+       call coarse_cell_update(grid, unew, bnew, father, snbor, left_interfaces_x, left_interfaces_y, left_interfaces_z, &
+            & emfx, emfy, emfz, thread_idx, ngridmax, dtdx)
+    endif
+
+    end associate
+  end subroutine uct_update_amr_kernel
+
+#endif
+#endif
 #ifdef MHD
   ! One substep or stage of the non-ideal MHD update. As in the Godunov step, the energy fluxes
   ! use the EMF before the edges of refined cells are zeroed. With cf, coarse_b exchanges the

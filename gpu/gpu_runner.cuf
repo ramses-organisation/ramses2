@@ -57,6 +57,14 @@ module gpu_runner
   real(kind=8), device, allocatable, dimension(:) :: rt_star_nph, rt_star_dtl
 #endif
 
+#if defined(MHD) && !defined(PAPER)
+  !> UCT-HLLD face products (on AMR levels also the faces owned by ghost octs, after ngridmax)
+  real(kind=dp), device, allocatable, dimension(:,:,:) :: uct_products
+  !> Subgrids of an AMR level with a ghost oct in their stencil
+  integer(kind=4), device, allocatable, dimension(:) :: uct_ghost_list
+  integer(kind=4), device :: uct_ghost_count
+#endif
+
   !> Arrays to hold Turbulent acceleration fields and spectra on the device,
   !> the last ones in slot iturb_last and the next ones in slot 3-iturb_last
   real(kind=8), device, allocatable, dimension(:,:,:,:,:) :: afield_d
@@ -864,6 +872,13 @@ contains
 #endif
 #ifdef MHD
     use hydro_device, only: mhd_smem_t
+#ifndef PAPER
+    use hydro_device, only: uct_face_kernel, uct_update_kernel, uct_update_amr_kernel, &
+         & uct_ghost_list_kernel, uct_ghost_face_kernel, uct_ghost_bn_kernel, uct_threads, uct_ghost_threads, &
+         & uct_ghost_smem_t, uct_face_smem_t, uct_update_smem_t, uct_product_fields
+    use hydro_device, only: uct_riemann_d
+    use hydro_parameters, only: solver_uct_hlld, solver_uct_llf, solver_uct_hll
+#endif
 #else
 #ifndef PAPER
     use hydro_device, only: hydro_smem_t
@@ -883,6 +898,13 @@ contains
     integer :: istat
     integer(kind=4) :: shmem_bytes
     type(mhd_smem_t) :: smem_probe
+#ifndef PAPER
+    type(uct_ghost_smem_t) :: uct_ghost_smem_probe
+    type(uct_face_smem_t) :: uct_face_smem_probe
+    type(uct_update_smem_t) :: uct_update_smem_probe
+    integer(kind=4) :: num_ghost
+    integer :: nbuf
+#endif
 #else
 #ifndef PAPER
     integer :: istat
@@ -929,6 +951,12 @@ contains
     if(nsubgrid == 1)threads_per_block = 64
     if(nsubgrid == 2)threads_per_block = 256
 #ifdef MHD
+    if(riemann == solver_uct_hlld .or. riemann == solver_uct_llf .or. riemann == solver_uct_hll)then
+       uct_riemann_d = riemann
+       call gpu_godunov_uct()
+       call nvtxEndRange()
+       return
+    endif
     shmem_bytes = storage_size(smem_probe) / 8
     istat = cudaFuncSetAttribute(hydro_integrator_kernel, &
          & cudaFuncAttributeMaxDynamicSharedMemorySize, shmem_bytes)
@@ -988,6 +1016,78 @@ contains
     call GPU_Error_Check(__FILE__, __LINE__)
 #endif
     call nvtxEndRange()
+
+#if defined(MHD) && !defined(PAPER)
+  contains
+
+    ! UCT-HLLD: each face is solved by the subgrid that owns it (its low faces), and the edges and
+    ! the update use the stored fluxes and records. Above levelmin, the faces owned by ghost octs
+    ! (after ngridmax in the buffer) are solved by the subgrids next to them.
+    subroutine gpu_godunov_uct()
+      nbuf = sim%m%ngridmax + sim%m%ncachemax
+      if(.not. allocated(uct_products))then
+         allocate(uct_products(1:twotondim,1:3*uct_product_fields,1:nbuf), stat=istat)
+         if(istat /= 0)then
+            write(*,*)'gpu_godunov: cannot allocate the UCT face buffer, ', &
+                 & int(nbuf,8)*twotondim*3*uct_product_fields*storage_size(1.0_dp)/8,' bytes'
+            error stop 'Reduce ngridmax or ncachemax, or use riemann=hlld'
+         endif
+         ! The atomic stores of the ghost-owned faces read the old values.
+         uct_products = 0.0_dp
+      endif
+      shmem_bytes = storage_size(uct_face_smem_probe) / 8
+      istat = cudaFuncSetAttribute(uct_face_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, shmem_bytes)
+      call check_smem(istat, shmem_bytes)
+      call uct_face_kernel<<<num_blocks, uct_threads, shmem_bytes>>>(grid, uold, bold, f, nbor, &
+           & uct_products, head_idx, num_subgrids, gamma, smallr, smallc2, dt, dx, &
+           & slope, slope_mag, induction, constant_gravity)
+      call GPU_Error_Check(__FILE__, __LINE__)
+      if(ilevel > sim%r%levelmin)then
+         if(.not. allocated(uct_ghost_list))allocate(uct_ghost_list(1:sim%m%ngridmax/nsubgridtondim+1))
+         uct_ghost_count = 0
+         call uct_ghost_list_kernel<<<(num_subgrids+127)/128, 128>>>(nbor, uct_ghost_list, uct_ghost_count, &
+              & head_idx, num_subgrids)
+         call GPU_Error_Check(__FILE__, __LINE__)
+         num_ghost = uct_ghost_count
+         if(num_ghost > 0)then
+            shmem_bytes = storage_size(uct_ghost_smem_probe) / 8
+            istat = cudaFuncSetAttribute(uct_ghost_face_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, shmem_bytes)
+            call check_smem(istat, shmem_bytes)
+            call uct_ghost_face_kernel<<<num_ghost, uct_ghost_threads, shmem_bytes>>>(grid, uold, bold, f, nbor, &
+                 & uct_products, uct_ghost_list, head_idx, num_subgrids, gamma, smallr, smallc2, dt, dx, &
+                 & slope, slope_mag, induction, constant_gravity)
+            call GPU_Error_Check(__FILE__, __LINE__)
+            call uct_ghost_bn_kernel<<<num_ghost, 128>>>(bold, nbor, uct_products, uct_ghost_list, &
+                 & head_idx, num_subgrids)
+            call GPU_Error_Check(__FILE__, __LINE__)
+         endif
+      endif
+      shmem_bytes = storage_size(uct_update_smem_probe) / 8
+      if(sim%r%levelmin == sim%r%nlevelmax)then
+         istat = cudaFuncSetAttribute(uct_update_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, shmem_bytes)
+         call check_smem(istat, shmem_bytes)
+         call uct_update_kernel<<<num_blocks, uct_threads, shmem_bytes>>>(unew, bnew, nbor, uct_products, &
+              & head_idx, num_subgrids, dt, dx, slope_mag, etamag)
+      else
+         istat = cudaFuncSetAttribute(uct_update_amr_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, shmem_bytes)
+         call check_smem(istat, shmem_bytes)
+         call uct_update_amr_kernel<<<num_blocks, uct_threads, shmem_bytes>>>(grid, unew, bnew, father, &
+              & nbor, uct_products, head_idx, num_subgrids, sim%m%ngridmax, ilevel, sim%r%levelmin, &
+              & sim%r%nlevelmax, dt, dx, slope_mag, etamag)
+      endif
+      call GPU_Error_Check(__FILE__, __LINE__)
+    end subroutine gpu_godunov_uct
+
+    subroutine check_smem(status, nbytes)
+      integer, intent(in) :: status
+      integer(kind=4), intent(in) :: nbytes
+      if(status /= cudaSuccess)then
+         write(*,*)'gpu_godunov: cudaFuncSetAttribute(MaxDynamicSharedMemorySize=',nbytes, &
+              & ') failed: ',cudaGetErrorString(status)
+         error stop
+      endif
+    end subroutine check_smem
+#endif
 
   end subroutine gpu_godunov
 
