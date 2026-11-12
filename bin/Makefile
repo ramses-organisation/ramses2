@@ -199,7 +199,6 @@ ifeq ($(COMPILER),NVHPC)
    ifneq ($(CUB_SCAN_REFINE),0)
       DEFINES += -DCUB_SCAN_REFINE
    endif
-   # GPU_SM (e.g. 90 for sm_90) lets the source pick per-architecture tuning
    GPU_SM := $(shell echo '$(CUDA_ARCH)' | sed -nE 's/^sm_([0-9]+)[af]?$$/\1/p')
    ifneq ($(GPU_SM),)
       DEFINES += -DGPU_SM=$(GPU_SM)
@@ -235,10 +234,19 @@ endif
 #############################################################################
 # Metal compiler (Apple Silicon, always NPRE=4/float32)
 ifeq ($(COMPILER),METAL)
-   # _METAL define gates the Metal path in CPU source files.
    # NPRE=4 is hardcoded: Apple GPU has no float64.
    # No MPI support.
    DEFINES     += -D_METAL -DNPRE=4 -DWITHOUTMPI
+   # Metal kernels support NSUBGRID=1 (hydro) and NSUBGRID=2 (MHD)
+   ifeq ($(MHD),1)
+      ifneq ($(NSUBGRID),2)
+         $(error COMPILER=METAL with MHD=1 requires NSUBGRID=2)
+      endif
+   else
+      ifneq ($(NSUBGRID),1)
+         $(error COMPILER=METAL requires NSUBGRID=1 (NSUBGRID=2 with MHD=1))
+      endif
+   endif
    FFLAGS       = -cpp $(DEFINES)
    F90          = gfortran -ffree-line-length-none -fimplicit-none
    FC           = gfortran -ffree-line-length-none -fimplicit-none
@@ -252,7 +260,7 @@ ifeq ($(COMPILER),METAL)
    METAL_PATH   = ../metal
    METAL_KPATH  = ../metal/kernels
    CXX          = xcrun clang++
-   CXXFLAGS     = -std=c++17 -ObjC++ -fobjc-arc -O2 -I$(METAL_PATH)
+   CXXFLAGS     = -std=c++17 -ObjC++ -fobjc-arc -O2 -I$(METAL_PATH) -DNSUBGRID=$(NSUBGRID)
    ifeq ($(MHD),1)
       CXXFLAGS += -DMHD
    endif
@@ -264,7 +272,7 @@ ifeq ($(COMPILER),METAL)
    endif
    METALC       = xcrun -sdk macosx metal
    METALLIB     = xcrun -sdk macosx metallib
-   METALFLAGS   = -std=metal3.1 -O2 -DNDIM=$(NDIM) "-DNVAR=($(NVAR))" -I$(METAL_PATH) -I$(METAL_KPATH)
+   METALFLAGS   = -std=metal3.1 -O2 -DNDIM=$(NDIM) "-DNVAR=($(NVAR))" -DNSUBGRID=$(NSUBGRID) -I$(METAL_PATH) -I$(METAL_KPATH)
    ifeq ($(DEBUG),1)
       METALFLAGS += -gline-tables-only -frecord-sources
    endif

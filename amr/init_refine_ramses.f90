@@ -230,12 +230,13 @@ subroutine init_refine_ramses(s,ilevel,ncpu_file,levelmin_file,nlevelmax_file,no
   ! the initial AMR grid.
   !--------------------------------------------------------------
   use mdl_module, only: mdl_abort
-  use amr_parameters, only: nhilbert, ndim, twotondim, nvector, flen
+  use amr_parameters, only: nhilbert, ndim, twotondim, nvector, flen, nsubgrid
   use input_hydro_condinit_module, only: input_hydro_vecpot, cons_from_prim
   use hydro_parameters, only: nvar, nprim, nener, ie
   use ramses_commons, only: ramses_t
   use hash
   use hilbert
+  use init_refine_basegrid_module, only: check_subgrid
   implicit none
   type(ramses_t)::s
   integer::ilevel,ncpu_file
@@ -247,7 +248,7 @@ subroutine init_refine_ramses(s,ilevel,ncpu_file,levelmin_file,nlevelmax_file,no
   ! Local variables
   integer::icpu,ilun
   integer(kind=8)::iskip_amr=0_8,iskip_hydro=0_8,iskip_grav=0_8
-  integer::i,n,ind,istart,iend,noct_tmp,ilev,ioct,idim,i1,j1,k1
+  integer::i,n,ind,istart,iend,noct_tmp,idim,i1,j1,k1
   integer::igrid,igrid_start,ileft,iright
   integer(kind=8)::nleft,nright
   character(LEN=flen)::file_params,file_amr,file_hydro,file_grav
@@ -255,14 +256,13 @@ subroutine init_refine_ramses(s,ilevel,ncpu_file,levelmin_file,nlevelmax_file,no
   logical::clean
 
   integer(kind=8),dimension(1:ncpu_file)::noct_cum
+  integer(kind=8)::nblock
   integer(kind=8),dimension(1:s%g%ncpu)::ntarget_cum
 
   integer(kind=8),dimension(1:nhilbert)::hk
   integer(kind=8),dimension(1:ndim)::ix
   integer(kind=8),dimension(0:ndim)::hash_key
-  integer(kind=8),dimension(1:nhilbert,1:s%r%nlevelmax)::key_ref
-  integer(kind=8),dimension(1:nhilbert)::coarse_key,one_key
-  integer,dimension(1:s%r%nlevelmax)::n_same,npatch
+  integer(kind=8),dimension(1:nhilbert)::one_key
   integer(kind=8)::ipos
 
   integer,dimension(1:ndim)::ckey
@@ -302,10 +302,12 @@ subroutine init_refine_ramses(s,ilevel,ncpu_file,levelmin_file,nlevelmax_file,no
   end do
 
   !------------------------------------------
-  ! New cumulative numbers of octs per cpu
+  ! New cumulative numbers of octs per cpu,
+  ! in whole blocks of nsubgrid**ndim octs
   !------------------------------------------
+  nblock=int(nsubgrid,kind=8)**ndim
   do icpu=1,g%ncpu
-     ntarget_cum(icpu)=int(dble(icpu)*dble(noct_cum(ncpu_file))/dble(g%ncpu),kind=8)
+     ntarget_cum(icpu)=int(dble(icpu)*dble(noct_cum(ncpu_file)/nblock)/dble(g%ncpu),kind=8)*nblock
   end do
 
   if(g%myid>1)then
@@ -445,39 +447,15 @@ subroutine init_refine_ramses(s,ilevel,ncpu_file,levelmin_file,nlevelmax_file,no
   end do
   m%ifree=m%noct_used+1
 
+  ! Check that the level is made of complete blocks
+  call check_subgrid(s,ilevel)
+
   if(r%hydro)then
      ! Compute initial magnetic field
      call input_hydro_vecpot(r,g,m,ilevel)
      ! Convert primitive to conservative
      call cons_from_prim(r,g,m,ilevel)
   endif
-
-  !-----------
-  ! Super-octs
-  !-----------
-  do ilev=1,ilevel
-     npatch(ilev)=twotondim**ilev
-  end do
-  ilev=ilevel
-  n_same=0
-  key_ref=0
-  key_ref(1,1:r%nlevelmax)=-1
-  do ioct=m%head(ilev),m%tail(ilev)
-     m%grid(ioct)%superoct=1
-     coarse_key(1:nhilbert)=m%grid(ioct)%hkey(1:nhilbert)
-     do i=1,MIN(ilev-1,r%nsuperoct)
-        coarse_key(1:nhilbert)=coarsen_key(coarse_key(1:nhilbert),ilev-1) ! ilev-1 used to speed up only
-        if(eq_keys(coarse_key(1:nhilbert),key_ref(1:nhilbert,i)))then
-           n_same(i)=n_same(i)+1
-        else
-           n_same(i)=1
-           key_ref(1:nhilbert,i)=coarse_key(1:nhilbert)
-        endif
-        if(n_same(i).EQ.npatch(i))then
-           m%grid(ioct-npatch(i)+1:ioct)%superoct=npatch(i)
-        endif
-     end do
-  end do
 
 !!$  !---------------------
 !!$  ! Clean and dirty octs

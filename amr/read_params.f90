@@ -91,9 +91,6 @@ subroutine m_read_params(pst)
   ! Tracer parameters
   character(LEN=32)::tracer_kick_pdf='piecewise_skew_uniform' ! Tracer kick PDF
 
-  ! Number of superoct levels
-  integer::nsuperoct=0
-
   ! MPI domain overloading
   integer::overload=1
 
@@ -609,7 +606,7 @@ subroutine m_read_params(pst)
   ! Global run parameter
   namelist/run_params/cosmo,pic,poisson,hydro,rt,cr &
        & ,verbose,debug,nrestart,ncontrol,nstepmax,nsubcycle,nremap &
-       & ,static_mesh,static_gas,geom,overload,nsuperoct &
+       & ,static_mesh,static_gas,geom,overload &
        & ,clump_only
   ! Output parameters
   namelist/output_params/foutput,aout,tout,output_mode &
@@ -908,7 +905,6 @@ subroutine m_read_params(pst)
   !--------------------------------------------------
   levelmin=MAX(levelmin,1)
   nlevelmax=levelmax
-  nsuperoct=MIN(nsuperoct,5)
   nml_ok=.true.
   if(levelmin<1)then
      write(*,*)'Error in the namelist:'
@@ -1604,7 +1600,6 @@ subroutine m_read_params(pst)
   s%r%static_gas=static_gas
   s%r%geom=geom
   s%r%overload=overload
-  s%r%nsuperoct=nsuperoct
   s%r%clump_only=clump_only
 
   s%r%noutput=noutput

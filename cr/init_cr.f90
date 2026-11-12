@@ -28,6 +28,7 @@ end subroutine r_init_cr
 !###############################################
 !###############################################
 subroutine init_cr(r,m)
+  use amr_parameters, only: nsubgrid
   use amr_commons, only: run_t,mesh_t
   implicit none
   type(run_t)::r
@@ -35,12 +36,7 @@ subroutine init_cr(r,m)
 
   ! Initialise workspace for hydro kernels
   associate(h => m%cr_w)
-    call h%kernel_1%init(2)
-    if(r%nsuperoct>0) call h%kernel_2%init(4)
-    if(r%nsuperoct>1) call h%kernel_4%init(8)
-    if(r%nsuperoct>2) call h%kernel_8%init(16)
-    if(r%nsuperoct>3) call h%kernel_16%init(32)
-    if(r%nsuperoct>4) call h%kernel_32%init(64)
+    call h%kernel%init(2*nsubgrid)
   end associate
 
 end subroutine init_cr

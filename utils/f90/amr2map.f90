@@ -506,7 +506,7 @@ contains
     integer       :: i,n
     integer       :: iargc
     character(len=4)   :: opt
-    character(len=128) :: arg
+    character(len=flen) :: arg
     LOGICAL       :: bad, ok
     real(kind=8)  :: xcen=0.5,ycen=0.5,zcen=0.5,rad=0
 
@@ -548,6 +548,7 @@ contains
        print *, ' '
        print *, ' maxi : 0 = average along line of sight (default)'
        print *, ' maxi : 1 = maximum along line of sight'
+       print *, '        (always 1 for type -1 and 0)'
        stop
     end if
 
@@ -610,6 +611,8 @@ contains
 
     do_max=.false.
     if(domax==1)do_max=.true.
+    ! Refinement level and cpu number are never averaged
+    if(type==0.or.type==-1)do_max=.true.
     do_grav=.false.
     if(dograv==1)do_grav=.true.
     do_peak=.false.
@@ -637,7 +640,6 @@ contains
     !-----------------------------------------------
     ! Read RAMSES parameters file
     !-----------------------------------------------
-    character(LEN=128)::nomfich
     integer::ilun,ilevel,noutput,skip
     integer::nfile,ncpu
 
@@ -693,11 +695,11 @@ function check_ramses_exist(repository)
   ! Check that RAMSES files are there
   !-----------------------------------------------
   logical::check_ramses_exist
-  character(len=80)::repository
+  character(len=*)::repository
   integer::ipos
   character(LEN=5)::char
-  character(LEN=128)::nomfich
-  character(LEN=128)::nomfich_grav
+  character(LEN=len(repository)+16)::nomfich
+  character(LEN=len(repository)+16)::nomfich_grav
   logical::ok,ok_hydro,ok_grav
 
   check_ramses_exist=.true.

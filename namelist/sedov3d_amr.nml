@@ -6,7 +6,7 @@ make NDIM=3 COMPILER=NVHPC HYDRO=1
 
 Compile for the CPU using:
 module load openmpi/gcc/4.1.8
-make NDIM=3 MPI=1 HYDRO=1
+make NDIM=3 MPI=1 HYDRO=1 NSUBGRID=4
 
 &RUN_PARAMS
 hydro=.true.
@@ -15,7 +15,6 @@ nrestart=0
 nremap=0
 nsubcycle=10*1
 verbose=.false.
-nsuperoct=2
 verbose=.false.
 nstepmax=50
 /

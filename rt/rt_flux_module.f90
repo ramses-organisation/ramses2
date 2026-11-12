@@ -546,7 +546,7 @@ subroutine cmp_flux_tensors(uin, iP0, F, rt_c &
   real(kind=8),dimension(1:ndim)::F_norm, F_rot
   real(kind=8)::F_norm_norm, lagrange_a, lagrange_b
   !------------------------------------------------------------------------
-  ! Loop (N+2)X(N+2)X(N+2) cells in grid, where N=2**(nsuperoct+1) = 2 by
+  ! Loop (N+2)X(N+2)X(N+2) cells in grid, where N=2*nsubgrid = 2 by
   ! default. All dimension indices go from 0 to N+1.
   ! We only need to calculate tensors for those cells which have faces to
   ! the NXNXN center cells, so by skipping the 'corners' we are reduced

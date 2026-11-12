@@ -3,12 +3,12 @@
 !################################################################
 !################################################################
 module flag_utils
+  use amr_parameters, only: nsubgrid
 #ifdef _CUDA
-  use gpu_utils, only: nsubgrid
   use gpu_runner, only: gpu_init_flag, gpu_enforce_rules, gpu_user_flag, gpu_enforce_subgrid
 #elif defined(_METAL)
   use metal_runner, only: metal_init_flag, metal_user_flag, metal_enforce_rules, &
-       metal_enforce_subgrid, metal_nsubgrid
+       metal_enforce_subgrid
 #endif
 contains
 
@@ -58,16 +58,11 @@ subroutine m_flag_fine(pst,ilevel,icount)
   end do
   if(r%verbose)write(*,*) '  ==> end step 4',nflag_tot
 
-  ! In case of GPU and nsubgrid > 1, force refine the entire oct,
-#ifdef _CUDA
+  ! If nsubgrid > 1, flag entire groups of (nsubgrid/2)**ndim octs,
+  ! so that the next level is made of complete blocks
   if (nsubgrid > 1)then
      call r_ensure_subgrid(pst,ilevel,1)
   endif
-#elif defined(_METAL)
-  if (metal_nsubgrid() > 1)then
-     call r_ensure_subgrid(pst,ilevel,1)
-  endif
-#endif
 
   ! In case of adaptive time step ONLY, check for refinement rules
   ! and unflag cells that will not be refined.
@@ -242,21 +237,15 @@ subroutine ensure_subgrid(s,ilevel)
   integer::ilevel
   !-------------------------------------------
   ! This routine forces flag = 1 in the entire
-  ! oct if one cell is flagged.
+  ! group of (nsubgrid/2)**ndim octs if one
+  ! cell is flagged.
   !-------------------------------------------
   integer :: igrid, ind, iskip, nskip
   logical :: ok
 
   associate(g=>s%g, m=>s%m, mdl=>s%mdl)
 
-#ifdef _CUDA
   nskip = (nsubgrid/2) ** ndim
-#elif defined(_METAL)
-  nskip = metal_nsubgrid()
-  nskip = (nskip/2) ** ndim
-#else
-  nskip = 1
-#endif
   do igrid = m%head(ilevel), m%tail(ilevel), nskip
      ok = .false.
      do iskip = 0, nskip - 1
@@ -493,8 +482,10 @@ subroutine ensure_ref_rules(s,ilevel)
   ! surrounded by 26 neighboring grids, in order to enforce the
   ! strict refinement rule.
   ! Used in case of adaptive time steps only.
+  ! The test is done for entire groups of (nsubgrid/2)**ndim octs,
+  ! so that the next level is made of complete blocks.
   !-----------------------------------------------------------------
-  integer::idim,ind,igrid,igrid_nbor
+  integer::idim,ind,igrid,igrid_nbor,iskip,nskip
   integer::i1,j1,k1,i1min,i1max,j1min,j1max,k1min,k1max
   integer(kind=8),dimension(0:ndim)::hash_nbor
   type(msg_int4)::dummy_int4
@@ -517,47 +508,56 @@ subroutine ensure_ref_rules(s,ilevel)
   call open_cache(mdl, m, pack_size=storage_size(dummy_int4)/32, &
        pack=pack_fetch_flag, unpack=unpack_fetch_flag, bound=init_bound_flag)
 
+  nskip=max(nsubgrid/2,1)**ndim
+
   hash_nbor(0)=ilevel
-  do igrid=m%head(ilevel),m%tail(ilevel)
+  do igrid=m%head(ilevel),m%tail(ilevel),nskip
 
      ok=.true.
 
-     ! Loop over 3x3x3 neighboring father cells
-     do k1=k1min,k1max
-        do j1=j1min,j1max
-           do i1=i1min,i1max
+     ! Loop over octs in the group
+     do iskip=0,nskip-1
 
-              ! Compute neighboring grid Cartesian index
+        ! Loop over 3x3x3 neighboring father cells
+        do k1=k1min,k1max
+           do j1=j1min,j1max
+              do i1=i1min,i1max
+
+                 ! Compute neighboring grid Cartesian index
 #if NDIM>0
-              hash_nbor(1)=m%grid(igrid)%ckey(1)+i1-3*(i1/2)
+                 hash_nbor(1)=m%grid(igrid+iskip)%ckey(1)+i1-3*(i1/2)
 #endif
 #if NDIM>1
-              hash_nbor(2)=m%grid(igrid)%ckey(2)+j1-3*(j1/2)
+                 hash_nbor(2)=m%grid(igrid+iskip)%ckey(2)+j1-3*(j1/2)
 #endif
 #if NDIM>2
-              hash_nbor(3)=m%grid(igrid)%ckey(3)+k1-3*(k1/2)
+                 hash_nbor(3)=m%grid(igrid+iskip)%ckey(3)+k1-3*(k1/2)
 #endif
-              ! Periodic boundary conditions
-              do idim=1,ndim
-                 if(r%periodic(idim))then
-                    if(hash_nbor(idim)<m%box_ckey_min(idim,ilevel))hash_nbor(idim)=m%box_ckey_max(idim,ilevel)-1
-                    if(hash_nbor(idim)>=m%box_ckey_max(idim,ilevel))hash_nbor(idim)=m%box_ckey_min(idim,ilevel)
-                 endif
-              enddo
+                 ! Periodic boundary conditions
+                 do idim=1,ndim
+                    if(r%periodic(idim))then
+                       if(hash_nbor(idim)<m%box_ckey_min(idim,ilevel))hash_nbor(idim)=m%box_ckey_max(idim,ilevel)-1
+                       if(hash_nbor(idim)>=m%box_ckey_max(idim,ilevel))hash_nbor(idim)=m%box_ckey_min(idim,ilevel)
+                    endif
+                 enddo
 
-              ! Get neighboring grid index
-              call get_grid(s,hash_nbor,igrid_nbor,flush_cache=.false.,fetch_cache=.true.)
-              ok=ok.and.(igrid_nbor>0)
+                 ! Get neighboring grid index
+                 call get_grid(s,hash_nbor,igrid_nbor,flush_cache=.false.,fetch_cache=.true.)
+                 ok=ok.and.(igrid_nbor>0)
 
+              end do
            end do
         end do
+
      end do
 
      ! Only cancel new refinements: unflagging a refined cell would
      ! destroy its child and could orphan finer octs (2:1 violation)
      if(.not. ok)then
-        do ind=1,twotondim
-           if(.not.m%grid(igrid)%refined(ind))m%flag1(ind,igrid)=0
+        do iskip=0,nskip-1
+           do ind=1,twotondim
+              if(.not.m%grid(igrid+iskip)%refined(ind))m%flag1(ind,igrid+iskip)=0
+           end do
         end do
      end if
 

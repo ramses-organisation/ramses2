@@ -23,7 +23,7 @@ module rt_commons
   end type rt_kernel_t
 
   type rt_workspace_t
-     type(rt_kernel_t)::kernel_1,kernel_2,kernel_4,kernel_8,kernel_16,kernel_32
+     type(rt_kernel_t)::kernel
   end type rt_workspace_t
 
 contains

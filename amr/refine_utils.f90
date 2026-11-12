@@ -134,6 +134,8 @@ end subroutine r_refine_fine
 !###############################################################
 subroutine refine_fine(s,ilevel,ncreate,nkill)
   use amr_parameters, only: ndim, nhilbert, twotondim
+  use init_refine_basegrid_module, only: check_subgrid
+  use flag_utils, only: ensure_ref_rules
   use ramses_commons, only: ramses_t
   use oct_commons, only: oct
   use marshal, only: pack_fetch_refine, unpack_fetch_refine, pack_fetch_flag, unpack_fetch_flag
@@ -168,9 +170,6 @@ subroutine refine_fine(s,ilevel,ncreate,nkill)
   integer::skip_bit,ikey,true_level
   integer::ind_cell,igrid,ind_parent
   integer(kind=8),dimension(0:ndim)::hash_key
-  integer(kind=8),dimension(1:nhilbert,1:s%r%nlevelmax)::key_ref
-  integer(kind=8),dimension(1:nhilbert)::coarse_key
-  integer,dimension(1:s%r%nlevelmax)::n_same,npatch
   integer,dimension(:),allocatable::noct_level,head_level,indx_level
   integer,dimension(:),allocatable::swap_table,swap_tmp
   integer,dimension(0:twotondim-1)::bucket_count,bucket_offset
@@ -210,6 +209,11 @@ subroutine refine_fine(s,ilevel,ncreate,nkill)
   g%ncreate=0
   m%ifree=m%noct_used+1
   do ilev=ilevel,r%nlevelmax-1
+
+     ! Finer level flags may rely on coarser buffer cells cancelled by
+     ! ensure_ref_rules (adaptive time steps): check them now that the
+     ! octs of level ilev created in this pass exist
+     if(ilev>ilevel)call ensure_ref_rules(s,ilev)
 
      call open_cache(mdl, m, pack_size=storage_size(dummy_large_realdp)/32, &
           pack=pack_fetch_refine, unpack=unpack_fetch_refine, &
@@ -520,32 +524,9 @@ subroutine refine_fine(s,ilevel,ncreate,nkill)
   m%noct_used=m%tail(r%nlevelmax)
   deallocate(noct_level,head_level,indx_level)
 
-  !-----------
-  ! Super-octs
-  !-----------
-  do ilev=1,r%nlevelmax
-     npatch(ilev)=twotondim**ilev
-  end do
+  ! Check that each level is made of complete blocks
   do ilev=ilevel+1,r%nlevelmax
-     n_same=0
-     key_ref=0
-     key_ref(1,1:r%nlevelmax)=-1
-     do ioct=m%head(ilev),m%tail(ilev)
-        m%grid(ioct)%superoct=1
-        coarse_key(1:nhilbert)=m%grid(ioct)%hkey(1:nhilbert)
-        do i=1,MIN(ilev-1,r%nsuperoct)
-           coarse_key(1:nhilbert)=coarsen_key(coarse_key(1:nhilbert),ilev-1) ! ilev-1 used to speed up only
-           if(eq_keys(coarse_key(1:nhilbert),key_ref(1:nhilbert,i)))then
-              n_same(i)=n_same(i)+1
-           else
-              n_same(i)=1
-              key_ref(1:nhilbert,i)=coarse_key(1:nhilbert)
-           endif
-           if(n_same(i).EQ.npatch(i))then
-              m%grid(ioct-npatch(i)+1:ioct)%superoct=npatch(i)
-           endif
-        end do
-     end do
+     call check_subgrid(s,ilev)
   end do
 
   end associate
@@ -897,7 +878,6 @@ subroutine make_new_oct(s,iparent,icell,ilevel)
   m%grid(ichild)%ckey(1:ndim)=int(cart_key(1:ndim),kind=4)
   m%grid(ichild)%hkey(1:nhilbert)=hk(1:nhilbert)
   m%grid(ichild)%refined(1:twotondim)=.false.
-  m%grid(ichild)%superoct=1
 
   ! Set flag arrays to zero
   m%flag1(1:twotondim,ichild)=0

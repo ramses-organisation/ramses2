@@ -35,8 +35,8 @@ using namespace metal;
 #endif
 
 constant int TWOTONDIM   = 8;    /* 2^NDIM                      */
-constant int NSUBGRID    = 1;    /* subgrid size for PoC        */
-constant int NSUBGRIDP2  = 3;    /* NSUBGRID + 2                */
+constant int NSUBGRID_HY = 1;    /* subgrid size of the hydro kernels */
+constant int NSUBGRIDP2  = 3;    /* NSUBGRID_HY + 2                */
 constant int NTHREADS_Y  = 16;   /* threadgroup y-dim for set_* */
 
 /* Riemann solver IDs (mirrors hydro_parameters.f90) */
@@ -250,7 +250,7 @@ void subgrid_conserved_2_primitive(
     uint threads_per_tg,
     threadgroup local_subgrid_t &local_subgrid)
 {
-    const int work_size  = 2*NSUBGRID + 4; /* = 6 */
+    const int work_size  = 2*NSUBGRID_HY + 4; /* = 6 */
     const int total_work = work_size * work_size * work_size; /* = 216 */
 
     for (int work_idx = thread_idx; work_idx < total_work; work_idx += int(threads_per_tg)) {
@@ -303,8 +303,8 @@ void subgrid_conserved_2_primitive(
         local_subgrid.pressure  [i][j][k] = pv.pressure;
 
         /* Store refinement flag for inner cells (Fortran 1:4 → 0-based [0..3]) */
-        if (i >= 1 && i <= 2*NSUBGRID+2 && j >= 1 && j <= 2*NSUBGRID+2
-                                         && k >= 1 && k <= 2*NSUBGRID+2) {
+        if (i >= 1 && i <= 2*NSUBGRID_HY+2 && j >= 1 && j <= 2*NSUBGRID_HY+2
+                                         && k >= 1 && k <= 2*NSUBGRID_HY+2) {
             local_subgrid.refined[i-1][j-1][k-1] =
                 (grid[source_idx - 1].refined[cell_idx - 1] != 0);
         }
@@ -326,7 +326,7 @@ void trace_3d(
     threadgroup interfaces_z_t   &left_z,  threadgroup interfaces_z_t &right_z,
     float gamma, float smallr, float smallc2, float dtdx, int slope)
 {
-    const int work_size  = 2*NSUBGRID + 2; /* = 4 */
+    const int work_size  = 2*NSUBGRID_HY + 2; /* = 4 */
     const int total_work = work_size * work_size * work_size; /* = 64 */
     float smallp = smallr * smallc2;
 
@@ -565,8 +565,8 @@ void riemann_driver(
     int thread_idx, uint threads_per_tg,
     float gamma, float smallr, float smallc2, int riemann)
 {
-    /* interface_array_size = (2*NSUBGRID+1)*(2*NSUBGRID)^2 = 3*4 = 12 for nsubgrid=1 */
-    const int ias = (2*NSUBGRID+1) * (2*NSUBGRID) * (2*NSUBGRID);
+    /* interface_array_size = (2*NSUBGRID_HY+1)*(2*NSUBGRID_HY)^2 = 3*4 = 12 for nsubgrid=1 */
+    const int ias = (2*NSUBGRID_HY+1) * (2*NSUBGRID_HY) * (2*NSUBGRID_HY);
 
     for (int work_idx = thread_idx; work_idx < 3*ias; work_idx += int(threads_per_tg)) {
         int i, j, k;
@@ -575,7 +575,7 @@ void riemann_driver(
 
         if (work_idx < ias) {
             /* ---- x-interfaces ---- */
-            index_1Dto3D(work_idx, 2*NSUBGRID+1, 2*NSUBGRID, i, j, k);
+            index_1Dto3D(work_idx, 2*NSUBGRID_HY+1, 2*NSUBGRID_HY, i, j, k);
             L.density=left_x.density[i][j][k];  L.velocity_x=left_x.velocity_x[i][j][k];
             L.velocity_y=left_x.velocity_y[i][j][k]; L.velocity_z=left_x.velocity_z[i][j][k];
             L.pressure=left_x.pressure[i][j][k];
@@ -593,7 +593,7 @@ void riemann_driver(
 
         } else if (work_idx < 2*ias) {
             /* ---- y-interfaces: rotate velocity (vy,vz,vx) → (vx,vy,vz) ---- */
-            index_1Dto3D(work_idx - ias, 2*NSUBGRID, 2*NSUBGRID+1, i, j, k);
+            index_1Dto3D(work_idx - ias, 2*NSUBGRID_HY, 2*NSUBGRID_HY+1, i, j, k);
             L.density=left_y.density[i][j][k];  L.pressure=left_y.pressure[i][j][k];
             L.velocity_x=left_y.velocity_y[i][j][k]; /* vy becomes normal velocity */
             L.velocity_y=left_y.velocity_z[i][j][k];
@@ -614,7 +614,7 @@ void riemann_driver(
 
         } else {
             /* ---- z-interfaces: rotate velocity (vz,vx,vy) → (vx,vy,vz) ---- */
-            index_1Dto3D(work_idx - 2*ias, 2*NSUBGRID, 2*NSUBGRID, i, j, k);
+            index_1Dto3D(work_idx - 2*ias, 2*NSUBGRID_HY, 2*NSUBGRID_HY, i, j, k);
             L.density=left_z.density[i][j][k];  L.pressure=left_z.pressure[i][j][k];
             L.velocity_x=left_z.velocity_z[i][j][k]; /* vz becomes normal velocity */
             L.velocity_y=left_z.velocity_x[i][j][k];
@@ -651,13 +651,13 @@ void zero_fine_fluxes(
     threadgroup interfaces_y_t &fluxes_y,
     threadgroup interfaces_z_t &fluxes_z)
 {
-    const int ias = (2*NSUBGRID+1) * (2*NSUBGRID) * (2*NSUBGRID); /* =12 for nsubgrid=1 */
+    const int ias = (2*NSUBGRID_HY+1) * (2*NSUBGRID_HY) * (2*NSUBGRID_HY); /* =12 for nsubgrid=1 */
 
     for (int work_idx = thread_idx; work_idx < 3 * ias; work_idx += int(threads_per_tg)) {
         int i, j, k;
         if (work_idx < ias) {
             /* X interfaces */
-            index_1Dto3D(work_idx, 2*NSUBGRID+1, 2*NSUBGRID, i, j, k);
+            index_1Dto3D(work_idx, 2*NSUBGRID_HY+1, 2*NSUBGRID_HY, i, j, k);
             /* Fortran: refined(i+1,j+2,k+2) or refined(i+2,j+2,k+2)
              * Metal 0-based: refined[i][j+1][k+1] or refined[i+1][j+1][k+1] */
             if (ls.refined[i][j+1][k+1] || ls.refined[i+1][j+1][k+1]) {
@@ -669,7 +669,7 @@ void zero_fine_fluxes(
             }
         } else if (work_idx < 2 * ias) {
             /* Y interfaces */
-            index_1Dto3D(work_idx - ias, 2*NSUBGRID, 2*NSUBGRID+1, i, j, k);
+            index_1Dto3D(work_idx - ias, 2*NSUBGRID_HY, 2*NSUBGRID_HY+1, i, j, k);
             /* Fortran: refined(i+2,j+1,k+2) or refined(i+2,j+2,k+2)
              * Metal 0-based: refined[i+1][j][k+1] or refined[i+1][j+1][k+1] */
             if (ls.refined[i+1][j][k+1] || ls.refined[i+1][j+1][k+1]) {
@@ -681,7 +681,7 @@ void zero_fine_fluxes(
             }
         } else {
             /* Z interfaces */
-            index_1Dto3D(work_idx - 2*ias, 2*NSUBGRID, 2*NSUBGRID, i, j, k);
+            index_1Dto3D(work_idx - 2*ias, 2*NSUBGRID_HY, 2*NSUBGRID_HY, i, j, k);
             /* Fortran: refined(i+2,j+2,k+1) or refined(i+2,j+2,k+2)
              * Metal 0-based: refined[i+1][j+1][k] or refined[i+1][j+1][k+1] */
             if (ls.refined[i+1][j+1][k] || ls.refined[i+1][j+1][k+1]) {
@@ -717,7 +717,7 @@ void coarse_cell_update(
     int thread_idx, float coarse_flux_scale)
 {
     /* For nsubgrid=1: interface_array_size = nsubgrid^(ndim-1) = 1 */
-    const int ias = NSUBGRID * NSUBGRID;   /* =1 for nsubgrid=1 */
+    const int ias = NSUBGRID_HY * NSUBGRID_HY;   /* =1 for nsubgrid=1 */
     if (thread_idx >= 6 * ias) return;
 
     int subgrid_idx = head_idx + block_idx;   /* 1-based */
@@ -725,8 +725,8 @@ void coarse_cell_update(
     int work_idx = thread_idx % ias;
 
     /* Decode 2D position within the face (for nsubgrid=1, always 0) */
-    int j_raw = work_idx % NSUBGRID;
-    int k_raw = work_idx / NSUBGRID;
+    int j_raw = work_idx % NSUBGRID_HY;
+    int k_raw = work_idx / NSUBGRID_HY;
 
     float fd=0.0f, fmx=0.0f, fmy=0.0f, fmz=0.0f, fe=0.0f;
     int ind_nbor = 0;
@@ -744,17 +744,17 @@ void coarse_cell_update(
             }
         ind_nbor = 1 + 0 + NSUBGRIDP2*j_sg + NSUBGRIDP2*NSUBGRIDP2*k_sg;
     } else if (face == 1) {
-        /* Right X: i_sg=NSUBGRID+1, j_sg=j_raw+1, k_sg=k_raw+1 */
+        /* Right X: i_sg=NSUBGRID_HY+1, j_sg=j_raw+1, k_sg=k_raw+1 */
         int j_sg = j_raw + 1, k_sg = k_raw + 1;
         for (int j = 2*j_sg-2; j <= 2*j_sg-1; j++)
             for (int k = 2*k_sg-2; k <= 2*k_sg-1; k++) {
-                fd  += fluxes_x.density   [2*NSUBGRID][j][k] * coarse_flux_scale;
-                fmx += fluxes_x.velocity_x[2*NSUBGRID][j][k] * coarse_flux_scale;
-                fmy += fluxes_x.velocity_y[2*NSUBGRID][j][k] * coarse_flux_scale;
-                fmz += fluxes_x.velocity_z[2*NSUBGRID][j][k] * coarse_flux_scale;
-                fe  += fluxes_x.pressure  [2*NSUBGRID][j][k] * coarse_flux_scale;
+                fd  += fluxes_x.density   [2*NSUBGRID_HY][j][k] * coarse_flux_scale;
+                fmx += fluxes_x.velocity_x[2*NSUBGRID_HY][j][k] * coarse_flux_scale;
+                fmy += fluxes_x.velocity_y[2*NSUBGRID_HY][j][k] * coarse_flux_scale;
+                fmz += fluxes_x.velocity_z[2*NSUBGRID_HY][j][k] * coarse_flux_scale;
+                fe  += fluxes_x.pressure  [2*NSUBGRID_HY][j][k] * coarse_flux_scale;
             }
-        ind_nbor = 1 + (NSUBGRID+1) + NSUBGRIDP2*j_sg + NSUBGRIDP2*NSUBGRIDP2*k_sg;
+        ind_nbor = 1 + (NSUBGRID_HY+1) + NSUBGRIDP2*j_sg + NSUBGRIDP2*NSUBGRIDP2*k_sg;
     } else if (face == 2) {
         /* Left Y: i_sg=j_raw+1, j_sg=0, k_sg=k_raw+1 */
         int i_sg = j_raw + 1, k_sg = k_raw + 1;
@@ -768,17 +768,17 @@ void coarse_cell_update(
             }
         ind_nbor = 1 + i_sg + NSUBGRIDP2*0 + NSUBGRIDP2*NSUBGRIDP2*k_sg;
     } else if (face == 3) {
-        /* Right Y: i_sg=j_raw+1, j_sg=NSUBGRID+1, k_sg=k_raw+1 */
+        /* Right Y: i_sg=j_raw+1, j_sg=NSUBGRID_HY+1, k_sg=k_raw+1 */
         int i_sg = j_raw + 1, k_sg = k_raw + 1;
         for (int i = 2*i_sg-2; i <= 2*i_sg-1; i++)
             for (int k = 2*k_sg-2; k <= 2*k_sg-1; k++) {
-                fd  += fluxes_y.density   [i][2*NSUBGRID][k] * coarse_flux_scale;
-                fmx += fluxes_y.velocity_x[i][2*NSUBGRID][k] * coarse_flux_scale;
-                fmy += fluxes_y.velocity_y[i][2*NSUBGRID][k] * coarse_flux_scale;
-                fmz += fluxes_y.velocity_z[i][2*NSUBGRID][k] * coarse_flux_scale;
-                fe  += fluxes_y.pressure  [i][2*NSUBGRID][k] * coarse_flux_scale;
+                fd  += fluxes_y.density   [i][2*NSUBGRID_HY][k] * coarse_flux_scale;
+                fmx += fluxes_y.velocity_x[i][2*NSUBGRID_HY][k] * coarse_flux_scale;
+                fmy += fluxes_y.velocity_y[i][2*NSUBGRID_HY][k] * coarse_flux_scale;
+                fmz += fluxes_y.velocity_z[i][2*NSUBGRID_HY][k] * coarse_flux_scale;
+                fe  += fluxes_y.pressure  [i][2*NSUBGRID_HY][k] * coarse_flux_scale;
             }
-        ind_nbor = 1 + i_sg + NSUBGRIDP2*(NSUBGRID+1) + NSUBGRIDP2*NSUBGRIDP2*k_sg;
+        ind_nbor = 1 + i_sg + NSUBGRIDP2*(NSUBGRID_HY+1) + NSUBGRIDP2*NSUBGRIDP2*k_sg;
     } else if (face == 4) {
         /* Left Z: i_sg=j_raw+1, j_sg=k_raw+1, k_sg=0 */
         int i_sg = j_raw + 1, j_sg = k_raw + 1;
@@ -792,17 +792,17 @@ void coarse_cell_update(
             }
         ind_nbor = 1 + i_sg + NSUBGRIDP2*j_sg + NSUBGRIDP2*NSUBGRIDP2*0;
     } else {
-        /* Right Z: i_sg=j_raw+1, j_sg=k_raw+1, k_sg=NSUBGRID+1 */
+        /* Right Z: i_sg=j_raw+1, j_sg=k_raw+1, k_sg=NSUBGRID_HY+1 */
         int i_sg = j_raw + 1, j_sg = k_raw + 1;
         for (int i = 2*i_sg-2; i <= 2*i_sg-1; i++)
             for (int j = 2*j_sg-2; j <= 2*j_sg-1; j++) {
-                fd  += fluxes_z.density   [i][j][2*NSUBGRID] * coarse_flux_scale;
-                fmx += fluxes_z.velocity_x[i][j][2*NSUBGRID] * coarse_flux_scale;
-                fmy += fluxes_z.velocity_y[i][j][2*NSUBGRID] * coarse_flux_scale;
-                fmz += fluxes_z.velocity_z[i][j][2*NSUBGRID] * coarse_flux_scale;
-                fe  += fluxes_z.pressure  [i][j][2*NSUBGRID] * coarse_flux_scale;
+                fd  += fluxes_z.density   [i][j][2*NSUBGRID_HY] * coarse_flux_scale;
+                fmx += fluxes_z.velocity_x[i][j][2*NSUBGRID_HY] * coarse_flux_scale;
+                fmy += fluxes_z.velocity_y[i][j][2*NSUBGRID_HY] * coarse_flux_scale;
+                fmz += fluxes_z.velocity_z[i][j][2*NSUBGRID_HY] * coarse_flux_scale;
+                fe  += fluxes_z.pressure  [i][j][2*NSUBGRID_HY] * coarse_flux_scale;
             }
-        ind_nbor = 1 + i_sg + NSUBGRIDP2*j_sg + NSUBGRIDP2*NSUBGRIDP2*(NSUBGRID+1);
+        ind_nbor = 1 + i_sg + NSUBGRIDP2*j_sg + NSUBGRIDP2*NSUBGRIDP2*(NSUBGRID_HY+1);
     }
 
     /* Condition: source is ghost-cache oct → its father is the actual coarse oct */
@@ -837,7 +837,7 @@ void conservative_update(
     int thread_idx, uint threads_per_tg,
     float dtdx)
 {
-    const int work_size  = 2*NSUBGRID;         /* = 2 */
+    const int work_size  = 2*NSUBGRID_HY;         /* = 2 */
     const int total_work = work_size*work_size*work_size; /* = 8 */
 
     for (int work_idx = thread_idx; work_idx < total_work; work_idx += int(threads_per_tg)) {

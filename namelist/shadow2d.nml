@@ -7,7 +7,6 @@ make NDIM=2 DO_RT=1 NRTGRP=1 NION=1 MPI=1
 hydro=.true.
 rt=.true.
 nrestart=0
-nsuperoct=0
 nsubcycle=10*2
 static_gas=.true.
 verbose=.false.

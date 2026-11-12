@@ -8,7 +8,6 @@ hydro=.true.
 rt=.false.
 ncontrol=1
 verbose=.false.
-nsuperoct=0
 static_gas=.true.
 nrestart=0
 nstepmax=1

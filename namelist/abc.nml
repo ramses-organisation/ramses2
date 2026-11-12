@@ -1,12 +1,11 @@
 This is the RAMSES parameter file for the ABC flow test in Teyssier, Fromang and Dormy (2006).
-make NDIM=3 MPI=1 HYDRO=1 MHD=1 INIT=ABC
+make NDIM=3 MPI=1 HYDRO=1 MHD=1 INIT=ABC NSUBGRID=4
 
 &RUN_PARAMS
 hydro=.true.
 ncontrol=1
 nsubcycle=4*1,2
 verbose=.false.
-nsuperoct=3
 /
 
 &AMR_PARAMS

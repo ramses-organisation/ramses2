@@ -46,7 +46,7 @@ endif()
 set(NDIM     3    CACHE STRING "Number of dimensions (1, 2, or 3)")
 set(NVECTOR  32   CACHE STRING "SIMD vector length")
 set(NHILBERT 1    CACHE STRING "Hilbert key length exponent")
-set(NSUBGRID 1    CACHE STRING "CUDA subgrid size in octs per dimension (NVHPC: 1, 2 or 4; MHD: 1 or 2)")
+set(NSUBGRID 1    CACHE STRING "Block size in octs per dimension (CPU: 1; NVHPC: 1, 2 or 4; MHD: 1 or 2)")
 set(NPRE     8    CACHE STRING "Floating-point precision in bytes")
 if(COMPILER STREQUAL "METAL")
     # Apple GPU has no float64; force single precision regardless of user setting.
@@ -666,7 +666,14 @@ if(COMPILER STREQUAL "METAL")
         metal/metal_interface.f90
         metal/metal_runner.f90)
 
-    set(_metal_bridge_flags)
+    # Metal kernels support NSUBGRID=1 (hydro) and NSUBGRID=2 (MHD)
+    if(MHD AND NOT NSUBGRID EQUAL 2)
+        message(FATAL_ERROR "COMPILER=METAL with MHD requires NSUBGRID=2")
+    elseif(NOT MHD AND NOT NSUBGRID EQUAL 1)
+        message(FATAL_ERROR "COMPILER=METAL requires NSUBGRID=1 (NSUBGRID=2 with MHD)")
+    endif()
+
+    set(_metal_bridge_flags -DNSUBGRID=${NSUBGRID})
     if(MHD)
         list(APPEND _metal_bridge_flags -DMHD)
     endif()
@@ -703,7 +710,7 @@ if(COMPILER STREQUAL "METAL")
     set(_metalc     xcrun -sdk macosx metal)
     set(_metallib   xcrun -sdk macosx metallib)
     set(_metalflags -std=metal3.1 -O2
-        -DNDIM=${NDIM} -DNVAR=${NVAR}
+        -DNDIM=${NDIM} -DNVAR=${NVAR} -DNSUBGRID=${NSUBGRID}
         -I${CMAKE_SOURCE_DIR}/metal
         -I${CMAKE_SOURCE_DIR}/metal/kernels)
     if(HYDRO)

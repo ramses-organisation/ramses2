@@ -28,7 +28,7 @@ module cr_commons
   end type cr_kernel_t
 
   type cr_workspace_t
-     type(cr_kernel_t)::kernel_1,kernel_2,kernel_4,kernel_8,kernel_16,kernel_32
+     type(cr_kernel_t)::kernel
   end type cr_workspace_t
 
 contains

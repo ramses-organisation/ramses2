@@ -123,7 +123,7 @@ SUBROUTINE cmp_cr_wavespeeds(r, kcr, iGrp, cr_c, dx, dt)
   gmone_div_twodx=(r%gamma_rad(r%iEcr-r%inener+igrp)-1.0)/(2d0*dx)
   iEgrp = r%iEcr+(iGrp-1)
 
-  ! Loop (N+2)X(N+2)X(N+2) cells in grid, where N=2**(nsuperoct+1) = 2 by
+  ! Loop (N+2)X(N+2)X(N+2) cells in grid, where N=2*nsubgrid = 2 by
   ! default. All dimension indices go from 0 to N+1.
   ! We only need to calculate wavespeeds for those cells which have faces to
   ! the NXNXN center cells, so by skipping the 'corners' we are reduced

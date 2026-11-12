@@ -853,7 +853,6 @@ subroutine check_mail(mdl,comm_id)
                           call mdl_abort(mdl)
                        endif
                        m%grid(child)%hkey(1:nhilbert)=hk(1:nhilbert)
-                       m%grid(child)%superoct=1
                        m%flag1(1:twotondim,child)=0
                        m%flag2(1:twotondim,child)=0
 

@@ -230,7 +230,6 @@ subroutine close_cache(mdl)
                     call mdl_abort(mdl)
                  endif
                  m%grid(child)%hkey(1:nhilbert)=hk(1:nhilbert)
-                 m%grid(child)%superoct=1
                  m%flag1(1:twotondim,child)=0
                  m%flag2(1:twotondim,child)=0
                  call hash_setp(m%grid_dict,hash_child,child)

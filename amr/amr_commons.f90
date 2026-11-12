@@ -43,7 +43,6 @@ module amr_commons
      logical::static_gas=.false. ! Turn off gas dynamics
      integer::geom    =1         ! 1: cartesian, 2: cylindrical, 3: spherical
      integer::overload=1         ! MPI domain overloading
-     integer::nsuperoct=0        ! Number of superoct levels
 
      ! Output parameters
      integer::noutput=1          ! Total number of outputs
