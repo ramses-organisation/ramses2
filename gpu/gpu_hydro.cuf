@@ -4011,7 +4011,7 @@ contains
     real(kind=dp), device :: bin(1:twotondim,1:6,*)
     integer, value :: c1, n1, o1, c2, n2, o2
     real(kind=dp) :: b
-    logical, value :: r1, r2
+    logical(kind=1), value :: r1, r2
     if (r1 .eqv. r2) then
        b = 0.5_dp*(bin(c1,n1,o1) + bin(c2,n2,o2))
     else if (r1) then
@@ -4035,7 +4035,7 @@ contains
     integer :: work_idx, ind_nbor, work_size
     integer :: i, j, k, i_subgrid_idx, j_subgrid_idx, k_subgrid_idx
     integer :: ib, jb, kb, cell_idx, source_idx, source_idx_face, subgrid_idx
-    logical :: refined_cell
+    logical(kind=1) :: refined_cell
 
     work_size = 2*nsubgrid+4
     do work_idx = thread_idx, work_size**3 - 1, blockDim%x
