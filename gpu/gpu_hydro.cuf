@@ -284,6 +284,9 @@ module hydro_device
 #endif
   real(kind=dp), device :: switch_llf_dmin_d
   real(kind=dp), device :: switch_llf_pmin_d
+#ifdef MHD
+  integer, device :: uct_riemann_d
+#endif
 #if NENER>0
   real(kind=dp), device :: gamma_rad_d(1:nener+1)
 #endif
@@ -1087,7 +1090,7 @@ contains
             & uct_finite(record%dL) .and. uct_finite(record%dR) .and. &
             & uct_finite(record%vt1) .and. uct_finite(record%vt2) .and. uct_finite(record%Bn))) then
           flux = hll_mhd_fluxes(left, right, gamma, smallr, smallc2, .true.)
-          record = llf_uct_record(left, right, gamma, smallr, smallc2)
+          record = hll_uct_record(left, right, gamma, smallr, smallc2, solver_llf)
           return
        endif
     endif
@@ -4099,19 +4102,17 @@ contains
   ! UCT-HLLD (Mignone & Del Zanna 2021)
   ! ==========================================================================
 
-  attributes(device) function llf_uct_record(left, right, gamma, smallr, smallc2) result(record)
+  ! Record of the HLL (solver_hll) or LLF (solver_llf) flux.
+  attributes(device) function hll_uct_record(left, right, gamma, smallr, smallc2, solver) result(record)
     type(primitive_t), intent(in) :: left, right
     real(kind=dp), value :: gamma, smallr, smallc2
+    integer, value :: solver
     type(uct_record_t) :: record
     real(kind=dp) :: SL, SR
-    call hll_mhd_wavespeeds(left, right, gamma, smallr, smallc2, solver_llf, SL, SR)
-    record%aL = 0.5_dp
-    record%dL = 0.5_dp*SR
-    record%dR = 0.5_dp*SR
-    record%vt1 = 0.5_dp*(left%velocity_y + right%velocity_y)
-    record%vt2 = 0.5_dp*(left%velocity_z + right%velocity_z)
-    record%Bn = 0.5_dp*(left%Bx + right%Bx)
-  end function llf_uct_record
+    call hll_mhd_wavespeeds(left, right, gamma, smallr, smallc2, solver, SL, SR)
+    call set_uct_hll_record(record, left%velocity_y, right%velocity_y, left%velocity_z, right%velocity_z, &
+         & 0.5_dp*(left%Bx + right%Bx), SL, SR)
+  end function hll_uct_record
 
   ! HLL record for a collapsed rotational fan.
   attributes(device) subroutine set_uct_hll_record(record, vl, vr, wl, wr, A, SL, SR)
@@ -4180,23 +4181,29 @@ contains
     finite = abs(x) <= huge(x)
   end function uct_finite
 
-  ! One UCT face solve with the per-interface LLF switch of riemann_driver. A face whose record is
-  ! not finite falls back to LLF inside hlld_mhd_fluxes; its scalar flux keeps the hlld (upwind) form.
-  attributes(device) function uct_face_solve(left, right, gamma, smallr, smallc2, record, llf) result(flux)
+  ! One UCT face solve with the solver of riemann (uct-hlld, uct-hll or uct-llf) and the per-interface
+  ! LLF switch of riemann_driver; solver is the one used (solver_hlld, solver_hll or solver_llf). A face
+  ! whose HLLD record is not finite falls back to LLF inside hlld_mhd_fluxes; its scalar flux keeps the
+  ! hlld (upwind) form.
+  attributes(device) function uct_face_solve(left, right, gamma, smallr, smallc2, record, solver) result(flux)
     type(primitive_t), intent(in) :: left, right
     real(kind=dp), value :: gamma, smallr, smallc2
     type(uct_record_t), intent(out) :: record
-    logical, intent(out) :: llf
+    integer, intent(out) :: solver
     type(conserved_t) :: flux
+    logical :: llf
 
     llf = .false.
     if (switch_llf_dmin_d > 0.0_dp) llf = min(left%density, right%density) < switch_llf_dmin_d
     if (switch_llf_pmin_d > 0.0_dp) llf = min(left%pressure, right%pressure) < switch_llf_pmin_d
-    if (llf) then
-       flux = hll_mhd_fluxes(left, right, gamma, smallr, smallc2, .true.)
-       record = llf_uct_record(left, right, gamma, smallr, smallc2)
-    else
+    solver = solver_hlld
+    if (uct_riemann_d == solver_uct_hll) solver = solver_hll
+    if (llf .or. uct_riemann_d == solver_uct_llf) solver = solver_llf
+    if (solver == solver_hlld) then
        flux = hlld_mhd_fluxes(left, right, gamma, smallr, smallc2, record)
+    else
+       flux = hll_mhd_fluxes(left, right, gamma, smallr, smallc2, solver == solver_llf)
+       record = hll_uct_record(left, right, gamma, smallr, smallc2, solver)
     endif
   end function uct_face_solve
 
@@ -4295,21 +4302,18 @@ contains
 
 #if NVAR>5+NENER
   attributes(device) subroutine uct_scalar_fluxes(lx, rx, ly, ry, lz, rz, orientation, i, j, k, &
-       & ql, qr, flux, llf, gamma, smallr, smallc2, fscal)
+       & ql, qr, flux, solver, gamma, smallr, smallc2, fscal)
     type(subgrid_3x2x2cell_primitive), intent(in) :: lx, rx
     type(subgrid_2x3x2cell_primitive), intent(in) :: ly, ry
     type(subgrid_2x2x3cell_primitive), intent(in) :: lz, rz
-    integer, value :: orientation, i, j, k
-    logical, value :: llf
+    integer, value :: orientation, i, j, k, solver
     type(primitive_t), intent(in) :: ql, qr
     type(conserved_t), intent(in) :: flux
     real(kind=dp), value :: gamma, smallr, smallc2
     real(kind=dp), intent(out) :: fscal(1:nscalar)
     real(kind=dp) :: SL, SR, rhoL, rhoR, sl_n, sr_n
-    integer :: n, solver
+    integer :: n
 
-    solver = solver_hlld
-    if (llf) solver = solver_llf
     call hll_mhd_wavespeeds(ql, qr, gamma, smallr, smallc2, solver, SL, SR)
     rhoL = max(ql%density, smallr)
     rhoR = max(qr%density, smallr)
@@ -4408,8 +4412,7 @@ contains
     integer, value :: thread_idx
     real(kind=dp), value :: gamma, smallr, smallc2
     logical, value :: induction
-    integer :: work_idx, ncell, orientation, i, j, k, oct_idx, cell_idx
-    logical :: llf
+    integer :: work_idx, ncell, orientation, i, j, k, oct_idx, cell_idx, solver
     type(primitive_t) :: ql, qr
     type(conserved_t) :: flux
     type(uct_record_t) :: record
@@ -4421,8 +4424,8 @@ contains
        oct_idx = nbor(1 + (1+i/2) + nsubgridp2*(1+j/2) + nsubgridp2sq*(1+k/2))
        cell_idx = 1 + mod(i,2) + 2*mod(j,2) + 4*mod(k,2)
        call uct_gather_face(lx, rx, ly, ry, lz, rz, orientation, i, j, k, ql, qr)
-       flux = uct_face_solve(ql, qr, gamma, smallr, smallc2, record, llf)
-       call store_uct_fluxes(lx, rx, ly, ry, lz, rz, orientation, i, j, k, ql, qr, flux, llf, &
+       flux = uct_face_solve(ql, qr, gamma, smallr, smallc2, record, solver)
+       call store_uct_fluxes(lx, rx, ly, ry, lz, rz, orientation, i, j, k, ql, qr, flux, solver, &
             & products, oct_idx, cell_idx, gamma, smallr, smallc2, induction)
        call store_uct_record(products, cell_idx, oct_idx, orientation, record)
     end do
@@ -4431,14 +4434,13 @@ contains
   ! Store the lab-frame gas and scalar fluxes of face (i,j,k), from its face-frame flux fface,
   ! in the owner's products.
   attributes(device) subroutine store_uct_fluxes(lx, rx, ly, ry, lz, rz, orientation, i, j, k, ql, qr, &
-       & fface, llf, products, oct_idx, cell_idx, gamma, smallr, smallc2, induction)
+       & fface, solver, products, oct_idx, cell_idx, gamma, smallr, smallc2, induction)
     type(subgrid_3x2x2cell_primitive), intent(in) :: lx, rx
     type(subgrid_2x3x2cell_primitive), intent(in) :: ly, ry
     type(subgrid_2x2x3cell_primitive), intent(in) :: lz, rz
-    integer, value :: orientation, i, j, k, oct_idx, cell_idx
+    integer, value :: orientation, i, j, k, oct_idx, cell_idx, solver
     type(primitive_t), intent(in) :: ql, qr
     type(conserved_t), intent(in) :: fface
-    logical, value :: llf
     real(kind=dp), device :: products(1:twotondim,1:3*uct_product_fields,*)
     real(kind=dp), value :: gamma, smallr, smallc2
     logical, value :: induction
@@ -4450,7 +4452,7 @@ contains
 #endif
 
 #if NVAR>5+NENER
-    call uct_scalar_fluxes(lx, rx, ly, ry, lz, rz, orientation, i, j, k, ql, qr, fface, llf, &
+    call uct_scalar_fluxes(lx, rx, ly, ry, lz, rz, orientation, i, j, k, ql, qr, fface, solver, &
          & gamma, smallr, smallc2, fscal)
 #endif
     flux = uct_unrotate_flux(fface, orientation)
@@ -4764,7 +4766,7 @@ contains
     logical, value :: induction
     integer, parameter :: m = 2*nsubgrid
     integer :: w, c, orientation, normal, t1, t2, i, j, k, oct_idx, cell_idx, base
-    logical :: llf
+    integer :: solver
     type(primitive_t) :: ql, qr
     type(conserved_t) :: flux
     type(uct_record_t) :: record
@@ -4787,8 +4789,8 @@ contains
           ql = uct_rotate_face(shell_left(c - 3*m**2), orientation)
           qr = uct_rotate_face(shell_right(c - 3*m**2), orientation)
        endif
-       flux = uct_face_solve(ql, qr, gamma, smallr, smallc2, record, llf)
-       if (c < 3*m**2) call store_uct_fluxes(lx, rx, ly, ry, lz, rz, orientation, i, j, k, ql, qr, flux, llf, &
+       flux = uct_face_solve(ql, qr, gamma, smallr, smallc2, record, solver)
+       if (c < 3*m**2) call store_uct_fluxes(lx, rx, ly, ry, lz, rz, orientation, i, j, k, ql, qr, flux, solver, &
             & products, oct_idx, cell_idx, gamma, smallr, smallc2, induction)
        ! Every subgrid next to the ghost oct stores this record, with the same values: atomic
        ! exchanges keep the concurrent stores well defined.

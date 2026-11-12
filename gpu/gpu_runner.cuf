@@ -876,7 +876,8 @@ contains
     use hydro_device, only: uct_face_kernel, uct_update_kernel, uct_update_amr_kernel, &
          & uct_ghost_list_kernel, uct_ghost_face_kernel, uct_ghost_bn_kernel, uct_threads, uct_ghost_threads, &
          & uct_ghost_smem_t, uct_face_smem_t, uct_update_smem_t, uct_product_fields
-    use hydro_parameters, only: solver_uct_hlld
+    use hydro_device, only: uct_riemann_d
+    use hydro_parameters, only: solver_uct_hlld, solver_uct_llf, solver_uct_hll
 #endif
 #else
 #ifndef PAPER
@@ -950,7 +951,8 @@ contains
     if(nsubgrid == 1)threads_per_block = 64
     if(nsubgrid == 2)threads_per_block = 256
 #ifdef MHD
-    if(riemann == solver_uct_hlld)then
+    if(riemann == solver_uct_hlld .or. riemann == solver_uct_llf .or. riemann == solver_uct_hll)then
+       uct_riemann_d = riemann
        call gpu_godunov_uct()
        call nvtxEndRange()
        return
