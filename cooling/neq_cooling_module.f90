@@ -906,7 +906,7 @@ SUBROUTINE cmp_equilibrium_abundances(r, tables, &
   real(kind=8)::mu,Zsolar
   real(kind=8),dimension(1:7)::nSpec
   !-------------------------------------------------------------------------
-  real(kind=8)::mu_mid, err_mu, mu_left, mu_right, T, nTot
+  real(kind=8)::mu_mid, err_mu, mu_left, mu_right, T
   integer::niter
   !-------------------------------------------------------------------------
   ! Iteration to find mu                     ! n_E     = n_spec(1) ! e
@@ -919,7 +919,7 @@ SUBROUTINE cmp_equilibrium_abundances(r, tables, &
   do while (err_mu > 1d-4 .and. niter <= 50)
      mu_mid=0.5*(mu_left+mu_right)
      T = T2*mu_mid
-     call cmp_chem_eq(r, tables, T, nH, phI_rates, nSpec, nTot, mu, Zsolar)
+     call cmp_chem_eq(r, tables, T, nH, phI_rates, nSpec, mu, Zsolar)
      if(mu - mu_mid > 0.)then
         mu_left = mu_mid
      else
@@ -936,7 +936,7 @@ SUBROUTINE cmp_equilibrium_abundances(r, tables, &
 END SUBROUTINE cmp_equilibrium_abundances
 
 !XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-SUBROUTINE cmp_chem_eq(r, tables, TK, nH, t_rad_spec, nSpec, nTot, mu, Zsol)
+SUBROUTINE cmp_chem_eq(r, tables, TK, nH, t_rad_spec, nSpec, mu, Zsol)
 
   ! Compute chemical equilibrium abundances of e,H2,HI,HII,HeI,HeII,HeIII.
   ! tables     => Object containing all non-equilibrium cooling tables
@@ -945,18 +945,17 @@ SUBROUTINE cmp_chem_eq(r, tables, TK, nH, t_rad_spec, nSpec, nTot, mu, Zsol)
   ! t_rad_spec => Photoionization rates [s-1] for H2, HI, HeI, HeII
   ! Zsol       => Metallicity in Solar units
   ! nSpec      <= Resulting species number densities
-  ! nTot       <= Resulting total number density (=sum of nSpec)
   ! mu         <= Resulting average particle mass in units of proton mass
   !------------------------------------------------------------------------
   implicit none
   type(run_t)::r
   type(neq_cooling_t)::tables
   real(kind=8),intent(in)::TK, nH, Zsol
-  real(kind=8),intent(out)::nTot, mu
+  real(kind=8),intent(out)::mu
   real(kind=8),dimension(nion),intent(in)::t_rad_spec
   real(kind=8),dimension(1:7),intent(out)::nSpec
   !------------------------------------------------------------------------
-  real(kind=8)::nHe
+  real(kind=8)::nHe, nTot
   real(kind=8)::n_H2, n_HI, n_HII, n_HEI, n_HEII, n_HEIII, n_E, n_E_min
   real(kind=8)::g_H2=0,   g_HI=0,    g_HEI=0, g_HEII=0,  g_cmb_HI=0   ! Photoion/dissoc
   real(kind=8)::aZ_H2=0,  aGP_H2=0,  a_HI=0,  a_HEI=0,   a_HEII=0  ! Formation
@@ -1105,12 +1104,14 @@ SUBROUTINE neq_evol_single_cell(r, tables, astart, aend, dasura, &
   associate(ixHI=>r%ixHi, ixHII=>r%ixHII, ixHeII=>r%ixHeII, ixHeIII=>r%ixHeIII)
 
   aexp = astart
-  T2_com = 2.726d0 / aexp * aexp**2 / r%mu_mol
+  T2_com = 2.726d0 / aexp * aexp**2                    ! Temperature T [K]
   nH_com = omegab*rhoc*h**2*r%X_H/mH
   pHI_rates = 0.                              ! Initially no UV background
 
-  call cmp_equilibrium_abundances(r,tables,T2_com/aexp**2,nH_com/aexp**3 &
-        ,pHI_rates, mu, n_Spec, 0d0)
+  call cmp_chem_eq(r, tables, T2_com/aexp**2, nH_com/aexp**3             &
+        ,phI_rates, n_Spec, mu, 0d0)
+
+  T2_com = T2_com / mu                              ! Temperature T/mu [K]
 
   ! Initialize cell state
   T2(1)=T2_com                                          !      Temperature
