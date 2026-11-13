@@ -71,7 +71,10 @@ GITHASH = $(shell git log --pretty=format:'%H' -n 1)
 GITREPO = $(shell git config --get remote.origin.url)
 BUILDDATE = $(shell date +"%D-%T")
 BUILDCOMMAND = ${MAKE} ${MAKEFLAGS}
-DEFINES += -DNDIM=$(NDIM) -DNVAR=$(NVAR)
+DEFINES += -DNDIM=$(NDIM)
+ifeq ($(HYDRO),1)
+   DEFINES += -DNVAR=$(NVAR)
+endif
 DEFINES += $(EXTRA_DEFINES)
 #############################################################################
 # RTZ options

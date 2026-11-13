@@ -129,11 +129,14 @@ cmake_print_variables(COMPILER NDIM NVAR NENER NION NRTGRP NCRGRP UNITS INIT HYD
 # =============================================================================
 set(defines
     NDIM=${NDIM}
-    NVAR=${NVAR}
     NVECTOR=${NVECTOR}
     NPRE=${NPRE}
     NHILBERT=${NHILBERT}
 )
+
+if(HYDRO)
+    list(APPEND defines NVAR=${NVAR})
+endif()
 
 if(NENER GREATER 0)
     list(APPEND defines NENER=${NENER})
