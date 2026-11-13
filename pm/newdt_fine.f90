@@ -43,6 +43,8 @@ subroutine m_newdt_fine(pst,ilevel)
   real(kind=8)::dx,tff,fourpi,threepi2
   real(kind=8)::ekin,vmax
   real(kind=8)::dt_gyro, dt_courant, max_b, max_q, cr_c
+  real(kind=8)::trem,dtest
+  integer::nrem
   type(out_courant_fine_t)::out_courant_fine
   type(out_newdt_part_t)::out_newdt_part
   type(in_broadcast_dt_t)::in_broadcast_dt
@@ -145,6 +147,25 @@ subroutine m_newdt_fine(pst,ilevel)
   if(ilevel>r%levelmin)then
      g%dtnew(ilevel)=MIN(g%dtnew(ilevel-1)/real(r%nsubcycle(ilevel-1)),g%dtnew(ilevel))
   end if
+
+  ! Land the coarse step on the next output time: within tout_nstep coarse
+  ! steps of it, use dt=trem/nrem, nrem=ceiling(trem/dt), so that the time
+  ! step reduction is spread over the last nrem steps (at most 1/tout_nstep each)
+  if(ilevel==r%levelmin.and.r%tout_nstep>0.and.g%iout<=r%noutput)then
+     trem=r%tout(g%iout)-g%t
+     if(trem>0)then
+        ! The previous coarse step includes the finer level constraints
+        dtest=g%dtnew(ilevel)
+        if(g%dtold(ilevel)>0)dtest=MIN(dtest,g%dtold(ilevel))
+        if(trem<r%tout_nstep*dtest)then
+           ! Tolerance: trem/dtest=3+round-off must give 3 steps, not 4
+           nrem=max(1,ceiling(trem/dtest-1d-6))
+           g%dtnew(ilevel)=trem/dble(nrem)
+           ! Last step: overshoot by round-off only, so that t>=tout
+           if(nrem==1)g%dtnew(ilevel)=trem+1d-10*abs(r%tout(g%iout))
+        endif
+     endif
+  endif
   if(r%verbose)write(*,'("   New time step for level ",I2," is ",1PE12.5)')ilevel,g%dtnew(ilevel)
 
   ! Broadcast new and old time steps to all CPUs

@@ -326,23 +326,6 @@ subroutine init_amr(r,g,m,type)
      end do
   end do
 
-  ! With NSUBGRID>1, the box edges at levelmin must fall on block boundaries
-  if(type=='amr')then
-     do idim=1,ndim
-        if(mod(m%box_ckey_min(idim,r%levelmin),nsubgrid)/=0.or. &
-         & mod(m%box_ckey_max(idim,r%levelmin),nsubgrid)/=0)then
-           if(g%myid==1)then
-              write(*,*)'Error in the namelist:'
-              write(*,'(" With NSUBGRID=",I0,", the box edges at levelmin must be multiples of ",I0," octs")')nsubgrid,nsubgrid
-              write(*,'(" Direction ",I0,": box edges at levelmin are ",I0," and ",I0)')idim, &
-                   & m%box_ckey_min(idim,r%levelmin),m%box_ckey_max(idim,r%levelmin)
-              write(*,*)'This holds for any box_xmin,... if levelmin >= bound_levelmin+log2(NSUBGRID)'
-           endif
-           stop
-        endif
-     end do
-  endif
-
   ! Number of octs across the grid at levelmin
   m%nx = 1; m%ny = 1; m%nz = 1
   m%nx = m%box_ckey_max(1,r%levelmin)-m%box_ckey_min(1,r%levelmin)

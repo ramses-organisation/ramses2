@@ -2,29 +2,6 @@
 !##############################################################
 !##############################################################
 !##############################################################
-module clean_stop_module
-contains
-recursive subroutine r_clean_stop(pst)
-  use mdl_module
-  use ramses_commons, only: pst_t
-  use mdl_parameters
-  implicit none
-  type(pst_t)::pst
-
-  integer::rID
-
-  if(pst%nLower>0)then
-     rID = mdl_send_request(pst%s%mdl,MDL_CLEAN_STOP,pst%iUpper+1)
-     call r_clean_stop(pst%pLower)
-     call mdl_get_reply(pst%s%mdl,rID,0)
-  endif
-
-end subroutine r_clean_stop
-end module clean_stop_module
-!##############################################################
-!##############################################################
-!##############################################################
-!##############################################################
 subroutine mdl_init
   use call_back
   use clean_stop_module, only: r_clean_stop

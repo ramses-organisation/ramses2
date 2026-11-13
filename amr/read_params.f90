@@ -11,6 +11,7 @@ subroutine m_read_params(pst)
   use cr_parameters, only: ncrgrp
   use ramses_commons, only: pst_t
   use mdl_module
+  use clean_stop_module, only: m_clean_abort
   use movie_module, only: set_movie_vars
   use rt_params_module
   use cr_params_module
@@ -24,7 +25,8 @@ subroutine m_read_params(pst)
   !--------------------------------------------------
   ! Local variables
   !--------------------------------------------------
-  integer::i,narg,levelmax
+  integer::i,narg,levelmax,idim
+  integer,dimension(1:3)::kmin,kmax
   character(LEN=flen)::infile
   character(LEN=80)::cmdarg
   integer(kind=8)::ngridtot=0
@@ -120,6 +122,7 @@ subroutine m_read_params(pst)
   ! Output times
   real(kind=8),dimension(1:MAXOUT)::aout=1.1  ! Output expansion factors
   real(kind=8),dimension(1:MAXOUT)::tout=0.0  ! Output times
+  integer::tout_nstep=0                       ! Coarse steps to land on the next tout (0: off)
 
   ! Trajectory output parameters
   integer::ntrajectories=0
@@ -609,7 +612,7 @@ subroutine m_read_params(pst)
        & ,static_mesh,static_gas,geom,overload &
        & ,clump_only
   ! Output parameters
-  namelist/output_params/foutput,aout,tout,output_mode &
+  namelist/output_params/foutput,aout,tout,tout_nstep,output_mode &
        & ,tend,delta_tout,aend,delta_aout,gadget_output &
        & ,run_time_hrs,bkp_time_hrs,bkp_last_min,bkp_modulo,nfile &
        & ,output_part,output_grav,output_hydro,output_amr
@@ -799,7 +802,7 @@ subroutine m_read_params(pst)
   if(nvar<5)then
      write(*,*)'You should have: nvar>=5'
      write(*,'(" Please recompile with -DNVAR=5")')
-     call mdl_abort(s%mdl)
+     call m_clean_abort(pst)
   endif
 #endif
 #ifdef DO_RT
@@ -818,14 +821,14 @@ subroutine m_read_params(pst)
      write(*,*)'You should type: ramses3d input.nml [nrestart]'
      write(*,*)'File input.nml should contain a parameter namelist'
      write(*,*)'nrestart is optional'
-     call mdl_abort(s%mdl)
+     call m_clean_abort(pst)
   END IF
   CALL getarg(1,infile)
   call get_command_argument(1,length=i)
   if(i>len(infile))then
      write(*,'(A,I0,A)')'Error: the namelist path is longer than ',len(infile), &
           & ' characters; increase flen in amr_parameters.f90'
-     call mdl_abort(s%mdl)
+     call m_clean_abort(pst)
   endif
 
   !-------------------------------------------------
@@ -835,7 +838,7 @@ subroutine m_read_params(pst)
   INQUIRE(file=infile,exist=nml_ok)
   if(.not. nml_ok)then
      write(*,*)'File '//TRIM(infile)//' does not exist'
-     call mdl_abort(s%mdl)
+     call m_clean_abort(pst)
   end if
 
   open(1,file=infile)
@@ -971,7 +974,7 @@ subroutine m_read_params(pst)
      write(*,*)'You are using the hydro solver but'
      write(*,*)'the code was compiled with HYDRO=0'
      write(*,*)'Please recompile with HYDRO=1'
-     call mdl_abort(s%mdl)
+     call m_clean_abort(pst)
   endif
 #endif
 #ifdef GRAV
@@ -985,7 +988,7 @@ subroutine m_read_params(pst)
      write(*,*)'You are using the poisson solver but'
      write(*,*)'the code was compiled with GRAV=0'
      write(*,*)'Please recompile with GRAV=1'
-     call mdl_abort(s%mdl)
+     call m_clean_abort(pst)
   endif
 #endif
 #ifdef DO_RT
@@ -999,7 +1002,7 @@ subroutine m_read_params(pst)
      write(*,*)'You are trying to use the rt solver but'
      write(*,*)'the code was compiled with RT=0'
      write(*,*)'Please recompile with RT=1'
-     call mdl_abort(s%mdl)
+     call m_clean_abort(pst)
   endif
 #endif
 #ifdef DO_CR
@@ -1013,7 +1016,7 @@ subroutine m_read_params(pst)
      write(*,*)'You are trying to use the cr solver but'
      write(*,*)'the code was compiled with CR=0'
      write(*,*)'Please recompile with CR=1'
-     call mdl_abort(s%mdl)
+     call m_clean_abort(pst)
   endif
 #endif
 #ifndef MHD
@@ -1021,7 +1024,7 @@ subroutine m_read_params(pst)
      write(*,*)'You are trying to use the cr solver but'
      write(*,*)'the code was compiled with MHD=0'
      write(*,*)'Please recompile with MHD=1'
-     call mdl_abort(s%mdl)
+     call m_clean_abort(pst)
   endif
 #endif
 
@@ -1032,7 +1035,7 @@ subroutine m_read_params(pst)
   read(1,NML=init_params,END=101)
   goto 102
 101 write(*,*)' You need to set up namelist &INIT_PARAMS in parameter file'
-  call mdl_abort(s%mdl)
+  call m_clean_abort(pst)
 102 rewind(1)
   if(nlevelmax>levelmin)read(1,NML=refine_params)
   rewind(1)
@@ -1048,7 +1051,7 @@ subroutine m_read_params(pst)
 107 continue
   if(eos_type<1.or.eos_type>5)then
      write(*,*)'Error: eos_type must be 1 to 5, not ',eos_type
-     call mdl_abort(s%mdl)
+     call m_clean_abort(pst)
   endif
   rewind(1)
   read(1,NML=star_params,END=108)
@@ -1119,11 +1122,11 @@ subroutine m_read_params(pst)
   !-----------------
   if(nlevelmax>MAXLEVEL)then
      write(*,*) 'Error: nlevelmax>MAXLEVEL'
-     call mdl_abort(s%mdl)
+     call m_clean_abort(pst)
   end if
   if(nregion>MAXREGION)then
      write(*,*) 'Error: nregion>MAXREGION'
-     call mdl_abort(s%mdl)
+     call m_clean_abort(pst)
   end if
 
   !-----------------------------------
@@ -1296,7 +1299,7 @@ subroutine m_read_params(pst)
         write(*,*) 'Not enough variables for ionization fractions'
         write(*,*) 'Have NION=',NION
         write(*,*) 'STOPPING!'
-        call mdl_abort(s%mdl)
+        call m_clean_abort(pst)
      endif
      if(iCount .lt. NION) then
         write(*,*) 'Too many variables for ionization fractions'
@@ -1313,7 +1316,7 @@ subroutine m_read_params(pst)
         write(*,*) 'Have NVAR=',nvar
         write(*,*) 'Should have NVAR=',iIons+iCount-1
         write(*,*) 'STOPPING!'
-        call mdl_abort(s%mdl)
+        call m_clean_abort(pst)
      endif
      ! Output indices for the user to check
      write(*,'(A39, I4)') 'The number of ionization fractions is:',iCount
@@ -1568,10 +1571,28 @@ subroutine m_read_params(pst)
   endif
 #endif
 
+  ! With NSUBGRID>1, the box edges at levelmin must fall on block boundaries
+  ! (Cartesian keys at levelmin computed as in init_amr)
+  kmin=(/box_xmin,box_ymin,box_zmin/)
+  kmax=(/box_xmax,box_ymax,box_zmax/)
+  do idim=1,ndim
+     if(kmin(idim)<0)kmin(idim)=2**(bound_levelmin-1)+kmin(idim)
+     if(kmax(idim)<=0)kmax(idim)=2**(bound_levelmin-1)+kmax(idim)
+     kmin(idim)=kmin(idim)*2**(levelmin-bound_levelmin)
+     kmax(idim)=kmax(idim)*2**(levelmin-bound_levelmin)
+     if(mod(kmin(idim),nsubgrid)/=0.or.mod(kmax(idim),nsubgrid)/=0)then
+        write(*,*)'Error in the namelist:'
+        write(*,'(" With NSUBGRID=",I0,", the box edges at levelmin must be multiples of ",I0," octs")')nsubgrid,nsubgrid
+        write(*,'(" Direction ",I0,": box edges at levelmin are ",I0," and ",I0)')idim,kmin(idim),kmax(idim)
+        write(*,*)'This holds for any box_xmin,... if levelmin >= bound_levelmin+log2(NSUBGRID)'
+        nml_ok=.false.
+     endif
+  end do
+
   if(.not. nml_ok)then
      write(*,*)'Too many errors in the namelist'
      write(*,*)'Aborting...'
-     call mdl_abort(s%mdl)
+     call m_clean_abort(pst)
   end if
 
   ! Fill in all run parameters in corresponding structure
@@ -1606,6 +1627,7 @@ subroutine m_read_params(pst)
   s%r%foutput=foutput
   s%r%aout=aout
   s%r%tout=tout
+  s%r%tout_nstep=tout_nstep
   s%r%output_mode=output_mode
   s%r%gadget_output=gadget_output
   s%r%run_time_hrs=run_time_hrs

@@ -8,6 +8,7 @@ This namelist block, called `&OUTPUT_PARAMS`, is used to set up the output strat
 | `aend=0`       | `real`    | End time of the simulation, in expansion factor (for cosmology runs only). |
 | `delta_aout=0` | `real`    | Frequency of outputs in expansion factor (for cosmology runs only). |
 | `tout=0.0,0.0,0.0,` | `real array` | Value of specified output times with `tout>0`. |
+| `tout_nstep=0` | `integer` | When positive, the coarse time step is reduced over the last coarse steps before each output time `tout`, so that the snapshot is written at `tout` instead of overshooting it: within `tout_nstep` coarse steps of `tout`, the remaining time is split into equal steps, so each step is reduced by at most a fraction `1/tout_nstep`. Typical values are 5 to 10. Default value of 0 means this is not used. Not used for `aout` outputs. |
 | `aout=1.1,1.1,1.1,` | `real array` | Value of specified output expansion factor (for cosmology runs only) with `0<aout<=1` where `aout=1` means "present epoch" or "redshift zero". |
 | `bkp_time_hrs=2` | `real` | Wallclock time in hours between two consecutive backup files. Backup files are used to perform a checkpoint/restart of a simulation that ended prematurely.|
 | `bkp_modulo=0`   | `integer` | Backup files are written using a numbering scheme that cycles modulo the prescribed number. Default value of 0 means never. A value of 1 corresponds to only 1 backup file at all time, with the risk of loosing it if something goes wrong during the write. Preferred values are 2 or 3. |
