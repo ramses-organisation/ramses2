@@ -122,7 +122,7 @@ subroutine m_read_params(pst)
   ! Output times
   real(kind=8),dimension(1:MAXOUT)::aout=1.1  ! Output expansion factors
   real(kind=8),dimension(1:MAXOUT)::tout=0.0  ! Output times
-  integer::tout_nstep=0                       ! Coarse steps to land on the next tout (0: off)
+  integer::nlanding=0                         ! Coarse steps to land on the next tout or aout (0: off)
 
   ! Trajectory output parameters
   integer::ntrajectories=0
@@ -612,7 +612,7 @@ subroutine m_read_params(pst)
        & ,static_mesh,static_gas,geom,overload &
        & ,clump_only
   ! Output parameters
-  namelist/output_params/foutput,aout,tout,tout_nstep,output_mode &
+  namelist/output_params/foutput,aout,tout,nlanding,output_mode &
        & ,tend,delta_tout,aend,delta_aout,gadget_output &
        & ,run_time_hrs,bkp_time_hrs,bkp_last_min,bkp_modulo,nfile &
        & ,output_part,output_grav,output_hydro,output_amr
@@ -1627,7 +1627,7 @@ subroutine m_read_params(pst)
   s%r%foutput=foutput
   s%r%aout=aout
   s%r%tout=tout
-  s%r%tout_nstep=tout_nstep
+  s%r%nlanding=nlanding
   s%r%output_mode=output_mode
   s%r%gadget_output=gadget_output
   s%r%run_time_hrs=run_time_hrs

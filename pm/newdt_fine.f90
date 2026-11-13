@@ -25,7 +25,7 @@ contains
 !#####################################################################
 !#####################################################################
 subroutine m_newdt_fine(pst,ilevel)
-  use amr_parameters, only: nvector
+  use amr_parameters, only: nvector, n_frw
   use ramses_commons, only: pst_t
   use courant_fine_module, only: r_courant_fine, out_courant_fine_t
   use constants, only: twopi
@@ -43,8 +43,8 @@ subroutine m_newdt_fine(pst,ilevel)
   real(kind=8)::dx,tff,fourpi,threepi2
   real(kind=8)::ekin,vmax
   real(kind=8)::dt_gyro, dt_courant, max_b, max_q, cr_c
-  real(kind=8)::trem,dtest
-  integer::nrem
+  real(kind=8)::tnext,trem,dtest
+  integer::nrem,i
   type(out_courant_fine_t)::out_courant_fine
   type(out_newdt_part_t)::out_newdt_part
   type(in_broadcast_dt_t)::in_broadcast_dt
@@ -148,21 +148,34 @@ subroutine m_newdt_fine(pst,ilevel)
      g%dtnew(ilevel)=MIN(g%dtnew(ilevel-1)/real(r%nsubcycle(ilevel-1)),g%dtnew(ilevel))
   end if
 
-  ! Land the coarse step on the next output time: within tout_nstep coarse
+  ! Land the coarse step on the next output time: within nlanding coarse
   ! steps of it, use dt=trem/nrem, nrem=ceiling(trem/dt), so that the time
-  ! step reduction is spread over the last nrem steps (at most 1/tout_nstep each)
-  if(ilevel==r%levelmin.and.r%tout_nstep>0.and.g%iout<=r%noutput)then
-     trem=r%tout(g%iout)-g%t
+  ! step reduction is spread over the last nrem steps (at most 1/nlanding each)
+  ! With cosmo, the output time is the conformal time of aout, obtained by
+  ! inverting the Friedmann table interpolation used in update_time
+  if(ilevel==r%levelmin.and.r%nlanding>0.and.g%iout<=r%noutput)then
+     if(r%cosmo)then
+        i=1
+        do while(g%aexp_frw(i)>r%aout(g%iout).and.i<n_frw)
+           i=i+1
+        end do
+        tnext=g%tau_frw(i  )*(r%aout(g%iout)-g%aexp_frw(i-1))/(g%aexp_frw(i  )-g%aexp_frw(i-1))+ &
+            & g%tau_frw(i-1)*(r%aout(g%iout)-g%aexp_frw(i  ))/(g%aexp_frw(i-1)-g%aexp_frw(i  ))
+     else
+        tnext=r%tout(g%iout)
+     endif
+     trem=tnext-g%t
      if(trem>0)then
         ! The previous coarse step includes the finer level constraints
         dtest=g%dtnew(ilevel)
         if(g%dtold(ilevel)>0)dtest=MIN(dtest,g%dtold(ilevel))
-        if(trem<r%tout_nstep*dtest)then
+        if(trem<r%nlanding*dtest)then
            ! Tolerance: trem/dtest=3+round-off must give 3 steps, not 4
            nrem=max(1,ceiling(trem/dtest-1d-6))
            g%dtnew(ilevel)=trem/dble(nrem)
-           ! Last step: overshoot by round-off only, so that t>=tout
-           if(nrem==1)g%dtnew(ilevel)=trem+1d-10*abs(r%tout(g%iout))
+           ! Last step: overshoot by round-off only, so that t>=tout or aexp>=aout
+           ! (trem included, since the conformal time is 0 at aout=1)
+           if(nrem==1)g%dtnew(ilevel)=trem+1d-10*max(trem,abs(tnext))
         endif
      endif
   endif

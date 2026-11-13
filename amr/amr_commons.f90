@@ -49,7 +49,7 @@ module amr_commons
      integer::foutput=1000000    ! Frequency of outputs
      real(kind=8),dimension(1:MAXOUT)::aout=1.1 ! Output expansion factors
      real(kind=8),dimension(1:MAXOUT)::tout=0.0 ! Output times
-     integer::tout_nstep=0       ! Coarse steps to land on the next tout (0: off)
+     integer::nlanding=0         ! Coarse steps to land on the next tout or aout (0: off)
      integer::output_mode=0      ! Output mode (for hires runs)
      logical::gadget_output=.false. ! Output in gadget format
      real(kind=8)::bkp_time_hrs=2   ! Backup file frequency in hours
