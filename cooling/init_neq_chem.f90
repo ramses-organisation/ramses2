@@ -52,8 +52,6 @@ subroutine init_neq_chem(r,g,tables)
 #endif
   endif
 
-  ! Compton table at the epoch the run starts from
-  if(r%cosmo)call update_coolrates_tables(r, tables, dble(g%aexp))
 #ifndef DO_RTZ
   ! UV suppression of metal cooling at the same epoch (zero without cosmology)
   tables%phi=0d0

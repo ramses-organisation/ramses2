@@ -96,13 +96,17 @@ MODULE coolrates_module
      type(coolrates_table) :: tbl_beta_H3B ! Coll. dissociation rates
      type(coolrates_table) :: tbl_cr_H2HI ! Collisional diss. cooling
      type(coolrates_table) :: tbl_cr_H2H2 ! Collisional diss. cooling
+     type(coolrates_table) :: tbl_beta_ly_red ! Lyman Alpha redshifting
+     type(coolrates_table) :: tbl_beta_cmb_HI ! CMB ion. from excited states
+     type(coolrates_table) :: tbl_gamma_cmb_HI ! Total CMB ion. rate
+     type(coolrates_table) :: tbl_beta_cmb_Hm ! H- destr. by CMB over H2 cr.
 
   end type neq_cooling_t
 
 CONTAINS
 
 !XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-SUBROUTINE init_coolrates_tables(r, tables, aexp)
+SUBROUTINE init_coolrates_tables(r, tables, aexp, Ha)
 
   ! Initialise the cooling rates tables.
   !-------------------------------------------------------------------------
@@ -112,7 +116,7 @@ SUBROUTINE init_coolrates_tables(r, tables, aexp)
   implicit none
   type(run_t)::r
   type(neq_cooling_t)::tables
-  real(kind=8)::aexp
+  real(kind=8)::aexp, Ha
   !-------------------------------------------------------------------------
 #ifndef WITHOUTMPI
   integer::ierr
@@ -147,7 +151,7 @@ SUBROUTINE init_coolrates_tables(r, tables, aexp)
   do iT = myid+1, nbinT, ncpu ! Loop over TK and assign rates
      call comp_table_rates(r, tables, iT)
      ! Compton rates at aexp (comp_table_rates leaves them out)
-     call update_table_rates(r, tables, iT, aexp)
+     call update_table_rates(r, tables, iT, aexp, Ha)
   end do ! end TK loop
 
   ! Distribute the complete table between cpus ---------------------------
@@ -188,6 +192,11 @@ SUBROUTINE init_coolrates_tables(r, tables, aexp)
   call mpi_distribute_coolrates_table(tables%tbl_cr_H2HI)
   call mpi_distribute_coolrates_table(tables%tbl_cr_H2H2)
 
+  call mpi_distribute_coolrates_table(tables%tbl_beta_ly_red)
+  call mpi_distribute_coolrates_table(tables%tbl_beta_cmb_HI)
+  call mpi_distribute_coolrates_table(tables%tbl_gamma_cmb_HI)
+  call mpi_distribute_coolrates_table(tables%tbl_beta_cmb_Hm)
+
 #endif
 
   if(myid==0) print*,'Coolrates tables initialised '
@@ -195,7 +204,7 @@ SUBROUTINE init_coolrates_tables(r, tables, aexp)
 END SUBROUTINE init_coolrates_tables
 
 !XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-SUBROUTINE update_coolrates_tables(r, tables, aexp)
+SUBROUTINE update_coolrates_tables(r, tables, aexp, Ha)
   ! Update cooling rates lookup tables which depend on aexp
   !-------------------------------------------------------------------------
 #ifndef WITHOUTMPI
@@ -204,7 +213,7 @@ SUBROUTINE update_coolrates_tables(r, tables, aexp)
   implicit none
   type(run_t)::r
   type(neq_cooling_t)::tables
-  real(kind=8)::aexp
+  real(kind=8)::aexp, Ha
   !-------------------------------------------------------------------------
 #ifndef WITHOUTMPI
   integer::ierr
@@ -220,13 +229,21 @@ SUBROUTINE update_coolrates_tables(r, tables, aexp)
   ncpu=1
 #endif
   tables%tbl_cr_com%rates  = 0d0 ; tables%tbl_cr_com%primes = 0d0
+  tables%tbl_beta_ly_red%rates  = 0d0 ; tables%tbl_beta_ly_red%primes = 0d0
+  tables%tbl_beta_cmb_HI%rates  = 0d0 ; tables%tbl_beta_cmb_HI%primes = 0d0
+  tables%tbl_gamma_cmb_HI%rates  = 0d0 ; tables%tbl_gamma_cmb_HI%primes = 0d0
+  tables%tbl_beta_cmb_Hm%rates  = 0d0 ; tables%tbl_beta_cmb_Hm%primes = 0d0
   do iT = myid+1, nbinT, ncpu ! Loop over TK and assign rates
-     call update_table_rates(r, tables, iT, aexp)
+     call update_table_rates(r, tables, iT, aexp, Ha)
   end do ! end TK loop
 
   ! Distribute the complete table between cpus ---------------------------
 #ifndef WITHOUTMPI
   call mpi_distribute_coolrates_table(tables%tbl_cr_com)
+  call mpi_distribute_coolrates_table(tables%tbl_beta_ly_red)
+  call mpi_distribute_coolrates_table(tables%tbl_beta_cmb_HI)
+  call mpi_distribute_coolrates_table(tables%tbl_gamma_cmb_HI)
+  call mpi_distribute_coolrates_table(tables%tbl_beta_cmb_Hm)
 #endif
 
 END SUBROUTINE update_coolrates_tables
@@ -291,7 +308,7 @@ SUBROUTINE comp_table_rates(r, tables, iT)
 
   ! Gas phase formation rate rate for H2 on H- [cm3 s-1] assuming---------
   ! equilibrium abundances for H-, as explained in the Appendix of
-  ! McKee and Krumholz (2012)
+  ! McKee and Krumholz (2010)
   tables%tbl_alphaGP_H2%rates(iT)  = 1.83d-18*T**0.88
   tables%tbl_alphaGP_H2%primes(iT) = 0.88                                       &
                             * log(10d0) * tables%tbl_alphaGP_H2%rates(iT)
@@ -521,27 +538,48 @@ SUBROUTINE update_rt_c(r, g, tables)
 END SUBROUTINE update_rt_c
 
 !PRIVATEXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-SUBROUTINE update_table_rates(r, tables, iT, aexp)
-  ! Update index iTK in all Compton cooling rates tables due to change in
-  ! aexp
+SUBROUTINE update_table_rates(r, tables, iT, aexp, Ha)
+  ! Update index iTK in all tables due to change in aexp
   !-------------------------------------------------------------------------
   implicit none
   type(run_t)::r
   type(neq_cooling_t)::tables
   integer::iT
-  real(kind=8)::aexp
+  real(kind=8)::aexp, Ha
   !-------------------------------------------------------------------------
-  real(kind=8)::T, Ta
+  real(kind=8)::T, Ta, saha_factor, lyman_exp
   !-------------------------------------------------------------------------
   ! Rates are stored in log, while temperature derivatives (primes) are
   ! stored in non-log
-  T = 10d0**tables%T_lookup(iT)
+
+  ! Gas temperature
+  T  = 10d0**tables%T_lookup(iT)
+  ! CMB temperature
+  Ta = 2.725d0/aexp
+
   ! Compton Cooling from Haimann et al. 96, via Maselli et al.
-  ! Need to make sure this is done whenever the redshift changes!
-  Ta     = 2.727/aexp
   tables%tbl_cr_com%rates(iT)   = 1.017d-37 * Ta**4 * (T-Ta)
   tables%tbl_cr_com%primes(iT)  = T / (T-Ta)                                    &
                          * log(10d0) * tables%tbl_cr_com%rates(iT)
+
+  ! Recombination physics from Peebles (1993)
+
+  ! Lyman Alpha photons redshifted out of resonance (eq. 6.107)
+  tables%tbl_beta_ly_red%rates(iT) = (1.21567d-5)**3 / (8d0*pi) / Ha
+
+  ! Ionization of excited states (eq. 6.110) with fudge factor (1.14d0) from Seager et al. (1999)
+  saha_factor = 1.14d0 * 2.4147d15*Ta**1.5d0 * exp(-39451.75d0/Ta)
+  tables%tbl_beta_cmb_HI%rates(iT) = tables%tbl_AlphaB_HII%rates(iT) * saha_factor
+  tables%tbl_beta_cmb_HI%primes(iT) = tables%tbl_AlphaB_HII%primes(iT) * saha_factor
+
+  ! CMB contribution to ionization (eq. 6.112)
+  lyman_exp = exp(-118355.25d0/Ta)
+  tables%tbl_gamma_cmb_HI%rates(iT) = tables%tbl_beta_cmb_HI%rates(iT) * lyman_exp
+  tables%tbl_gamma_cmb_HI%primes(iT) = tables%tbl_beta_cmb_HI%primes(iT) * lyman_exp
+
+  ! H- photodissociation rate by the CMB from Galli and Palla (1998) over
+  ! the H2 formation rate by Schmeltekopf et al. (1967)
+  tables%tbl_beta_cmb_Hm%rates(iT) = 0.11d0*Ta**2.13d0*exp(-8823d0/Ta) / 1.3d-9
 
 END SUBROUTINE update_table_rates
 
