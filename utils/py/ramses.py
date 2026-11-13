@@ -1487,6 +1487,107 @@ def visu(x,y,dx,v,**kwargs):
         plt.colorbar(shrink=0.8)
     plt.rcParams['figure.dpi'] = olddpi
 
+def visu_cells(x,y,dx,v,**kwargs):
+    '''The visualization function visu_cells() draws RAMSES AMR data with each cell as an exact square.
+
+    Same arguments as visu(), but each cell is a square of side dx in data
+    coordinates (a PolyCollection), so cells tile the plane exactly and grid
+    lines are straight. Slower than visu() for millions of cells.
+
+    Args:
+
+        x: the x-coordinate of the cells.
+        y: the y-coordinate of the cells.
+        dx: the size of the cells.
+        v: the value to show as the color of each cell.
+
+    Optional args:
+
+        vmin: minimum value for the input array v to use in the color range
+        vmax: maximum value for the input array v to use in the color range
+        log: when set, use the log of the input array v in the color range
+        colorbar: when True, draw a colorbar (default: True)
+        log_floor: lower bound applied to |v| before log10 (default 0)
+        sort: draw the cells in increasing order of array sort (useful for 3D data)
+        cmap: color map (default: viridis)
+        grid: when set, overlay the cell edges (or the block edges, see nsubgrid)
+        grid_min_px: draw the edges of cells at least this many pixels wide (default 0: all cells)
+        nsubgrid: when set with grid, draw the edges of blocks of nsubgrid**2 octs instead of cells
+
+    Returns:
+
+        Output a figure of size 1000 pixels aside.
+
+    Example:
+
+        import ramses as ram
+        c=ram.rd_cell(2)
+        ram.visu_cells(c.x[0],c.x[1],c.dx,c.u[0],log=1,grid=1,nsubgrid=4)
+    '''
+    from matplotlib.collections import PolyCollection
+
+    log = kwargs.get("log",None)
+    vmin = kwargs.get("vmin",None)
+    vmax = kwargs.get("vmax",None)
+    sort = kwargs.get("sort",None)
+    cmap = kwargs.get("cmap",'viridis')
+    grid = kwargs.get("grid",None)
+    log_floor = kwargs.get("log_floor",0)
+    show_colorbar = kwargs.get("colorbar",True)
+    grid_min_px = kwargs.get("grid_min_px",0)
+    nsubgrid = kwargs.get("nsubgrid",None)
+
+    if( not (log is None)):
+        v = np.log10(np.maximum(np.abs(v), float(log_floor)))
+        if not (vmin is None):
+            vmin = np.log10(float(vmin))
+        if not (vmax is None):
+            vmax = np.log10(float(vmax))
+
+    print("min=",np.min(v)," max=",np.max(v))
+
+    if( not (sort is None)):
+        ind = np.argsort(sort)
+    else:
+        ind = np.arange(0,v.size)
+    x = x[ind]; y = y[ind]; dx = dx[ind]; v = v[ind]
+
+    def squares(xc,yc,s):
+        h = s/2
+        return np.stack([np.stack([xc-h,yc-h],1),np.stack([xc+h,yc-h],1),
+                         np.stack([xc+h,yc+h],1),np.stack([xc-h,yc+h],1)],1)
+
+    fig, ax = plt.subplots(figsize=(10,8.75),dpi=100)
+    pc = PolyCollection(squares(x,y,dx),array=v,cmap=cmap,edgecolors='face',linewidths=0)
+    pc.set_clim(vmin,vmax)
+    ax.add_collection(pc)
+    ax.set_xlim([np.min(x-dx/2),np.max(x+dx/2)])
+    ax.set_ylim([np.min(y-dx/2),np.max(y+dx/2)])
+    ax.set_aspect("equal")
+
+    if( not (grid is None)):
+        if( not (nsubgrid is None)):
+            # Blocks of nsubgrid**2 octs (2*nsubgrid cells aside), aligned on absolute coordinates
+            blocks = []
+            for d in np.unique(dx):
+                m = np.isclose(dx,d)
+                b = 2*int(nsubgrid)*d
+                ib = np.floor(x[m]/b+1e-6).astype(np.int64)
+                jb = np.floor(y[m]/b+1e-6).astype(np.int64)
+                u = np.unique(np.stack([ib,jb],1),axis=0)
+                blocks.append(squares((u[:,0]+0.5)*b,(u[:,1]+0.5)*b,np.full(len(u),b)))
+            ax.add_collection(PolyCollection(np.concatenate(blocks),facecolors='none',edgecolors='k',linewidths=0.4))
+        else:
+            # Cell edges, only for cells at least grid_min_px pixels wide
+            fig.canvas.draw()
+            pix = ax.transData.transform([[0,0],[1,0]])
+            big = dx*(pix[1,0]-pix[0,0]) >= float(grid_min_px)
+            lw = 0.3 if float(grid_min_px) >= 4 else 0.1
+            ax.add_collection(PolyCollection(squares(x[big],y[big],dx[big]),facecolors='none',edgecolors='k',linewidths=lw))
+
+    if show_colorbar:
+        fig.colorbar(pc,ax=ax,shrink=0.8)
+
 def mk_movie(**kwargs):
     '''The function mk_movie() takes 2D data files containing maps and converts them into a sequence of images,
     before combining them into a movie. It requires a standard set of python packages and the Linux packages
