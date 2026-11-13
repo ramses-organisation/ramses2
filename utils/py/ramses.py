@@ -1557,8 +1557,21 @@ def visu_cells(x,y,dx,v,**kwargs):
         return np.stack([np.stack([xc-h,yc-h],1),np.stack([xc+h,yc-h],1),
                          np.stack([xc+h,yc+h],1),np.stack([xc-h,yc+h],1)],1)
 
+    # Cell corners on a lattice of the finest cell size from a common origin,
+    # so that neighbouring cells share bitwise-identical edges: x+-dx/2 can
+    # differ in the last bits on each side, and pixel snapping then opens
+    # 1-px white gaps between cells
+    dmin = np.min(dx); x0 = np.min(x-dx/2); y0 = np.min(y-dx/2)
+    def cells(xc,yc,s):
+        n = np.rint(s/dmin)
+        i = np.rint((xc-s/2-x0)/dmin); j = np.rint((yc-s/2-y0)/dmin)
+        xl = x0+i*dmin; xr = x0+(i+n)*dmin
+        yl = y0+j*dmin; yr = y0+(j+n)*dmin
+        return np.stack([np.stack([xl,yl],1),np.stack([xr,yl],1),
+                         np.stack([xr,yr],1),np.stack([xl,yr],1)],1)
+
     fig, ax = plt.subplots(figsize=(10,8.75),dpi=100)
-    pc = PolyCollection(squares(x,y,dx),array=v,cmap=cmap,edgecolors='face',linewidths=0)
+    pc = PolyCollection(cells(x,y,dx),array=v,cmap=cmap,edgecolors='face',linewidths=0)
     pc.set_clim(vmin,vmax)
     ax.add_collection(pc)
     ax.set_xlim([np.min(x-dx/2),np.max(x+dx/2)])
@@ -1583,7 +1596,7 @@ def visu_cells(x,y,dx,v,**kwargs):
             pix = ax.transData.transform([[0,0],[1,0]])
             big = dx*(pix[1,0]-pix[0,0]) >= float(grid_min_px)
             lw = 0.3 if float(grid_min_px) >= 4 else 0.1
-            ax.add_collection(PolyCollection(squares(x[big],y[big],dx[big]),facecolors='none',edgecolors='k',linewidths=lw))
+            ax.add_collection(PolyCollection(cells(x[big],y[big],dx[big]),facecolors='none',edgecolors='k',linewidths=lw))
 
     if show_colorbar:
         fig.colorbar(pc,ax=ax,shrink=0.8)
