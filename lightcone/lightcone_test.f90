@@ -158,8 +158,9 @@ contains
 
   subroutine test_calculate_write_offset(pst)
     type(pst_t), intent(in) :: pst
-    integer :: nbefore, ntotal, nthproperty, nthbuffer, nstride
-    integer :: offset
+    integer(kind=8) :: nbefore, ntotal
+    integer :: nthproperty, nthbuffer, nstride
+    integer(kind=8) :: offset
 
     nbefore = 80000
     ntotal = 100000

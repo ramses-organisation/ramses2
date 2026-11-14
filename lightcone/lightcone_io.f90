@@ -40,8 +40,10 @@ contains
     use lightcone_buffer_module
 
     type(lightcone_buffer), intent(in) :: buffer
-    integer, intent(in) :: ilun, nbefore, ntotal, nthbuffer
-    integer :: idim, offset
+    integer, intent(in) :: ilun, nthbuffer
+    integer(kind=8), intent(in) :: nbefore, ntotal
+    integer :: idim
+    integer(kind=8) :: offset
 #ifndef WITHOUTMPI
     integer :: ierr, status(MPI_STATUS_SIZE)
 #endif
@@ -90,8 +92,10 @@ contains
     use lightcone_buffer_module
 
     type(lightcone_buffer_grav), intent(in) :: buffer
-    integer, intent(in) :: ilun, nbefore, ntotal, nthbuffer
-    integer :: idim, offset
+    integer, intent(in) :: ilun, nthbuffer
+    integer(kind=8), intent(in) :: nbefore, ntotal
+    integer :: idim
+    integer(kind=8) :: offset
 #ifndef WITHOUTMPI
     integer :: ierr, status(MPI_STATUS_SIZE)
 #endif
@@ -146,7 +150,7 @@ contains
 
   subroutine write_lightcone_txt_file(filename, ntotal, aexp_old, aexp)
     character(LEN=flen), intent(in) :: filename
-    integer, intent(in) :: ntotal
+    integer(kind=8), intent(in) :: ntotal
     real(kind=8), intent(in) :: aexp_old, aexp
     integer :: ilun
 
@@ -175,17 +179,19 @@ contains
     write(*, *) ""
   end subroutine output_lightcone_parameters
 
-  integer function calculate_write_offset(nbefore, ntotal, nthproperty, nthbuffer, nstride)
+  integer(kind=8) function calculate_write_offset(nbefore, ntotal, nthproperty, nthbuffer, nstride)
     ! Calculate the offset at which to write the buffer
     ! nbefore is the number of particles in the preceding processes
     ! ntotal is the total number of particles across all processes
     ! nthproperty is the property number (idp=1, x=2, y=3, z=4, vx=5, vy=6, vz=7, mass=8)
     ! nthbuffer is the buffer number (i.e if current process has already written 2 buffers, nthbuffer=3)
 
-    integer, intent(in) :: nbefore, ntotal, nthproperty, nthbuffer, nstride
-    integer, parameter :: bpp = 4 ! bytes per property
+    ! All arithmetic is done in 64-bit: files larger than 2 GiB overflow 32-bit offsets
+    integer(kind=8), intent(in) :: nbefore, ntotal
+    integer, intent(in) :: nthproperty, nthbuffer, nstride
+    integer(kind=8), parameter :: bpp = 4 ! bytes per property
 
-    calculate_write_offset = bpp * ((nthproperty - 1) * ntotal + nbefore + (nthbuffer - 1) * nstride)
+    calculate_write_offset = bpp * ((nthproperty - 1) * ntotal + nbefore + int(nthbuffer - 1, kind=8) * nstride)
   end function calculate_write_offset
 
 end module lightcone_io_module
