@@ -10,7 +10,7 @@ subroutine init_neq_chem(r,g,tables)
 #ifdef DO_RTZ
   use rtz_cooling_module, only: rtz_set_model
 #else
-  use neq_cooling_module, only: neq_set_model, update_metal_cooling
+  use neq_cooling_module, only: neq_set_model, update_metal_cooling, HsurH0
 #endif
   use coolrates_module, only: neq_cooling_t, update_rt_c, update_coolrates_tables
 #ifdef DO_RTZ
@@ -53,6 +53,10 @@ subroutine init_neq_chem(r,g,tables)
   endif
 
 #ifndef DO_RTZ
+  ! Cosmological rates at the epoch the run starts from (restart epoch if any)
+  if(r%cosmo)call update_coolrates_tables(r, tables, dble(g%aexp),          &
+       dble(g%h0)*3.24077927d-20*HsurH0(1d0/dble(g%aexp)-1d0,              &
+       dble(g%omega_m), dble(g%omega_l), 1.0d0-dble(g%omega_m)-dble(g%omega_l)))
   ! UV suppression of metal cooling at the same epoch (zero without cosmology)
   tables%phi=0d0
   if(r%cosmo)call update_metal_cooling(tables, dble(g%aexp))

@@ -617,6 +617,13 @@ FUNCTION inp_coolrates_table(tables, interp, T, allow_negative, retPrime)
   endif
 
   if(tables%extrap) then ! TK above upper table limit, so extrapolate in log-log:
+     if(interp%rates(nbinT) .le. 0d0 .or. interp%rates(nbinT-1) .le. 0d0) then
+        ! No log-log slope for non-positive rates: keep the last value
+        inp_coolrates_table = interp%rates(nbinT)
+        if(.not. allow_negative) inp_coolrates_table = max(0d0,inp_coolrates_table)
+        if( present(retPrime) ) retPrime = 0d0
+        return
+     endif
      alpha = (log10(interp%rates(nbinT))             &
               -log10(interp%rates(nbinT-1)) )        &
            / (tables%T_lookup(nbinT)-tables%T_lookup(nbinT-1))

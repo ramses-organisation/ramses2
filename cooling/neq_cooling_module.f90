@@ -654,18 +654,20 @@ contains
        dxH2 = MIN(MAX(dxH2, x_min), 0.5d0)
     endif !if(isH2)
     ! Update xHI (also if .not. isH2, for stability)**********************
-    if(r%rt_otsa .or. .not. r%rt_advect) then     !    Recombination rates
-       alpha(ixHII) = inp_coolrates_table(tables,tables%tbl_AlphaB_HII, TK,.false.)
-    else
-       alpha(ixHII) = inp_coolrates_table(tables,tables%tbl_AlphaA_HII, TK,.false.)
-    endif
     ! Peebles C factor
     Cpeebles = 1d0 / (1d0                                                &
         + inp_coolrates_table(tables,tables%tbl_beta_cmb_HI, TK,.false.) &
         / (8.2206d0 + 1d0 / (nN(ixHII)                                   &
         * inp_coolrates_table(tables,tables%tbl_beta_ly_red, TK,.false.))))
-
-    alpha(ixHII) = alpha(ixHII) * Cpeebles
+                            ! Recombination rates, C applies to case B only
+    if(r%rt_otsa .or. .not. r%rt_advect) then
+       alpha(ixHII) = inp_coolrates_table(tables,tables%tbl_AlphaB_HII, TK,.false.) &
+                    * Cpeebles
+    else
+       alpha(ixHII) = inp_coolrates_table(tables,tables%tbl_AlphaA_HII, TK,.false.) &
+                    - inp_coolrates_table(tables,tables%tbl_AlphaB_HII, TK,.false.) &
+                    * (1d0 - Cpeebles)
+    endif
     beta(ixHII) = inp_coolrates_table(tables,tables%tbl_Beta_HI, TK,.false.) ! Coll.ion.rate
     cr = alpha(ixHII) * ne * dxion(ixHII) + 2. * de * dxH2    !HI creation
     photoRate=0.
@@ -990,7 +992,7 @@ SUBROUTINE cmp_chem_eq(r, tables, TK, nH, t_rad_spec, nSpec, mu, Zsol)
      a_HEII = inp_coolrates_table(tables,tables%tbl_AlphaA_HeIII, TK,.false.)
   endif
   b_HI     = inp_coolrates_table(tables,tables%tbl_Beta_HI, TK,.false.)      !  Cion [cm3 s-1]
-  g_cmb_HI = inp_coolrates_table(tables,tables%tbl_gamma_cmb_HI, TK,.false.) !  CMBion [cm3 s-1]
+  g_cmb_HI = inp_coolrates_table(tables,tables%tbl_gamma_cmb_HI, TK,.false.) !  CMBion [s-1]
   if(r%isHe) then
      nHe = r%Y_He/(1.-r%Y_He)/4.*nH
      g_HEI  = t_rad_spec(ixHeII)

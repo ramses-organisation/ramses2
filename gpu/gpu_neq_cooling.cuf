@@ -201,7 +201,7 @@ contains
     real(kind=8):: cdex
     real(kind=8):: rho
 #endif
-    real(kind=8):: ncr, prime
+    real(kind=8):: ncr, prime, Cpeebles, fHm, bHm
     type(rate_index_t):: idxT              ! Table index and factors of TK
     !-----------------------------------------------------------------------
     xH2=0d0 ; dXH2=0d0 ; de=0d0
@@ -338,6 +338,14 @@ contains
     endif !if(rt)
 #endif
 
+    ! Fraction of H- surviving CMB photodissociation (H2 heating + update)
+    fHm = 1d0
+    if(r%isH2) then
+       bHm = inp_coolrates_table(tables,idxT,tables%tbl_beta_cmb_Hm%rates, &
+                  & tables%tbl_beta_cmb_Hm%primes,TK,.false.,.false.,prime)
+       if(bHm > 0d0) fHm = nN(ixHII) / (nN(ixHII) + bHm)
+    endif
+
     ! UPDATE TEMPERATURE *************************************************
 #ifdef DO_RT
     if(.not. r%neq_isTconst .and. .not. r%rt_T_rad) then
@@ -384,7 +392,7 @@ contains
                 + 3.53 / (1. + ncr/nHc)                                  &
                 * inp_coolrates_table(tables,idxT,tables%tbl_AlphaGP_H2%rates, &
                      & tables%tbl_AlphaGP_H2%primes,TK,.false.,.false.,prime) &
-                * nHc * dxion(ixHI) * ne                                 &
+                * fHm * nHc * dxion(ixHI) * ne                           &
                 + 4.48 / (1.+ncr / nHc)                                  &
                 * inp_coolrates_table(tables,idxT,tables%tbl_Beta_H3B%rates, &
                      & tables%tbl_Beta_H3B%primes,TK,.false.,.false.,prime) &
@@ -422,7 +430,8 @@ contains
                           & tables%tbl_AlphaZ_H2%primes, TK,.false.,.false.,prime) &
                    * Zsolarc * f_dust * nHc                              &
                    + inp_coolrates_table(tables,idxT,tables%tbl_AlphaGP_H2%rates, &
-                          & tables%tbl_AlphaGP_H2%primes,TK,.false.,.false.,prime) * ne &
+                          & tables%tbl_AlphaGP_H2%primes,TK,.false.,.false.,prime) &
+                   * fHm * ne                                            &
                    + inp_coolrates_table(tables,idxT,tables%tbl_Beta_H3B%rates, &
                           & tables%tbl_Beta_H3B%primes,TK,.false.,.false.,prime)   &
                    * nHc**2 * dxion(ixHI) * (dxion(ixHI) + xH2/ 8.)
@@ -442,8 +451,16 @@ contains
        dxH2 = MIN(MAX(dxH2, x_min), 0.5d0)
     endif !if(isH2)
     ! Update xHI (also if .not. isH2, for stability)**********************
+    ! Peebles C factor
+    Cpeebles = 1d0 / (1d0                                                &
+        + inp_coolrates_table(tables,idxT,tables%tbl_beta_cmb_HI%rates,  &
+               & tables%tbl_beta_cmb_HI%primes, TK,.false.,.false.,prime) &
+        / (8.2206d0 + 1d0 / (nN(ixHII)                                   &
+        * inp_coolrates_table(tables,idxT,tables%tbl_beta_ly_red%rates,  &
+               & tables%tbl_beta_ly_red%primes, TK,.false.,.false.,prime))))
     alpha(ixHII) = inp_coolrates_table(tables,idxT,tables%tbl_AlphaB_HII%rates, &
-                        & tables%tbl_AlphaB_HII%primes, TK,.false.,.false.,prime)
+                        & tables%tbl_AlphaB_HII%primes, TK,.false.,.false.,prime) &
+                 * Cpeebles
     beta(ixHII) = inp_coolrates_table(tables,idxT,tables%tbl_Beta_HI%rates, &
                         & tables%tbl_Beta_HI%primes, TK,.false.,.false.,prime) ! Coll.ion.rate
     cr = alpha(ixHII) * ne * dxion(ixHII) + 2. * de * dxH2    !HI creation
@@ -451,6 +468,9 @@ contains
 #ifdef DO_RT
     photoRate = SUM(tables%signc(:,ixHII,ilevel)*dNp)           !                  [s-1]
 #endif
+    photoRate = photoRate + Cpeebles                                    &
+        * inp_coolrates_table(tables,idxT,tables%tbl_gamma_cmb_HI%rates, &
+               & tables%tbl_gamma_cmb_HI%primes, TK,.false.,.false.,prime)
     if(r%haardt_madau) photoRate = photoRate + tables%UVrates(ixHII,1)*ss_factor
     de = beta(ixHII) * ne + photoRate             !         HI destruction
     if(r%isH2) de = de + 2. * alpha(ixHI)
@@ -745,7 +765,12 @@ contains
     real(kind=8) :: fa, fb, fprimea, fprimeb
     real(kind=8) :: alpha, beta, gamma
     !-------------------------------------------------------------------------
-    if(idx%extrap) then ! TK above upper table limit, so extrapolate in log-log:
+    if(idx%extrap .and. (rates(nbinT) .le. 0d0 .or. rates(nbinT-1) .le. 0d0)) then
+       ! No log-log slope for non-positive rates: keep the last value
+       inp_coolrates_table = rates(nbinT)
+       if(.not. allow_negative) inp_coolrates_table = max(0d0,inp_coolrates_table)
+       if(do_prime) retPrime = 0d0
+    else if(idx%extrap) then ! TK above upper table limit, so extrapolate in log-log:
        alpha = (log10(rates(nbinT))             &
                 -log10(rates(nbinT-1)) )        &
              / (tables%T_lookup(nbinT)-tables%T_lookup(nbinT-1))
