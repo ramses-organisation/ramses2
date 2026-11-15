@@ -546,7 +546,6 @@ subroutine build_mg(s,m,ifinelevel)
               m_mg%grid(ichild)%ckey(1:ndim)=cart_key(1:ndim)
               m_mg%grid(ichild)%hkey(1:nhilbert)=hk(1:nhilbert)
               m_mg%grid(ichild)%refined(1:twotondim)=.true.
-              m_mg%grid(ichild)%superoct=1
 
               ! Set flag arrays
               m_mg%flag1(1:twotondim,ichild)=0

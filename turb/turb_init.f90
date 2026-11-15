@@ -93,8 +93,17 @@ contains
     ! Set decay fraction per timestep dt
     turb%turb_decay_frac = turb%turb_dt / run%turb_T
 
-    ! Set solenoidal fraction from compressive fraction
-    turb%sol_frac = 1.0 - run%comp_frac
+    ! comp_frac is the compressive (longitudinal) share of the forcing power.
+    ! A mode has one longitudinal and NDIM-1 transverse degrees of freedom,
+    ! so equal weights give comp_frac = 1/NDIM, the natural mixture
+    ! (Federrath et al. 2010).
+    if (run%comp_frac < 0.0d0 .or. run%comp_frac > 1.0d0) stop 'init_turb: comp_frac must lie in [0,1]'
+    turb%comp_amp = sqrt(run%comp_frac)
+#if NDIM>1
+    turb%sol_amp = sqrt((1.0d0 - run%comp_frac) / real(NDIM - 1, kind=8))
+#else
+    turb%sol_amp = 0.0d0
+#endif
 
     ! Set turbulent field time
     turb%turb_next_time = global%t
@@ -126,8 +135,8 @@ contains
     ! Calculate turbulent normalization
     ! Power normalization comes from FFT of initial power spectrum
     call power_rms_norm(turb%power_spec, power_norm)
-    ! Projection normalization was empirically estimated and fitted
-    call proj_rms_norm(turb%sol_frac, proj_norm)
+    ! Projection normalization of the random vectors
+    call proj_rms_norm(turb, proj_norm)
     ! OU norm comes from standard deviation of OU process
     OU_norm = sqrt(run%turb_T / 2.0)
     ! Combination of all factored (reciprocal for easy multiplication)
@@ -154,7 +163,7 @@ contains
     else
        ! Set up initial field and perform FFT
        turb%turb_next = cmplx(0, 0, kind=8)
-       call add_turbulence(turb, turb%turb_next, turb%turb_dt, run%comp_frac)
+       call add_turbulence(turb, turb%turb_next, turb%turb_dt)
 #if NDIM==1
        call FFT_1D(turb%turb_next(1,:,0,0), turb%afield_next(1,:,0,0))
 #elif NDIM==2

@@ -1556,7 +1556,7 @@ subroutine cmpflxm(qm,im1,im2,jm1,jm2,km1,km2, &
            else if (riemann.eq.solver_hlld)then
               switch_to_llf=.false.
               if(switch_llf_dmin.gt.0)switch_to_llf=min(qleft(1),qright(1)).lt.switch_llf_dmin
-              if(switch_llf_pmin.gt.0)switch_to_llf=min(qleft(5),qright(5)).lt.switch_llf_pmin
+              if(switch_llf_pmin.gt.0.and.min(qleft(5),qright(5)).lt.switch_llf_pmin)switch_to_llf=.true.
               if(.not.switch_to_llf)then
                  call riemann_hlld(qleft,qright,fgdnv,params)
               else

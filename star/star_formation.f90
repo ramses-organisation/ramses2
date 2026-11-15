@@ -17,6 +17,9 @@ recursive subroutine r_star_formation(pst,ilevel,input_size,output,output_size)
 #ifdef _CUDA
   use gpu_runner, only: gpu_star_formation
 #endif
+#if defined(_CUDA) && defined(DO_RT)
+  use gpu_manager, only: gpu_star_to_host
+#endif
   implicit none
   type(pst_t)::pst
   integer,VALUE::input_size
@@ -52,6 +55,9 @@ recursive subroutine r_star_formation(pst,ilevel,input_size,output,output_size)
         pst%s%r%rt_advect=.true.
         ! Update cross sections based on star properties
         if(pst%s%r%sedprops_update .gt. 0) then
+#if defined(_CUDA) && defined(DO_RT)
+          call gpu_star_to_host(pst%s)
+#endif
           call update_SED_group_props(pst%s%r, pst%s%g, pst%s%sed, pst%s%star)
         endif
      endif

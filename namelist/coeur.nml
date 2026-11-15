@@ -9,7 +9,6 @@ poisson=.true.
 ncontrol=1
 nsubcycle=1,1,10*2,
 nrestart=0
-nsuperoct=0
 verbose=.false.
 /
 

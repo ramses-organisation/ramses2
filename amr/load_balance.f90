@@ -187,7 +187,7 @@ end subroutine r_collect_bound_key
 !#########################################################################
 !#########################################################################
 subroutine compute_new_bound_key(r,g,m,ilevel,noct,bound_key_target)
-  use amr_parameters, only: ndim, twotondim, nhilbert
+  use amr_parameters, only: ndim, twotondim, nhilbert, nsubgrid
   use amr_commons, only: run_t, global_t, mesh_t, oct
   use hilbert
   use hash
@@ -209,7 +209,7 @@ subroutine compute_new_bound_key(r,g,m,ilevel,noct,bound_key_target)
   ! This routine compute the new Hilbert keys so that
   ! perfect load balancing is enforced.
   !----------------------------------------------------
-  integer::idom,ioct
+  integer::idom,ioct,nblock
   integer::ileft,iright,istart
   integer(kind=8)::nleft,nright,nstart
   integer(kind=8),dimension(1:g%ncpu)::noct_cum
@@ -227,15 +227,16 @@ subroutine compute_new_bound_key(r,g,m,ilevel,noct,bound_key_target)
      noct_cum(idom)=noct_cum(idom-1)+noct(idom)
   end do
 
-  ! Perfect load balancing
-  xtarget=dble(noct_cum(g%ncpu))/dble(g%ncpu)
+  ! Perfect load balancing, in whole blocks of nsubgrid**ndim octs
+  nblock=nsubgrid**ndim
+  xtarget=dble(noct_cum(g%ncpu)/nblock)/dble(g%ncpu)
 
   ! Find left and right domains
   ileft=0
   iright=-1
   bound_key_target=0
   do idom=1,g%ncpu
-     ntarget_cum(idom)=int(dble(idom)*xtarget,kind=8)
+     ntarget_cum(idom)=int(dble(idom)*xtarget,kind=8)*nblock
      if(g%myid>1)then
         nleft=noct_cum(g%myid-1)
      else
@@ -260,10 +261,12 @@ subroutine compute_new_bound_key(r,g,m,ilevel,noct,bound_key_target)
      istart=ileft
      do ioct=m%head(ilevel),m%tail(ilevel)
         nstart=nstart+1
-        if(nstart.GE.ntarget_cum(istart))then
+        ! Several domains can share the same target
+        do while(istart.LE.iright)
+           if(nstart.LT.ntarget_cum(istart))exit
            bound_key_target(1:nhilbert,istart)=m%grid(ioct)%hkey(1:nhilbert)+one_key
            istart=istart+1
-        endif
+        end do
         if(istart.GT.iright)exit
      end do
   endif
@@ -301,6 +304,7 @@ end subroutine r_load_balance
 !#########################################################################
 subroutine load_balance(s,ilevel)
   use amr_parameters, only: ndim, twotondim, nhilbert
+  use init_refine_basegrid_module, only: check_subgrid
   use oct_commons, only: oct
   use ramses_commons, only: ramses_t
   use cr_parameters, only: ncruvar
@@ -325,10 +329,7 @@ subroutine load_balance(s,ilevel)
   integer::noct_zero,head_zero,indx_zero
   integer::skip_bit,ikey,true_level
   integer(kind=8),dimension(0:ndim)::hash_key
-  integer(kind=8),dimension(1:nhilbert)::coarse_key
   integer(kind=8),dimension(1:nhilbert)::hk
-  integer(kind=8),dimension(1:nhilbert,1:s%r%nlevelmax)::key_ref
-  integer,dimension(1:s%r%nlevelmax)::n_same,npatch
   integer,dimension(:),allocatable::noct_level,head_level,indx_level
   integer,dimension(:),allocatable::swap_table,swap_tmp
   integer,dimension(0:twotondim-1)::bucket_count,bucket_offset
@@ -632,32 +633,9 @@ subroutine load_balance(s,ilevel)
   m%noct_used=m%tail(r%nlevelmax)
   deallocate(noct_level,head_level,indx_level)
 
-  !-----------
-  ! Super-octs
-  !-----------
-  do ilev=1,r%nlevelmax
-     npatch(ilev)=twotondim**ilev
-  end do
+  ! Check that each level is made of complete blocks
   do ilev=ilevel+1,r%nlevelmax
-     n_same=0
-     key_ref=0
-     key_ref(1,1:r%nlevelmax)=-1
-     do ioct=m%head(ilev),m%tail(ilev)
-        m%grid(ioct)%superoct=1
-        coarse_key(1:nhilbert)=m%grid(ioct)%hkey(1:nhilbert)
-        do i=1,MIN(ilev-1,r%nsuperoct)
-           coarse_key(1:nhilbert)=coarsen_key(coarse_key(1:nhilbert),ilev-1) ! ilev-1 used to speed up only
-           if(eq_keys(coarse_key(1:nhilbert),key_ref(1:nhilbert,i)))then
-              n_same(i)=n_same(i)+1
-           else
-              n_same(i)=1
-              key_ref(1:nhilbert,i)=coarse_key(1:nhilbert)
-           endif
-           if(n_same(i).EQ.npatch(i))then
-              m%grid(ioct-npatch(i)+1:ioct)%superoct=npatch(i)
-           endif
-        end do
-     end do
+     call check_subgrid(s,ilev)
   end do
 
   end associate

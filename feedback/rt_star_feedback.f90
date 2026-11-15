@@ -8,6 +8,9 @@ MODULE rt_star_feedback
   use constants, only: L_sun, m_sun, eV2erg, hplanck, sec2Gyr
   use hydro_parameters, only: nion
   use rt_parameters, only: nrtgrp
+#if defined(_CUDA) && defined(DO_RT)
+  use gpu_runner, only: gpu_rt_star_emissivity
+#endif
   implicit none
 
 CONTAINS
@@ -31,7 +34,11 @@ recursive subroutine r_star_rt_feedback(pst,ilevel,input_size)
      call r_star_rt_feedback(pst%pLower,ilevel,input_size)
      call mdl_get_reply(pst%s%mdl,rID,0)
   else
+#if defined(_CUDA) && defined(DO_RT)
+     call gpu_rt_star_emissivity(pst%s, ilevel)
+#else
      call star_rt_feedback(pst%s, pst%s%star, ilevel)
+#endif
   endif
 
 end subroutine r_star_rt_feedback

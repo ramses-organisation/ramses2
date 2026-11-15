@@ -2610,11 +2610,13 @@ subroutine cic_kick_drift_dust(s,p,ilevel,action_part)
   do ipart=p%headp(ilevel),p%tailp(ilevel)
      ! Position in cell units and wrap
      do idim=1,ndim
-        x(idim)=p%xp(ipart,idim)/dx_loc
+        x(idim)=(p%xp(ipart,idim)+m%skip(idim))/dx_loc
      end do
      do idim=1,ndim
-        if(x(idim)<0d0)x(idim)=x(idim)+dble(m%ckey_max(ilevel+1))
-        if(x(idim)>=dble(m%ckey_max(ilevel+1)))x(idim)=x(idim)-dble(m%ckey_max(ilevel+1))
+        if(r%periodic(idim))then
+           if(x(idim)< dble(m%box_ckey_min(idim,ilevel+1)))x(idim)=x(idim)+dble(m%box_ckey_max(idim,ilevel+1)-m%box_ckey_min(idim,ilevel+1))
+           if(x(idim)>=dble(m%box_ckey_max(idim,ilevel+1)))x(idim)=x(idim)-dble(m%box_ckey_max(idim,ilevel+1)-m%box_ckey_min(idim,ilevel+1))
+        endif
      end do
 
      ! CIC weights/indices at x
@@ -2626,8 +2628,10 @@ subroutine cic_kick_drift_dust(s,p,ilevel,action_part)
         il(idim)=ir(idim)-1
      end do
      do idim=1,ndim
-        if(il(idim)<0)il(idim)=m%ckey_max(ilevel+1)-1
-        if(ir(idim)==m%ckey_max(ilevel+1))ir(idim)=0
+        if(r%periodic(idim))then
+           if(il(idim)< m%box_ckey_min(idim,ilevel+1))il(idim)=m%box_ckey_max(idim,ilevel+1)-1
+           if(ir(idim)>=m%box_ckey_max(idim,ilevel+1))ir(idim)=m%box_ckey_min(idim,ilevel+1)
+        endif
      enddo
      ckey = cic_index(il,ir)
      vol = cic_weight(dl,dr)
@@ -2647,8 +2651,10 @@ subroutine cic_kick_drift_dust(s,p,ilevel,action_part)
            end do
         endif
         do idim=1,ndim
-           if(x_mid(idim)<0d0)x_mid(idim)=x_mid(idim)+dble(m%ckey_max(ilevel+1))
-           if(x_mid(idim)>=dble(m%ckey_max(ilevel+1)))x_mid(idim)=x_mid(idim)-dble(m%ckey_max(ilevel+1))
+           if(r%periodic(idim))then
+              if(x_mid(idim)< dble(m%box_ckey_min(idim,ilevel+1)))x_mid(idim)=x_mid(idim)+dble(m%box_ckey_max(idim,ilevel+1)-m%box_ckey_min(idim,ilevel+1))
+              if(x_mid(idim)>=dble(m%box_ckey_max(idim,ilevel+1)))x_mid(idim)=x_mid(idim)-dble(m%box_ckey_max(idim,ilevel+1)-m%box_ckey_min(idim,ilevel+1))
+           endif
         end do
 
         ! CIC weights/indices at x_mid
@@ -2660,8 +2666,10 @@ subroutine cic_kick_drift_dust(s,p,ilevel,action_part)
            il2(idim)=ir2(idim)-1
         end do
         do idim=1,ndim
-           if(il2(idim)<0)il2(idim)=m%ckey_max(ilevel+1)-1
-           if(ir2(idim)==m%ckey_max(ilevel+1))ir2(idim)=0
+           if(r%periodic(idim))then
+              if(il2(idim)< m%box_ckey_min(idim,ilevel+1))il2(idim)=m%box_ckey_max(idim,ilevel+1)-1
+              if(ir2(idim)>=m%box_ckey_max(idim,ilevel+1))ir2(idim)=m%box_ckey_min(idim,ilevel+1)
+           endif
         enddo
         ckey2 = cic_index(il2,ir2)
         vol2 = cic_weight(dl2,dr2)
@@ -2715,7 +2723,7 @@ subroutine cic_kick_drift_dust(s,p,ilevel,action_part)
 
         cs2 = r%gamma * (r%gamma-1.0d0) * max(eint, r%smallc**2) / max(rho_gas, r%smallr)
         c_sound = max(sqrt(cs2), r%smallc)
-        nu_stop = coeff*c_sound*rho_gas/p%size(ipart)
+        nu_stop = sqrt(8.0d0/(pi*r%gamma))*c_sound*rho_gas/p%size(ipart)
         wdrift(1:ndim)= v_pred(1:ndim) - uu(1:ndim)
 
         ! Operator-split: drag(half) -> forces -> drag(half)
@@ -2737,6 +2745,18 @@ subroutine cic_kick_drift_dust(s,p,ilevel,action_part)
   end do
 #endif
   call close_cache(mdl)
+
+  ! Periodic boundary conditions
+  if(action_part==action_kick_drift)then
+     do ipart=p%headp(ilevel),p%tailp(ilevel)
+        do idim=1,ndim
+           if(r%periodic(idim))then
+              if(p%xp(ipart,idim)< 0.0d0           )p%xp(ipart,idim)=p%xp(ipart,idim)+r%box_size(idim)
+              if(p%xp(ipart,idim)>=r%box_size(idim))p%xp(ipart,idim)=p%xp(ipart,idim)-r%box_size(idim)
+           end if
+        end do
+     end do
+  end if
   end associate
 end subroutine cic_kick_drift_dust
 
@@ -2789,11 +2809,13 @@ subroutine tsc_kick_drift_dust(s,p,ilevel,action_part)
   do ipart=p%headp(ilevel),p%tailp(ilevel)
      ! particle position in cell units and periodic wrap
      do idim=1,ndim
-        x(idim)=p%xp(ipart,idim)/dx_loc
+        x(idim)=(p%xp(ipart,idim)+m%skip(idim))/dx_loc
      end do
      do idim=1,ndim
-        if(x(idim)<0d0)x(idim)=x(idim)+dble(m%ckey_max(ilevel+1))
-        if(x(idim)>=dble(m%ckey_max(ilevel+1)))x(idim)=x(idim)-dble(m%ckey_max(ilevel+1))
+        if(r%periodic(idim))then
+           if(x(idim)< dble(m%box_ckey_min(idim,ilevel+1)))x(idim)=x(idim)+dble(m%box_ckey_max(idim,ilevel+1)-m%box_ckey_min(idim,ilevel+1))
+           if(x(idim)>=dble(m%box_ckey_max(idim,ilevel+1)))x(idim)=x(idim)-dble(m%box_ckey_max(idim,ilevel+1)-m%box_ckey_min(idim,ilevel+1))
+        endif
      end do
 
      if(action_part==action_kick_only)then
@@ -2816,8 +2838,10 @@ subroutine tsc_kick_drift_dust(s,p,ilevel,action_part)
            end do
         endif
         do idim=1,ndim
-           if(x_mid(idim)<0d0)x_mid(idim)=x_mid(idim)+dble(m%ckey_max(ilevel+1))
-           if(x_mid(idim)>=dble(m%ckey_max(ilevel+1)))x_mid(idim)=x_mid(idim)-dble(m%ckey_max(ilevel+1))
+           if(r%periodic(idim))then
+              if(x_mid(idim)< dble(m%box_ckey_min(idim,ilevel+1)))x_mid(idim)=x_mid(idim)+dble(m%box_ckey_max(idim,ilevel+1)-m%box_ckey_min(idim,ilevel+1))
+              if(x_mid(idim)>=dble(m%box_ckey_max(idim,ilevel+1)))x_mid(idim)=x_mid(idim)-dble(m%box_ckey_max(idim,ilevel+1)-m%box_ckey_min(idim,ilevel+1))
+           endif
         end do
         do idim=1,ndim
            cl2(idim)=int(x_mid(idim))-1
@@ -2831,8 +2855,10 @@ subroutine tsc_kick_drift_dust(s,p,ilevel,action_part)
            wr2(idim)=0.5D0*(1.5D0-abs(x_mid(idim)-xr))**2
         end do
         do idim=1,ndim
-           if(cl2(idim)<0)cl2(idim)=m%ckey_max(ilevel+1)-1
-           if(cr2(idim)==m%ckey_max(ilevel+1))cr2(idim)=0
+           if(r%periodic(idim))then
+              if(cl2(idim)< m%box_ckey_min(idim,ilevel+1))cl2(idim)=m%box_ckey_max(idim,ilevel+1)-1
+              if(cr2(idim)>=m%box_ckey_max(idim,ilevel+1))cr2(idim)=m%box_ckey_min(idim,ilevel+1)
+           endif
         enddo
         ckey2 = tsc_index(cl2,cc2,cr2)
         vol2 = tsc_weight(wl2,wc2,wr2)
@@ -2882,7 +2908,7 @@ subroutine tsc_kick_drift_dust(s,p,ilevel,action_part)
         end do
         cs2 = r%gamma * (r%gamma-1.0d0) * max(eint, r%smallc**2) / max(rho_gas, r%smallr)
         c_sound = max(sqrt(cs2), r%smallc)
-        nu_stop = coeff*c_sound*rho_gas/p%size(ipart)
+        nu_stop = sqrt(8.0d0/(pi*r%gamma))*c_sound*rho_gas/p%size(ipart)
         wdrift(1:ndim)= v_pred(1:ndim) - uu(1:ndim)
         ! This is where we want to split off the different physics
         ! There will also be an if(gyro_pic) gate, since everything must be computed very differently
@@ -2925,8 +2951,10 @@ subroutine tsc_kick_drift_dust(s,p,ilevel,action_part)
   if(action_part==action_kick_drift)then
      do ipart=p%headp(ilevel),p%tailp(ilevel)
         do idim=1,ndim
-           if(p%xp(ipart,idim)<0.0d0)p%xp(ipart,idim)=p%xp(ipart,idim)+r%box_size(idim)
-           if(p%xp(ipart,idim)>=r%box_size(idim))p%xp(ipart,idim)=p%xp(ipart,idim)-r%box_size(idim)
+           if(r%periodic(idim))then
+              if(p%xp(ipart,idim)< 0.0d0           )p%xp(ipart,idim)=p%xp(ipart,idim)+r%box_size(idim)
+              if(p%xp(ipart,idim)>=r%box_size(idim))p%xp(ipart,idim)=p%xp(ipart,idim)-r%box_size(idim)
+           end if
         end do
      end do
   end if
@@ -2982,11 +3010,13 @@ subroutine pcs_kick_drift_dust(s,p,ilevel,action_part)
 #if NDIM==3
   do ipart=p%headp(ilevel),p%tailp(ilevel)
      do idim=1,ndim
-        x(idim)=p%xp(ipart,idim)/dx_loc
+        x(idim)=(p%xp(ipart,idim)+m%skip(idim))/dx_loc
      end do
      do idim=1,ndim
-        if(x(idim)<0d0)x(idim)=x(idim)+dble(m%ckey_max(ilevel+1))
-        if(x(idim)>=dble(m%ckey_max(ilevel+1)))x(idim)=x(idim)-dble(m%ckey_max(ilevel+1))
+        if(r%periodic(idim))then
+           if(x(idim)< dble(m%box_ckey_min(idim,ilevel+1)))x(idim)=x(idim)+dble(m%box_ckey_max(idim,ilevel+1)-m%box_ckey_min(idim,ilevel+1))
+           if(x(idim)>=dble(m%box_ckey_max(idim,ilevel+1)))x(idim)=x(idim)-dble(m%box_ckey_max(idim,ilevel+1)-m%box_ckey_min(idim,ilevel+1))
+        endif
      end do
      do idim=1,ndim
         crr(idim)=int(x(idim)+1.5D0)
@@ -3003,10 +3033,12 @@ subroutine pcs_kick_drift_dust(s,p,ilevel,action_part)
         wrr(idim)=(2D0-abs(x(idim)-xrr))**3/6D0
      end do
      do idim=1,ndim
-        if(cll(idim)<0)cll(idim)=cll(idim)+m%ckey_max(ilevel+1)
-        if(cl (idim)<0)cl (idim)=cl (idim)+m%ckey_max(ilevel+1)
-        if(cr (idim)>=m%ckey_max(ilevel+1))cr (idim)=cr (idim)-m%ckey_max(ilevel+1)
-        if(crr(idim)>=m%ckey_max(ilevel+1))crr(idim)=crr(idim)-m%ckey_max(ilevel+1)
+        if(r%periodic(idim))then
+           if(cll(idim)< m%box_ckey_min(idim,ilevel+1))cll(idim)=cll(idim)-m%box_ckey_min(idim,ilevel+1)+m%box_ckey_max(idim,ilevel+1)
+           if(cl (idim)< m%box_ckey_min(idim,ilevel+1))cl (idim)=cl (idim)-m%box_ckey_min(idim,ilevel+1)+m%box_ckey_max(idim,ilevel+1)
+           if(cr (idim)>=m%box_ckey_max(idim,ilevel+1))cr (idim)=cr (idim)+m%box_ckey_min(idim,ilevel+1)-m%box_ckey_max(idim,ilevel+1)
+           if(crr(idim)>=m%box_ckey_max(idim,ilevel+1))crr(idim)=crr(idim)+m%box_ckey_min(idim,ilevel+1)-m%box_ckey_max(idim,ilevel+1)
+        endif
      enddo
      ckey = pcs_index(cll,cl,cr,crr)
      vol = pcs_weight(wll,wl,wr,wrr)
@@ -3037,8 +3069,10 @@ subroutine pcs_kick_drift_dust(s,p,ilevel,action_part)
           x_mid(idim)=x(idim)+0.5d0*g%dtnew(ilevel)*v_pred(idim)/dx_loc
        end do
        do idim=1,ndim
-          if(x_mid(idim)<0d0)x_mid(idim)=x_mid(idim)+dble(m%ckey_max(ilevel+1))
-          if(x_mid(idim)>=dble(m%ckey_max(ilevel+1)))x_mid(idim)=x_mid(idim)-dble(m%ckey_max(ilevel+1))
+          if(r%periodic(idim))then
+             if(x_mid(idim)< dble(m%box_ckey_min(idim,ilevel+1)))x_mid(idim)=x_mid(idim)+dble(m%box_ckey_max(idim,ilevel+1)-m%box_ckey_min(idim,ilevel+1))
+             if(x_mid(idim)>=dble(m%box_ckey_max(idim,ilevel+1)))x_mid(idim)=x_mid(idim)-dble(m%box_ckey_max(idim,ilevel+1)-m%box_ckey_min(idim,ilevel+1))
+          endif
        end do
        do idim=1,ndim
           crr2(idim)=int(x_mid(idim)+1.5D0)
@@ -3055,10 +3089,12 @@ subroutine pcs_kick_drift_dust(s,p,ilevel,action_part)
           wrr2(idim)=(2D0-abs(x_mid(idim)-xrr))**3/6D0
        end do
        do idim=1,ndim
-          if(cll2(idim)<0)cll2(idim)=cll2(idim)+m%ckey_max(ilevel+1)
-          if(cl2 (idim)<0)cl2 (idim)=cl2 (idim)+m%ckey_max(ilevel+1)
-          if(cr2 (idim)>=m%ckey_max(ilevel+1))cr2 (idim)=cr2 (idim)-m%ckey_max(ilevel+1)
-          if(crr2(idim)>=m%ckey_max(ilevel+1))crr2(idim)=crr2(idim)-m%ckey_max(ilevel+1)
+          if(r%periodic(idim))then
+             if(cll2(idim)< m%box_ckey_min(idim,ilevel+1))cll2(idim)=cll2(idim)-m%box_ckey_min(idim,ilevel+1)+m%box_ckey_max(idim,ilevel+1)
+             if(cl2 (idim)< m%box_ckey_min(idim,ilevel+1))cl2 (idim)=cl2 (idim)-m%box_ckey_min(idim,ilevel+1)+m%box_ckey_max(idim,ilevel+1)
+             if(cr2 (idim)>=m%box_ckey_max(idim,ilevel+1))cr2 (idim)=cr2 (idim)+m%box_ckey_min(idim,ilevel+1)-m%box_ckey_max(idim,ilevel+1)
+             if(crr2(idim)>=m%box_ckey_max(idim,ilevel+1))crr2(idim)=crr2(idim)+m%box_ckey_min(idim,ilevel+1)-m%box_ckey_max(idim,ilevel+1)
+          endif
        enddo
        ckey2 = pcs_index(cll2,cl2,cr2,crr2)
        vol2 = pcs_weight(wll2,wl2,wr2,wrr2)
@@ -3109,7 +3145,7 @@ subroutine pcs_kick_drift_dust(s,p,ilevel,action_part)
        end do
        cs2 = r%gamma * (r%gamma-1.0d0) * max(eint, r%smallc**2) / max(rho_gas, r%smallr)
        c_sound = max(sqrt(cs2), r%smallc)
-       nu_stop = coeff*c_sound*rho_gas/p%size(ipart)
+       nu_stop = sqrt(8.0d0/(pi*r%gamma))*c_sound*rho_gas/p%size(ipart)
        wdrift(1:ndim)= v_pred(1:ndim) - uu(1:ndim)
        ! Operator-split: drag(half) -> forces -> drag(half)
        call compute_drag_step(wdrift, c_sound, 0.5d0*g%dtnew(ilevel), nu_stop, coeff, r%analytic_dust_force)
@@ -3132,8 +3168,10 @@ subroutine pcs_kick_drift_dust(s,p,ilevel,action_part)
   if(action_part==action_kick_drift)then
      do ipart=p%headp(ilevel),p%tailp(ilevel)
         do idim=1,ndim
-           if(p%xp(ipart,idim)<0.0d0)p%xp(ipart,idim)=p%xp(ipart,idim)+r%box_size(idim)
-           if(p%xp(ipart,idim)>=r%box_size(idim))p%xp(ipart,idim)=p%xp(ipart,idim)-r%box_size(idim)
+           if(r%periodic(idim))then
+              if(p%xp(ipart,idim)< 0.0d0           )p%xp(ipart,idim)=p%xp(ipart,idim)+r%box_size(idim)
+              if(p%xp(ipart,idim)>=r%box_size(idim))p%xp(ipart,idim)=p%xp(ipart,idim)-r%box_size(idim)
+           end if
         end do
      end do
   end if

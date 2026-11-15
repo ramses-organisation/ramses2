@@ -548,11 +548,6 @@ extern "C" void mtl_device_sync(void)
     [cmd waitUntilCompleted];
 }
 
-extern "C" int mtl_nsubgrid(void)
-{
-    return NSUBGRID;
-}
-
 
 /* -----------------------------------------------------------------------
  * mtl_build_nbor — build the device nbor array from the already-populated

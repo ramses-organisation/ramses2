@@ -15,7 +15,6 @@ nremap=10
 nsubcycle=10*2,
 verbose=.false.
 debug=.false.
-nsuperoct=0
 pic=.true.
 /
 

@@ -1,13 +1,10 @@
 module metal_runner
   use metal_interface
   use iso_c_binding
+  use amr_parameters, only: nsubgrid
   implicit none
 
 contains
-
-integer function metal_nsubgrid()
-  metal_nsubgrid = int(mtl_nsubgrid())
-end function metal_nsubgrid
 
 !###########################################################
 !###########################################################
@@ -287,7 +284,7 @@ subroutine metal_godunov(sim, ilevel)
   constant_gravity = real(sim%r%constant_gravity,   c_float)
 
 #ifdef MHD
-  nsubgrid_l = mtl_nsubgrid()
+  nsubgrid_l = nsubgrid
   nsubgridtondim_l = nsubgrid_l**ndim
   if (sim%r%riemann == solver_hlld .or. sim%r%riemann == solver_llf) then
      if (sim%r%riemann2d /= solver2d_hlld .and. sim%r%riemann2d /= solver2d_llf) &
@@ -362,7 +359,7 @@ subroutine metal_set_nbor(sim, ilevel)
   bmax        = int(sim%m%box_ckey_max(1:ndim,ilevel), c_int)
   periodic_i  = merge(int(1, c_int), int(0, c_int), sim%r%periodic)
 #ifdef MHD
-  nsubgrid_l = mtl_nsubgrid()
+  nsubgrid_l = nsubgrid
   nsubgridtondim_l = nsubgrid_l**ndim
   if (mod(sim%m%head(ilevel)-1, nsubgridtondim_l) /= 0) error stop 'Metal MHD oct head is not nsubgrid aligned'
   if (mod(sim%m%noct(ilevel), nsubgridtondim_l) /= 0) error stop 'Metal MHD oct count is not divisible by nsubgrid'
@@ -485,7 +482,7 @@ subroutine metal_enforce_subgrid(sim, ilevel)
   implicit none
   type(ramses_t), intent(inout) :: sim
   integer, intent(in) :: ilevel
-  if (sim%m%noct(ilevel) > 0 .and. mtl_nsubgrid() > 1) then
+  if (sim%m%noct(ilevel) > 0 .and. nsubgrid > 1) then
      call mtl_enforce_subgrid(int(sim%m%head(ilevel), c_int), int(sim%m%noct(ilevel), c_int))
   end if
 end subroutine metal_enforce_subgrid
@@ -713,7 +710,7 @@ subroutine metal_refine(sim, ilevel, nmake, nkill)
   ! ifree_cache_now is 1-based: starts at the tail of level ilevel's cache + 1.
   ifree_cache_now = int(sim%m%tail_cache(ilevel) + 1, c_int)
 #ifdef MHD
-  nsubgrid_l = mtl_nsubgrid()
+  nsubgrid_l = nsubgrid
   nsubgridtondim_l = nsubgrid_l**ndim
   subgridsize_l = (nsubgrid_l + 2)**ndim
 #endif

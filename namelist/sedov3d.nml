@@ -1,6 +1,6 @@
 This namelist contains various input parameters for the sedov3d test.
 Compile using:
-make NDIM=3 MPI=1 HYDRO=1
+make NDIM=3 MPI=1 HYDRO=1 NSUBGRID=4
 
 &RUN_PARAMS
 hydro=.true.
@@ -10,7 +10,6 @@ nremap=0
 nsubcycle=10*1
 verbose=.false.
 nstepmax=10
-nsuperoct=2
 /
 
 &AMR_PARAMS

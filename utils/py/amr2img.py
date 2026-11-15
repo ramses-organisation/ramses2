@@ -23,6 +23,9 @@ parser.add_argument("--clump", help="specify if clumps are overplotted")
 parser.add_argument("--sink", help="specify if sinks are overplotted")
 parser.add_argument("--dir", help="specify the projection axis")
 parser.add_argument("--grid", help="overlay the AMR grid",action="store_true")
+parser.add_argument("--exact", help="draw each cell as an exact square (ram.visu_cells)",action="store_true")
+parser.add_argument("--nsubgrid", help="with --exact and --grid, outline blocks of nsubgrid**2 octs")
+parser.add_argument("--gridpx", help="with --exact and --grid, outline cells at least this many pixels wide (default 0: all cells)")
 parser.add_argument("--no-display", help="prevent GUI display (useful for batch processing)",action="store_true")
 args = parser.parse_args()
 # path the the file
@@ -114,7 +117,14 @@ kwargs={}
 if col is not None:
     kwargs["cmap"]=col
 # Create visualization with specified colorbar limits (vmin, vmax)
-ram.visu(c.x[ii-1],c.x[jj-1],c.dx,c.u[ivar],sort=c.u[isort],log=log0,vmin=vmin,vmax=vmax,grid=grid0,**kwargs)
+if args.exact:
+    if args.nsubgrid is not None:
+        kwargs["nsubgrid"]=int(args.nsubgrid)
+    if args.gridpx is not None:
+        kwargs["grid_min_px"]=float(args.gridpx)
+    ram.visu_cells(c.x[ii-1],c.x[jj-1],c.dx,c.u[ivar],sort=c.u[isort],log=log0,vmin=vmin,vmax=vmax,grid=grid0,**kwargs)
+else:
+    ram.visu(c.x[ii-1],c.x[jj-1],c.dx,c.u[ivar],sort=c.u[isort],log=log0,vmin=vmin,vmax=vmax,grid=grid0,**kwargs)
 
 if clump:
     h=ram.rd_clump(nout)
@@ -157,7 +167,10 @@ if sink:
         plt.plot(xx,yy,'r.')
 
 if args.out:
-    plt.savefig(args.out)
+    if args.exact:
+        plt.savefig(args.out,bbox_inches='tight')
+    else:
+        plt.savefig(args.out)
 
 if not no_display:
     plt.show()

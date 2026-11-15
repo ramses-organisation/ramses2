@@ -246,14 +246,11 @@ subroutine init_refine_basegrid(s,ilevel)
   ! at level ilevel. Always starts at levelmin.
   !-------------------------------------------------------
   logical::clean
-  integer::i,igrid,ioct,ilev,istart,i1,j1,k1
+  integer::igrid,istart,i1,j1,k1
   integer(kind=8)::ikey
   integer(kind=8),dimension(1:nhilbert)::hk
   integer(kind=8),dimension(1:ndim)::ix
   integer(kind=8),dimension(0:ndim)::hash_key
-  integer(kind=8),dimension(1:nhilbert,1:s%r%nlevelmax)::key_ref
-  integer(kind=8),dimension(1:nhilbert)::coarse_key
-  integer,dimension(1:s%r%nlevelmax)::n_same,npatch
 
   associate(r=>s%r,g=>s%g,m=>s%m,mdl=>s%mdl)
 
@@ -308,32 +305,8 @@ subroutine init_refine_basegrid(s,ilevel)
   end do
   m%ifree=m%noct_used+1
 
-  !-----------
-  ! Super-octs
-  !-----------
-  do i=1,ilevel
-     npatch(i)=twotondim**i
-  end do
-  ilev=ilevel
-  n_same=0
-  key_ref=0
-  key_ref(1,1:r%nlevelmax)=-1
-  do ioct=m%head(ilev),m%tail(ilev)
-     m%grid(ioct)%superoct=1
-     coarse_key(1:nhilbert)=m%grid(ioct)%hkey(1:nhilbert)
-     do i=1,MIN(ilev-1,r%nsuperoct)
-        coarse_key(1:nhilbert)=coarsen_key(coarse_key(1:nhilbert),ilev-1) ! ilev-1 used to speed up only
-        if(eq_keys(coarse_key(1:nhilbert),key_ref(1:nhilbert,i)))then
-           n_same(i)=n_same(i)+1
-        else
-           n_same(i)=1
-           key_ref(1:nhilbert,i)=coarse_key(1:nhilbert)
-        endif
-        if(n_same(i).EQ.npatch(i))then
-           m%grid(ioct-npatch(i)+1:ioct)%superoct=npatch(i)
-        endif
-     end do
-  end do
+  ! Check that the level is made of complete blocks
+  call check_subgrid(s,ilevel)
 
 !!$  !---------------------
 !!$  ! Clean and dirty octs
@@ -375,6 +348,45 @@ subroutine init_refine_basegrid(s,ilevel)
   end associate
 
 end subroutine init_refine_basegrid
+!################################################################
+!################################################################
+!################################################################
+!################################################################
+subroutine check_subgrid(s,ilevel)
+  use amr_parameters, only: ndim, nsubgrid
+  use ramses_commons, only: ramses_t
+  use mdl_module, only: mdl_abort
+  implicit none
+  type(ramses_t)::s
+  integer::ilevel
+  !--------------------------------------------------------------
+  ! Check that the local octs of this level form complete blocks
+  ! of nsubgrid**ndim consecutive octs. Abort otherwise.
+  !--------------------------------------------------------------
+  integer::igrid,iskip,nblock
+  logical::ok
+
+  associate(m=>s%m,mdl=>s%mdl)
+
+  if(nsubgrid==1)return
+  nblock=nsubgrid**ndim
+  ok=mod(m%noct(ilevel),nblock)==0
+  if(ok.and.m%noct(ilevel)>0)then
+     do igrid=m%head(ilevel),m%tail(ilevel),nblock
+        do iskip=1,nblock-1
+           ok=ok.and.all(m%grid(igrid+iskip)%ckey(1:ndim)/nsubgrid==m%grid(igrid)%ckey(1:ndim)/nsubgrid)
+        end do
+     end do
+  endif
+  if(.not.ok)then
+     write(*,'(" Level ",I0," is not made of complete blocks of ",I0," octs (NSUBGRID=",I0,")")')ilevel,nblock,nsubgrid
+     write(*,*)'Was the restart or initial file written with a different NSUBGRID?'
+     call mdl_abort(mdl)
+  endif
+
+  end associate
+
+end subroutine check_subgrid
 !################################################################
 !################################################################
 !################################################################

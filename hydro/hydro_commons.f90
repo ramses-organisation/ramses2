@@ -45,7 +45,7 @@ module hydro_commons
   end type hydro_kernel_t
 
   type hydro_workspace_t
-     type(hydro_kernel_t)::kernel_1,kernel_2,kernel_4,kernel_8,kernel_16,kernel_32
+     type(hydro_kernel_t)::kernel
   end type hydro_workspace_t
 
 contains

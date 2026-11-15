@@ -294,11 +294,11 @@ subroutine output_compil(filename)
   else
      write(11,'(" NPRE = 4")')
   endif
+#ifdef HYDRO
   write(mystring,*)nvar
   write(11,'(" NVAR = ",A)')adjustl(mystring)
   write(mystring,*)nener
   write(11,'(" NENER = ",A)')adjustl(mystring)
-#ifdef HYDRO
   write(11,'(" HYDRO = 1")')
 #else
   write(11,'(" HYDRO = 0")')

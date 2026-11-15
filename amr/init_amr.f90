@@ -91,7 +91,7 @@ end subroutine r_init_amr
 !###############################################
 !###############################################
 subroutine init_amr(r,g,m,type)
-  use amr_parameters, ONLY: nhilbert, ndim, twotondim, threetondim, dp
+  use amr_parameters, ONLY: nhilbert, ndim, twotondim, threetondim, dp, nsubgrid
   use hydro_parameters, ONLY: nvar
   use rt_parameters, ONLY: nrtvar, nrtgrp
   use cr_parameters, ONLY: ncruvar
@@ -107,7 +107,7 @@ subroutine init_amr(r,g,m,type)
   integer::idim,ilevel,icpu,igrid,ibound,ilevelmin
   integer(kind=8)::max_key
   real(kind=8)::dx
-  integer(kind=8)::ngrid_tot,ikey
+  integer(kind=8)::ngrid_tot,ikey,nblock
   integer(kind=4)::ngrid,nremain
   integer(kind=8),dimension(1:nhilbert)::hk
   integer(kind=8),dimension(1:ndim)::ix
@@ -363,21 +363,23 @@ subroutine init_amr(r,g,m,type)
      m%domain(ilevel)%b(1,g%ncpu) = max_key
   end do
 
-  ! Set bounds for Hilbert keys for levelmin
+  ! Set bounds for Hilbert keys for levelmin,
+  ! in whole blocks of nsubgrid**ndim octs
+  nblock=int(nsubgrid,kind=8)**ndim
   ngrid_tot=int(m%nx,kind=8)*int(m%ny,kind=8)*int(m%nz,kind=8)
   if(ngrid_tot.EQ.m%hkey_max(1,r%levelmin))then
-     max_key = m%hkey_max(1,r%levelmin)
+     max_key = m%hkey_max(1,r%levelmin)/nblock
      do icpu=1,g%ncpu-1
-        m%domain(r%levelmin)%b(1,icpu) = (icpu*max_key)/g%ncpu
+        m%domain(r%levelmin)%b(1,icpu) = ((icpu*max_key)/g%ncpu)*nblock
      end do
      m%domain(r%levelmin)%b(1,0) = 0
      m%domain(r%levelmin)%b(1,g%ncpu) = m%hkey_max(1,r%levelmin)
   else
-     ngrid=int(ngrid_tot/int(g%ncpu,kind=8),kind=4)
-     nremain=int(ngrid_tot-int(ngrid,kind=8)*int(g%ncpu,kind=8),kind=4)
+     ngrid=int(ngrid_tot/nblock/int(g%ncpu,kind=8),kind=4)
+     nremain=int(ngrid_tot/nblock-int(ngrid,kind=8)*int(g%ncpu,kind=8),kind=4)
      igrid=0
      icpu=1
-     do ikey=1, m%hkey_max(1,r%levelmin)-1
+     do ikey=0, m%hkey_max(1,r%levelmin)-1, nblock
         hk(1)=ikey
         ix=hilbert_reverse(hk,r%levelmin-1)
         if(ix(1).ge.m%box_ckey_min(1,r%levelmin).and.ix(1).lt.m%box_ckey_max(1,r%levelmin))then
@@ -390,13 +392,13 @@ subroutine init_amr(r,g,m,type)
            igrid=igrid+1
            if(icpu.LE.nremain)then
               if(igrid.EQ.ngrid+1)then
-                 m%domain(r%levelmin)%b(1,icpu:g%ncpu) = hk(1)+1
+                 m%domain(r%levelmin)%b(1,icpu:g%ncpu) = hk(1)+nblock
                  igrid=0
                  icpu=icpu+1
               endif
            else
               if(igrid.EQ.ngrid)then
-                 m%domain(r%levelmin)%b(1,icpu:g%ncpu) = hk(1)+1
+                 m%domain(r%levelmin)%b(1,icpu:g%ncpu) = hk(1)+nblock
                  igrid=0
                  icpu=icpu+1
               endif

@@ -162,7 +162,7 @@ subroutine sink_formation(r,g,m,p,c,msink_loc)
   real(kind=8)::dx,vol,scale_nH,scale_T2,scale_l,scale_d,scale_t,scale_v,scale_m
   integer(kind=8),dimension(0:g%ncpu)::nsink_cum
   integer,dimension(1:g%ncpu)::nsink_cpu
-  integer::i,j,icpu,ilevel,nsink,nsink_loc,peak_nr,igrid,ind
+  integer::i,j,icpu,ilevel,nsink,nsink_loc,peak_nr,igrid,ind,idim
   real(kind=8)::purity,mgas,mseed,dgas,dseed,mass_frac
   logical::ok
 
@@ -237,6 +237,12 @@ subroutine sink_formation(r,g,m,p,c,msink_loc)
         p%xp(p%npart,1)=c%peak_com(j,1)
         p%xp(p%npart,2)=c%peak_com(j,2)
         p%xp(p%npart,3)=c%peak_com(j,3)
+        do idim=1,ndim
+           if(r%periodic(idim))then
+              if(p%xp(p%npart,idim)< 0.0d0           )p%xp(p%npart,idim)=p%xp(p%npart,idim)+r%box_size(idim)
+              if(p%xp(p%npart,idim)>=r%box_size(idim))p%xp(p%npart,idim)=p%xp(p%npart,idim)-r%box_size(idim)
+           endif
+        end do
         ! Compute sink particle velocity from peak velocity
         p%vp(p%npart,1)=c%peak_vel(j,1)-c%peak_acc(j,1)*0.5d0*g%dtnew(c%peak_level(j))
         p%vp(p%npart,2)=c%peak_vel(j,2)-c%peak_acc(j,2)*0.5d0*g%dtnew(c%peak_level(j))
@@ -468,7 +474,7 @@ subroutine sink_in_peak(s,reset_sink_pos,count_sink)
   type(ramses_t)::s
   logical::count_sink,reset_sink_pos
 
-  integer::i,ipart,peak_nr,halo_nr,ilev,ipeak,jpeak
+  integer::i,ipart,peak_nr,halo_nr,ilev,ipeak,jpeak,idim
   integer(kind=8)::global_peak_id,merge_to
   type(msg_sink_clump)::dummy_sink_clump
 
@@ -497,6 +503,12 @@ subroutine sink_in_peak(s,reset_sink_pos,count_sink)
         p%xp(ipart,1)=c%peak_com(peak_nr,1)
         p%xp(ipart,2)=c%peak_com(peak_nr,2)
         p%xp(ipart,3)=c%peak_com(peak_nr,3)
+        do idim=1,ndim
+           if(r%periodic(idim))then
+              if(p%xp(ipart,idim)< 0.0d0           )p%xp(ipart,idim)=p%xp(ipart,idim)+r%box_size(idim)
+              if(p%xp(ipart,idim)>=r%box_size(idim))p%xp(ipart,idim)=p%xp(ipart,idim)-r%box_size(idim)
+           endif
+        end do
         ! Compute sink particle velocity from peak velocity
         p%vp(ipart,1)=c%peak_vel(peak_nr,1)-c%peak_acc(peak_nr,1)*0.5d0*g%dtnew(c%peak_level(peak_nr))
         p%vp(ipart,2)=c%peak_vel(peak_nr,2)-c%peak_acc(peak_nr,2)*0.5d0*g%dtnew(c%peak_level(peak_nr))

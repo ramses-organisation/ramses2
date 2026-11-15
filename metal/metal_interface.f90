@@ -8,11 +8,6 @@ module metal_interface
     subroutine mtl_init() bind(C, name="mtl_init")
     end subroutine mtl_init
 
-    function mtl_nsubgrid() bind(C, name="mtl_nsubgrid")
-      import c_int
-      integer(c_int) :: mtl_nsubgrid
-    end function mtl_nsubgrid
-
     ! Allocate Metal buffers for uold, unew, grid, nbor, hash_key, hash_val.
     ! ncachemax is included so grid/nbor cover the full ngridmax+ncachemax range
     ! needed for AMR ghost-zone caching.

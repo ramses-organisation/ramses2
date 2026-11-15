@@ -103,7 +103,8 @@ contains
     real(kind=8) :: cone_to_box_rotation(3,3), box_to_cone_rotation(3,3)
     logical, allocatable :: has_particles(:,:,:)
     type(lightcone_buffer) :: buffer
-    integer :: npart, nselected, nbefore, ntotal, nthbuffer
+    integer :: npart, nthbuffer
+    integer(kind=8) :: nselected, nbefore, ntotal
     integer :: i, j, k, ilun
     real(kind=8) :: velocity(3)
 #ifndef WITHOUTMPI
@@ -166,10 +167,10 @@ contains
     ntotal = nselected ! Total number of particles across all processes
 #ifndef WITHOUTMPI
     ! Each process gets the total number of particles in the preceding processes
-    call MPI_EXSCAN(nselected, nbefore, 1, MPI_INTEGER, MPI_SUM, MPI_COMM_WORLD, ierr)
+    call MPI_EXSCAN(nselected, nbefore, 1, MPI_INTEGER8, MPI_SUM, MPI_COMM_WORLD, ierr)
     ntotal = nbefore + nselected
     ! Last process broadcasts the total number of particles (its nbefore + nselected) to all other processes
-    call MPI_BCAST(ntotal, 1, MPI_INTEGER, s%g%ncpu-1, MPI_COMM_WORLD, ierr)
+    call MPI_BCAST(ntotal, 1, MPI_INTEGER8, s%g%ncpu-1, MPI_COMM_WORLD, ierr)
 #endif
 
     if (s%r%verbose .and. s%g%myid == 1) write(*, *) 'Found ', ntotal, ' lightcone particles across ', nreplicas, ' replicas'
@@ -250,7 +251,8 @@ contains
     real(kind=8) :: cone_to_box_rotation(3,3), box_to_cone_rotation(3,3)
     logical, allocatable :: has_cells(:,:,:)
     type(lightcone_buffer_grav) :: buffer
-    integer :: igrid, ind, nselected, nbefore, ntotal, nthbuffer
+    integer :: igrid, ind, nthbuffer
+    integer(kind=8) :: nselected, nbefore, ntotal
     integer :: i, j, k, ilun, idim, nskip
     real(kind=8) :: rho, phi, dphidt, accel(3)
 #ifndef WITHOUTMPI
@@ -320,10 +322,10 @@ contains
     ntotal = nselected ! Total number of particles across all processes
 #ifndef WITHOUTMPI
     ! Each process gets the total number of particles in the preceding processes
-    call MPI_EXSCAN(nselected, nbefore, 1, MPI_INTEGER, MPI_SUM, MPI_COMM_WORLD, ierr)
+    call MPI_EXSCAN(nselected, nbefore, 1, MPI_INTEGER8, MPI_SUM, MPI_COMM_WORLD, ierr)
     ntotal = nbefore + nselected
     ! Last process broadcasts the total number of particles (its nbefore + nselected) to all other processes
-    call MPI_BCAST(ntotal, 1, MPI_INTEGER, s%g%ncpu-1, MPI_COMM_WORLD, ierr)
+    call MPI_BCAST(ntotal, 1, MPI_INTEGER8, s%g%ncpu-1, MPI_COMM_WORLD, ierr)
 #endif
 
     if (s%r%verbose .and. s%g%myid == 1) write(*, *) 'Found ', ntotal, ' lightcone cells across ', nreplicas, ' replicas'

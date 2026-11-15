@@ -43,13 +43,13 @@ module amr_commons
      logical::static_gas=.false. ! Turn off gas dynamics
      integer::geom    =1         ! 1: cartesian, 2: cylindrical, 3: spherical
      integer::overload=1         ! MPI domain overloading
-     integer::nsuperoct=0        ! Number of superoct levels
 
      ! Output parameters
      integer::noutput=1          ! Total number of outputs
      integer::foutput=1000000    ! Frequency of outputs
      real(kind=8),dimension(1:MAXOUT)::aout=1.1 ! Output expansion factors
      real(kind=8),dimension(1:MAXOUT)::tout=0.0 ! Output times
+     integer::nlanding=0         ! Coarse steps to land on the next tout or aout (0: off)
      integer::output_mode=0      ! Output mode (for hires runs)
      logical::gadget_output=.false. ! Output in gadget format
      real(kind=8)::bkp_time_hrs=2   ! Backup file frequency in hours

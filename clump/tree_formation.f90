@@ -98,7 +98,7 @@ subroutine tree_formation(r,g,m,p,c)
 #endif
   integer(kind=8),dimension(0:g%ncpu)::nsite_cum,ntree_cum
   integer,dimension(1:g%ncpu)::nsite_cpu,ntree_cpu
-  integer::i,j,icpu,nsite,ntree,ntree_loc,peak_nr
+  integer::i,j,icpu,nsite,ntree,ntree_loc,peak_nr,idim
   real(kind=8)::purity
   logical::ok
 
@@ -165,6 +165,12 @@ subroutine tree_formation(r,g,m,p,c)
         p%xp(p%npart,1)=c%peak_com(j,1)
         p%xp(p%npart,2)=c%peak_com(j,2)
         p%xp(p%npart,3)=c%peak_com(j,3)
+        do idim=1,ndim
+           if(r%periodic(idim))then
+              if(p%xp(p%npart,idim)< 0.0d0           )p%xp(p%npart,idim)=p%xp(p%npart,idim)+r%box_size(idim)
+              if(p%xp(p%npart,idim)>=r%box_size(idim))p%xp(p%npart,idim)=p%xp(p%npart,idim)-r%box_size(idim)
+           endif
+        end do
         ! Compute tree particle velocity from peak velocity
         p%vp(p%npart,1)=c%peak_vel(j,1)-c%peak_acc(j,1)*0.5d0*g%dtnew(c%peak_level(j))
         p%vp(p%npart,2)=c%peak_vel(j,2)-c%peak_acc(j,2)*0.5d0*g%dtnew(c%peak_level(j))
@@ -439,6 +445,12 @@ subroutine tree_in_peak(s,reset_tree_pos,count_tree)
            p%xp(ipart,1)=c%peak_com(peak_nr,1)
            p%xp(ipart,2)=c%peak_com(peak_nr,2)
            p%xp(ipart,3)=c%peak_com(peak_nr,3)
+           do idim=1,ndim
+              if(r%periodic(idim))then
+                 if(p%xp(ipart,idim)< 0.0d0           )p%xp(ipart,idim)=p%xp(ipart,idim)+r%box_size(idim)
+                 if(p%xp(ipart,idim)>=r%box_size(idim))p%xp(ipart,idim)=p%xp(ipart,idim)-r%box_size(idim)
+              endif
+           end do
            ! Compute tree particle velocity from peak velocity
            p%vp(ipart,1)=c%peak_vel(peak_nr,1)-c%peak_acc(peak_nr,1)*0.5d0*g%dtnew(c%peak_level(peak_nr))
            p%vp(ipart,2)=c%peak_vel(peak_nr,2)-c%peak_acc(peak_nr,2)*0.5d0*g%dtnew(c%peak_level(peak_nr))

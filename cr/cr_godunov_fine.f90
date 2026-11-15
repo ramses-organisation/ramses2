@@ -29,6 +29,7 @@ end subroutine r_cr_godunov_fine
 !###########################################################
 !###########################################################
 subroutine cr_godunov_fine(s,ilevel)
+  use amr_parameters, only: nsubgrid
   use ramses_commons, only: ramses_t
   use cache_commons
   use cache
@@ -55,25 +56,9 @@ subroutine cr_godunov_fine(s,ilevel)
        init=init_flush_cr_godunov, flush=pack_flush_cr_godunov, &
        combine=unpack_flush_cr_godunov, bound=init_bound_refine)
 
-  ! Loop over active grids by vector sweeps
-  igrid=m%head(ilevel)
-  do while(igrid.LE.m%tail(ilevel))
-     SELECT CASE (m%grid(igrid)%superoct)
-     ! For now just re-using the hydro kernel for CR. Might change this later.
-     CASE(1)
-        call cr_godfine1(s,igrid,ilevel,m%cr_w%kernel_1)
-     CASE(2**ndim)
-        call cr_godfine1(s,igrid,ilevel,m%cr_w%kernel_2)
-     CASE(4**ndim)
-        call cr_godfine1(s,igrid,ilevel,m%cr_w%kernel_4)
-     CASE(8**ndim)
-        call cr_godfine1(s,igrid,ilevel,m%cr_w%kernel_8)
-     CASE(16**ndim)
-        call cr_godfine1(s,igrid,ilevel,m%cr_w%kernel_16)
-     CASE(32**ndim)
-        call cr_godfine1(s,igrid,ilevel,m%cr_w%kernel_32)
-     END SELECT
-     igrid=igrid+m%grid(igrid)%superoct
+  ! Loop over active grids by blocks of nsubgrid**ndim octs
+  do igrid=m%head(ilevel),m%tail(ilevel),nsubgrid**ndim
+     call cr_godfine1(s,igrid,ilevel,m%cr_w%kernel)
   end do
 
   call close_cache(mdl)

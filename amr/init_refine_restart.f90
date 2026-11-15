@@ -237,13 +237,14 @@ subroutine init_refine_restart(s,ilevel,ncpu_file,levelmin_file,nlevelmax_file,n
   ! the initial AMR grid.
   !--------------------------------------------------------------
   use mdl_module, only: mdl_abort
-  use amr_parameters, only: dp, nhilbert, ndim, twotondim, nvector, flen
+  use amr_parameters, only: dp, nhilbert, ndim, twotondim, nvector, flen, nsubgrid
   use hydro_parameters, only: nvar
   use rt_parameters, only: nrtvar
   use cr_parameters, only: ncruvar
   use ramses_commons, only: ramses_t
   use hash
   use hilbert
+  use init_refine_basegrid_module, only: check_subgrid
   implicit none
   type(ramses_t)::s
   integer::ilevel,ncpu_file
@@ -256,7 +257,7 @@ subroutine init_refine_restart(s,ilevel,ncpu_file,levelmin_file,nlevelmax_file,n
   integer::icpu,ilun
   integer::nbyte=storage_size(1.0_dp)/8
   integer(kind=8)::iskip_amr=0,iskip_hydro=0,iskip_grav=0,iskip_rt,iskip_cr
-  integer::i,ind,istart,iend,noct_tmp,ilev,ioct,i1,j1,k1
+  integer::i,ind,istart,iend,noct_tmp,i1,j1,k1
   integer::igrid,igrid_start,ileft,iright
   integer(kind=8)::nleft,nright
   character(LEN=flen)::file_params,file_amr,file_hydro,file_grav,file_rt,file_cr
@@ -264,14 +265,13 @@ subroutine init_refine_restart(s,ilevel,ncpu_file,levelmin_file,nlevelmax_file,n
   logical::clean
 
   integer(kind=8),dimension(1:ncpu_file)::noct_cum
+  integer(kind=8)::nblock
   integer(kind=8),dimension(1:s%g%ncpu)::ntarget_cum
 
   integer(kind=8),dimension(1:nhilbert)::hk
   integer(kind=8),dimension(1:ndim)::ix
   integer(kind=8),dimension(0:ndim)::hash_key
-  integer(kind=8),dimension(1:nhilbert,1:s%r%nlevelmax)::key_ref
-  integer(kind=8),dimension(1:nhilbert)::coarse_key,one_key
-  integer,dimension(1:s%r%nlevelmax)::n_same,npatch
+  integer(kind=8),dimension(1:nhilbert)::one_key
   integer(kind=8)::ipos
 
   integer,dimension(1:ndim)::ckey
@@ -313,10 +313,12 @@ subroutine init_refine_restart(s,ilevel,ncpu_file,levelmin_file,nlevelmax_file,n
   end do
 
   !------------------------------------------
-  ! New cumulative numbers of octs per cpu
+  ! New cumulative numbers of octs per cpu,
+  ! in whole blocks of nsubgrid**ndim octs
   !------------------------------------------
+  nblock=int(nsubgrid,kind=8)**ndim
   do icpu=1,g%ncpu
-     ntarget_cum(icpu)=int(dble(icpu)*dble(noct_cum(ncpu_file))/dble(g%ncpu),kind=8)
+     ntarget_cum(icpu)=int(dble(icpu)*dble(noct_cum(ncpu_file)/nblock)/dble(g%ncpu),kind=8)*nblock
   end do
 
   if(g%myid>1)then
@@ -519,32 +521,8 @@ subroutine init_refine_restart(s,ilevel,ncpu_file,levelmin_file,nlevelmax_file,n
   end do
   m%ifree=m%noct_used+1
 
-  !-----------
-  ! Super-octs
-  !-----------
-  do ilev=1,ilevel
-     npatch(ilev)=twotondim**ilev
-  end do
-  ilev=ilevel
-  n_same=0
-  key_ref=0
-  key_ref(1,1:r%nlevelmax)=-1
-  do ioct=m%head(ilev),m%tail(ilev)
-     m%grid(ioct)%superoct=1
-     coarse_key(1:nhilbert)=m%grid(ioct)%hkey(1:nhilbert)
-     do i=1,MIN(ilev-1,r%nsuperoct)
-        coarse_key(1:nhilbert)=coarsen_key(coarse_key(1:nhilbert),ilev-1) ! ilev-1 used to speed up only
-        if(eq_keys(coarse_key(1:nhilbert),key_ref(1:nhilbert,i)))then
-           n_same(i)=n_same(i)+1
-        else
-           n_same(i)=1
-           key_ref(1:nhilbert,i)=coarse_key(1:nhilbert)
-        endif
-        if(n_same(i).EQ.npatch(i))then
-           m%grid(ioct-npatch(i)+1:ioct)%superoct=npatch(i)
-        endif
-     end do
-  end do
+  ! Check that the level is made of complete blocks
+  call check_subgrid(s,ilevel)
 
 !!$  !---------------------
 !!$  ! Clean and dirty octs

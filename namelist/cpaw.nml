@@ -1,0 +1,35 @@
+This is the RAMSES parameter file for a circularly polarized Alfven wave along (1,1,0)/sqrt(2).
+It is an exact nonlinear solution, back to its initial state after one period, t=1/sqrt(2).
+Compile the code with:
+make COMPILER=NVHPC NDIM=3 HYDRO=1 MHD=1 INIT=CPAW
+
+&RUN_PARAMS
+hydro=.true.
+ncontrol=1
+/
+
+&AMR_PARAMS
+levelmin=6
+levelmax=6
+ngridmax=50000
+nexpand=1
+boxlen=1.0
+/
+
+&INIT_PARAMS
+A_ave=0.70710678118654752
+B_ave=0.70710678118654752
+/
+
+&OUTPUT_PARAMS
+tout=0.70710678118654752
+/
+
+&HYDRO_PARAMS
+gamma=1.6666666666666667
+courant_factor=0.8
+slope_type=2
+slope_mag_type=2
+riemann='hlld'
+riemann2d='hlld'
+/

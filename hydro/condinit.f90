@@ -42,9 +42,13 @@ subroutine condinit(r,g,x,q,dx,nn)
 #define PANCAKE 9
 #define ALFVENWAVE 10
 #define COLLAPSE 11
+#define CPAW 12
 
   integer::i
   real(kind=8)::xx,yy,zz,rr,theta,pi,xcenter,ttmin,ttmax
+#if INIT==CPAW
+  real(kind=8)::ss
+#endif
 #if INIT==COEUR
   real(kind=8)::r2,rx,ry,rz,d,p,vx,vy,vz,r_trunc,r2_trunc,c2
   real(kind=8)::omega_code,AU,Msol,M,sigma,r_min,r2_min,omega_const,r_vortex,invr2_vortex
@@ -311,6 +315,20 @@ subroutine condinit(r,g,x,q,dx,nn)
      q(i,3) = 0.0 ! Vy
      q(i,4) = 0.0 ! Vz
      q(i,5) = 100./scale_T2 ! Temperature is 10^2 K
+  end do
+#endif
+
+#if INIT==CPAW
+  ! Circularly polarized Alfven wave along n=(1,1,0)/sqrt(2), wavelength 1/sqrt(2).
+  ! The field comes from vecpotentialinit; with A_ave=B_ave=1/sqrt(2) the guide field
+  ! is n and v=-dB moves the wave along +n at vA=1 (period 1/sqrt(2)).
+  do i=1,nn
+     ss=2.0d0*pi*(x(i,1)+x(i,2))
+     q(i,1)=1.0d0
+     q(i,2)=+0.1d0*sin(ss)/sqrt(2.0d0)
+     q(i,3)=-0.1d0*sin(ss)/sqrt(2.0d0)
+     q(i,4)=-0.1d0*cos(ss)
+     q(i,5)=0.1d0
   end do
 #endif
 

@@ -1,18 +1,13 @@
 module gpu_utils
-  use amr_parameters, only: dp, twotondim, ndim
+  use amr_parameters, only: dp, twotondim, ndim, nsubgrid
   use oct_commons, only: oct
   use cudafor
   implicit none
 
   integer, parameter :: nthreads_y = 16
 
-#ifdef NSUBGRID
 #if defined(MHD) && NSUBGRID > 2
 #error "GPU MHD supports NSUBGRID = 1 or 2"
-#endif
-  integer, parameter :: nsubgrid = NSUBGRID
-#else
-  integer, parameter :: nsubgrid = 1
 #endif
   integer, parameter :: nsubgridsq = nsubgrid**2
   integer, parameter :: nsubgridtondim = nsubgrid**ndim

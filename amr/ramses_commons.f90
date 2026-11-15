@@ -614,3 +614,49 @@ end subroutine close_part_file
 !#########################################################################
 !#########################################################################
 end module ramses_commons
+!##############################################################
+!##############################################################
+!##############################################################
+!##############################################################
+module clean_stop_module
+contains
+recursive subroutine r_clean_stop(pst)
+  use mdl_module
+  use ramses_commons, only: pst_t
+  use mdl_parameters
+  implicit none
+  type(pst_t)::pst
+
+  integer::rID
+
+  if(pst%nLower>0)then
+     rID = mdl_send_request(pst%s%mdl,MDL_CLEAN_STOP,pst%iUpper+1)
+     call r_clean_stop(pst%pLower)
+     call mdl_get_reply(pst%s%mdl,rID,0)
+  endif
+
+end subroutine r_clean_stop
+!##############################################################
+!##############################################################
+!##############################################################
+!##############################################################
+subroutine m_clean_abort(pst)
+  ! Stop all ranks cleanly from the master, while the workers wait in mdl_wait
+  use ramses_commons, only: pst_t
+#ifndef WITHOUTMPI
+  use mpi
+#endif
+  implicit none
+  type(pst_t)::pst
+#ifndef WITHOUTMPI
+  integer::info
+#endif
+
+  call r_clean_stop(pst)
+#ifndef WITHOUTMPI
+  call MPI_FINALIZE(info)
+#endif
+  stop
+
+end subroutine m_clean_abort
+end module clean_stop_module

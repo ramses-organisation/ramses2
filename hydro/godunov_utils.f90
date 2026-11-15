@@ -327,7 +327,7 @@ subroutine cmpdt(r,uu,bb,gg,dx,dt)
 
   ! Compute maximum time step for each authorized cell
   dt = r%courant_factor*dx/r%smallc
-  dtcell = dx/ctot*(sqrt(one+two*r%courant_factor*grav)-one)/grav
+  dtcell = two*r%courant_factor*dx/(ctot*(one+sqrt(one+two*r%courant_factor*grav)))
   dt = min(dt,dtcell)
 
 end subroutine cmpdt
@@ -2129,7 +2129,7 @@ subroutine riemann2d_hlld(qLL,qLR,qRL,qRR,E,params)
   ! Switch to llf and exit
   switch_to_llf=.false.
   if(switch_llf_dmin.gt.0)switch_to_llf=rmin.lt.switch_llf_dmin
-  if(switch_llf_pmin.gt.0)switch_to_llf=pmin.lt.switch_llf_pmin
+  if(switch_llf_pmin.gt.0.and.pmin.lt.switch_llf_pmin)switch_to_llf=.true.
   if(switch_to_llf)then
      E = forth*(ERR+ERL+ELR+ELL)+half*Smax*(qRR(6)-qLL(6))-half*Smax*(qRR(7)-qLL(7))
      return

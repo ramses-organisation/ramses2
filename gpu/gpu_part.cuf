@@ -28,7 +28,7 @@ module part_device
   implicit none
 
   ! Local hash/hilbert/reduce includes.
-  private :: mix64, fnv64, fnv32, hash_set, hash_get, hash_update, hash_free
+  private :: mix64, fnv64, fnv32, hash_set, hash_get, get_cell_by_key, hash_update, hash_free
   private :: hilbert_key
   private :: warp_reduce_int_sum, block_reduce_int_sum
   private :: warp_reduce_sum,     block_reduce_sum

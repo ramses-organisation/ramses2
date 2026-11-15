@@ -7,7 +7,6 @@ hydro=.true.
 ncontrol=1
 nsubcycle=10*1,
 verbose=.false.
-nsuperoct=0
 /
 
 &AMR_PARAMS

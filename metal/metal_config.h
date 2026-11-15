@@ -1,6 +1,12 @@
 #pragma once
+/* NSUBGRID is passed by the Makefile (-DNSUBGRID=...) */
+#ifndef NSUBGRID
+#error "NSUBGRID must be defined (-DNSUBGRID=...)"
+#endif
 #ifdef MHD
-#define NSUBGRID 2
+#if NSUBGRID != 2
+#error "Metal MHD requires NSUBGRID=2"
+#endif
 #define MR_UCT_PRODUCT_FLUX_FIELDS 5
 #define MR_UCT_PRODUCT_RECORD_FIELDS 5
 #define MR_UCT_PRODUCT_FIELDS (MR_UCT_PRODUCT_FLUX_FIELDS + MR_UCT_PRODUCT_RECORD_FIELDS)
@@ -11,5 +17,7 @@
 #define MR_SOLVER2D_LLF 1
 #define MR_SOLVER2D_HLLD 4
 #else
-#define NSUBGRID 1
+#if NSUBGRID != 1
+#error "Metal hydro requires NSUBGRID=1"
+#endif
 #endif

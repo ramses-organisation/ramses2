@@ -38,6 +38,16 @@ module amr_parameters
   integer,parameter::threetondim=3**ndim
   integer,parameter::fourtondim=4**ndim
   integer,parameter::fivetondim=5**ndim
+
+  ! Number of octs per dimension in a block (CPU and GPU kernels)
+#ifndef NSUBGRID
+  integer,parameter::nsubgrid=1
+#else
+#if NSUBGRID!=1 && NSUBGRID!=2 && NSUBGRID!=4 && NSUBGRID!=8 && NSUBGRID!=16 && NSUBGRID!=32
+#error "NSUBGRID must be 1, 2, 4, 8, 16 or 32"
+#endif
+  integer,parameter::nsubgrid=NSUBGRID
+#endif
   integer,parameter::twondim=2*ndim
 
   ! Number of 64-bit integers needed to store one Hilbert key

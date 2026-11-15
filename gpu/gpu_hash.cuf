@@ -212,3 +212,43 @@ attributes(device) function hash_get(hash_key, hash_val, hash_size, key)
 
 end function hash_get
 ! =========================================================================
+
+! =========================================================================
+!> @brief
+!> Helper device subroutine to query a grid and cell by integer coordinates
+!>
+attributes(device) subroutine get_cell_by_key(hash_key_d, hash_val_d, hash_size_d, ckey_max_d, key_off_d, &
+     & level, ckey_nbor, igrid, icell)
+  implicit none
+  integer(kind=8), device :: hash_key_d(*)
+  integer(kind=4), device :: hash_val_d(*)
+  integer(kind=4), intent(in), value :: hash_size_d
+  integer(kind=4), device :: ckey_max_d(*)
+  integer(kind=8), device :: key_off_d(*)
+  integer(kind=4), intent(in), value :: level
+  integer(kind=4), intent(in) :: ckey_nbor(3)
+  integer(kind=4), intent(out) :: igrid, icell
+
+  integer :: ix(3), ii(3), idim
+  integer(kind=8) :: ix8, iy8, iz8, nx, offset, key
+
+  do idim = 1, 3
+     ix(idim) = ckey_nbor(idim) / 2
+     ii(idim) = mod(ckey_nbor(idim), 2)
+  end do
+
+  ix8 = int(ix(1), kind=8)
+  iy8 = int(ix(2), kind=8)
+  iz8 = int(ix(3), kind=8)
+  nx  = int(ckey_max_d(level), kind=8)
+  offset = key_off_d(level)
+  key = offset + ix8 + iy8*nx + iz8*nx*nx
+  igrid = hash_get(hash_key_d, hash_val_d, hash_size_d, key)
+
+  if (igrid /= 0) then
+     icell = 1 + ii(1) + ii(2) * 2 + ii(3) * 4
+  else
+     icell = 0
+  endif
+end subroutine get_cell_by_key
+! =========================================================================

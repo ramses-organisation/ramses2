@@ -1,6 +1,6 @@
 module rt_godunov_fine_module
 #if defined(_CUDA) && defined(DO_RT)
-  use gpu_runner, only: gpu_rt_godunov, gpu_rt_set_rtunew, gpu_rt_set_rtuold
+  use gpu_runner, only: gpu_rt_godunov, gpu_rt_set_rtunew, gpu_rt_set_rtuold, gpu_rt_set_emissivity
 #endif
 contains
 !###########################################################
@@ -36,6 +36,7 @@ end subroutine r_rt_godunov_fine
 !###########################################################
 !###########################################################
 subroutine rt_godunov_fine(s,ilevel)
+  use amr_parameters, only: nsubgrid
   use ramses_commons, only: ramses_t
   use cache_commons
   use cache
@@ -62,24 +63,9 @@ subroutine rt_godunov_fine(s,ilevel)
        init=init_flush_rt_godunov, flush=pack_flush_rt_godunov, &
        combine=unpack_flush_rt_godunov, bound=init_bound_refine)
 
-  ! Loop over active grids by vector sweeps
-  igrid=m%head(ilevel)
-  do while(igrid.LE.m%tail(ilevel))
-     SELECT CASE (m%grid(igrid)%superoct)
-     CASE(1)
-        call rt_godfine1(s,igrid,ilevel,m%rt_w%kernel_1)
-     CASE(2**ndim)
-        call rt_godfine1(s,igrid,ilevel,m%rt_w%kernel_2)
-     CASE(4**ndim)
-        call rt_godfine1(s,igrid,ilevel,m%rt_w%kernel_4)
-     CASE(8**ndim)
-        call rt_godfine1(s,igrid,ilevel,m%rt_w%kernel_8)
-     CASE(16**ndim)
-        call rt_godfine1(s,igrid,ilevel,m%rt_w%kernel_16)
-     CASE(32**ndim)
-        call rt_godfine1(s,igrid,ilevel,m%rt_w%kernel_32)
-     END SELECT
-     igrid=igrid+m%grid(igrid)%superoct
+  ! Loop over active grids by blocks of nsubgrid**ndim octs
+  do igrid=m%head(ilevel),m%tail(ilevel),nsubgrid**ndim
+     call rt_godfine1(s,igrid,ilevel,m%rt_w%kernel)
   end do
 
   call close_cache(mdl)
@@ -107,7 +93,9 @@ recursive subroutine r_set_emissivity(pst,ilevel,input_size)
      call r_set_emissivity(pst%pLower,ilevel,input_size)
      call mdl_get_reply(pst%s%mdl,rID,0)
   else
-#ifdef DO_RT
+#if defined(_CUDA) && defined(DO_RT)
+     call gpu_rt_set_emissivity(pst%s,ilevel)
+#elif defined(DO_RT)
      do i=pst%s%m%head(ilevel),pst%s%m%tail(ilevel)
         pst%s%m%emissivity(:,:,i)=0
      end do
@@ -136,8 +124,8 @@ recursive subroutine r_set_rtunew(pst,ilevel,input_size)
      call mdl_get_reply(pst%s%mdl,rID,0)
   else
 #if defined(_CUDA) && defined(DO_RT)
-     ! rtunew lives on the device when the photons are advected
-     if(pst%s%r%rt_advect)then
+     ! rtunew lives on the device when the photons are advected or a star can turn them on
+     if(pst%s%r%rt_advect .or. (pst%s%r%star .and. pst%s%r%rt_star))then
         call gpu_rt_set_rtunew(pst%s,ilevel)
         return
      endif

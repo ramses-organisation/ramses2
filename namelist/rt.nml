@@ -9,7 +9,6 @@ ncontrol=1
 nsubcycle=10*1,
 verbose=.false.
 nremap=10
-nsuperoct=0
 /
 
 &AMR_PARAMS
