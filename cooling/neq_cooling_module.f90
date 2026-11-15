@@ -307,7 +307,7 @@ contains
     real(kind=8):: G0, eff_peh, cdex
     real(kind=8):: fluxMag, mom_fact
 #endif
-    real(kind=8):: rho, ncr, Cpeebles, fHm
+    real(kind=8):: rho, ncr, Cpeebles, fHm, bHm
     logical:: newAtomicCons=.true.
     !-----------------------------------------------------------------------
     associate(ixHI=>r%ixHi,ixHII=>r%ixHII,ixHeII=>r%ixHeII,ixHeIII=>r%ixHeIII)
@@ -508,6 +508,13 @@ contains
     endif !if(rt)
 #endif
 
+    ! Fraction of H- surviving CMB photodissociation (H2 heating + update)
+    fHm = 1d0
+    if(r%isH2) then
+       bHm = inp_coolrates_table(tables,tables%tbl_beta_cmb_Hm,TK,.false.)
+       if(bHm > 0d0) fHm = nN(ixHII) / (nN(ixHII) + bHm)
+    endif
+
     ! UPDATE TEMPERATURE *************************************************
     !if(c_switch(icell) .and. .not. rt_isTconst .and. .not. r%rt_T_rad) then
     if(.not. r%neq_isTconst .and. .not. r%rt_T_rad) then
@@ -539,11 +546,6 @@ contains
 #endif
                                        ! H2 formation heating, Omukai 2000
                            ! and Hollenbach and McKee 1976, [erg cm-3 s-1]
-
-          ! Fraction of H- surviving CMB photodissociation
-          fHm = 1.0d0 / (1.0d0                                           &
-                + inp_coolrates_table(tables,tables%tbl_beta_cmb_Hm,TK,.false.) &
-                / nN(ixHII))
 
           ncr   = 1d6 * TK**(-0.5)                                       &
                 / (1.6 * dxion(ixHI) * exp(-(400. / TK)**2)              &
@@ -1010,7 +1012,8 @@ SUBROUTINE cmp_chem_eq(r, tables, TK, nH, t_rad_spec, nSpec, mu, Zsol)
      f_H2 = 0d0
      if(r%isH2) then
         f_dust = 1d0-n_HII/nH
-        fHm = 1.0d0 / (1.0d0 + b_Hm / n_HI)
+        fHm = 1d0
+        if(b_Hm > 0d0) fHm = n_HI / (n_HI + b_Hm)
         C_H2   = aZ_H2 * nH * Zsol * f_dust                              &
                + fHm * aGP_H2 * n_E_min                                  &
                + b_H3B * n_HI * (n_HI + n_H2/ 8.)
