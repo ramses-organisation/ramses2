@@ -867,6 +867,20 @@ subroutine m_read_params(pst)
   endif
 
   !-------------------------------------------------
+  ! Reject explicit output lists mixed with end times
+  !-------------------------------------------------
+  if(tend>0.and.any(tout>0))then
+     write(*,*)'Error: tout cannot be used together with tend'
+     write(*,*)'Use either tout or tend (with optional delta_tout)'
+     call m_clean_abort(pst)
+  endif
+  if(aend>0.and.any(aout>0.and.aout<=1))then
+     write(*,*)'Error: aout cannot be used together with aend'
+     write(*,*)'Use either aout or aend (with optional delta_aout)'
+     call m_clean_abort(pst)
+  endif
+
+  !-------------------------------------------------
   ! Compute time step for outputs
   !-------------------------------------------------
   if(tend>0)then
