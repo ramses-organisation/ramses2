@@ -122,8 +122,8 @@ recursive subroutine r_rt_neq_updates(pst, nstep_coarse, input_size)
         call update_metal_cooling(s%tables, dble(g%aexp))
 #endif
 
-     if(r%rt_advect .and. r%rt_emission_stats .and. r%rt_star) &
-        call output_photon_emission_stats(r,g)
+     if(r%rt_advect .and. r%rt_emission_stats .and. r%rt_star .and. &
+        mod(nstep_coarse,r%ncontrol)==0) call output_photon_emission_stats(r,g)
 
 #ifdef _CUDA
 #ifndef DO_RTZ

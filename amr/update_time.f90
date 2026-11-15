@@ -51,6 +51,12 @@ subroutine m_update_time(pst,ilevel,done)
   !-------------------------------------------------------------
   if(g%nstep_coarse .ne. g%nstep_coarse_old)then
 
+     !----------------------------------------------
+     ! RT, non-equilibrium chemistry and CR updates
+     !----------------------------------------------
+     call r_rt_neq_updates(pst, pst%s%g%nstep_coarse, 1)
+     call r_cr_updates(pst, pst%s%g%nstep_coarse, 1)
+
      !--------------------------
      ! Check mass conservation
      !--------------------------
@@ -92,16 +98,6 @@ subroutine m_update_time(pst,ilevel,done)
         ! Output timing data
         !------------------------
         if(r%verbose)call m_output_timer(.false.,'dummy')
-
-        !----------------------------------------------
-        ! RT and non-equilibrium chemistry updates
-        !----------------------------------------------
-        call r_rt_neq_updates(pst, pst%s%g%nstep_coarse, 1)
-
-        !----------------------------------------------
-        ! CR updates
-        !----------------------------------------------
-        call r_cr_updates(pst, pst%s%g%nstep_coarse, 1)
 
         !----------------------------------------------
         ! Output mass and energy conservation to screen
