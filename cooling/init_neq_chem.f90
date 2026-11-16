@@ -10,7 +10,10 @@ subroutine init_neq_chem(r,g,tables)
 #ifdef DO_RTZ
   use rtz_cooling_module, only: rtz_set_model
 #else
-  use neq_cooling_module, only: neq_set_model, update_metal_cooling, HsurH0
+  use neq_cooling_module, only: neq_set_model, update_metal_cooling, HsurH0, update_UV_rates
+#ifndef DO_RT
+  use photoionization_UVB_module, only: load_UVB_data
+#endif
 #endif
   use coolrates_module, only: neq_cooling_t, update_rt_c, update_coolrates_tables
 #ifdef DO_RTZ
@@ -60,6 +63,15 @@ subroutine init_neq_chem(r,g,tables)
   ! UV suppression of metal cooling at the same epoch (zero without cosmology)
   tables%phi=0d0
   if(r%cosmo)call update_metal_cooling(tables, dble(g%aexp))
+  ! UV background rates at the same epoch (zero with DO_RT)
+#ifndef DO_RT
+  if(r%haardt_madau)call load_UVB_data()
+#endif
+  if(r%cosmo)then
+     call update_UV_rates(r, tables, dble(g%aexp))
+  else
+     call update_UV_rates(r, tables, dble(r%aexp_ini))
+  endif
 #endif
 
 #ifdef DO_RTZ

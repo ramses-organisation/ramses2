@@ -15,7 +15,7 @@ module neq_cooling_module
 
   private   ! default
   public neq_set_model, neq_solve_cooling, updateRTGroups_CoolConstants &
-       ,update_metal_cooling, cmp_equilibrium_abundances, getmu, HsurH0
+       ,update_metal_cooling, update_UV_rates, cmp_equilibrium_abundances, getmu, HsurH0
 
   real(kind=8),parameter::T2_min_fix=1d-2 ! Min temperature [K]
 
@@ -1168,6 +1168,33 @@ FUNCTION HsurH0(z,omega0,omegaL,OmegaR)
   !-------------------------------------------------------------------------
   HsurH0=sqrt(Omega0*(1d0+z)**3+OmegaR*(1d0+z)**2+OmegaL)
 END FUNCTION HsurH0
+
+!=========================================================================
+subroutine update_UV_rates(r, tables, aexp)
+  ! Haardt & Madau (2012) UV background photoionization [s-1] and
+  ! photoheating [erg s-1] rates per neutral species, switched on below
+  ! z_reion. Off with DO_RT: the UV field is then left to the RT itself.
+  !-------------------------------------------------------------------------
+  use photoionization_UVB_module, only: update_UVB, HM12_UVB_z
+  implicit none
+  type(run_t)::r
+  type(neq_cooling_t)::tables
+  real(kind=8)::aexp
+  !-------------------------------------------------------------------------
+  real(kind=8)::z
+  !-------------------------------------------------------------------------
+  tables%UVrates=0d0
+#ifndef DO_RT
+  z=1d0/aexp-1d0
+  if(.not.r%haardt_madau .or. z>=r%z_reion)return
+  call update_UVB(z)                         ! Zero above the last HM12 redshift
+  tables%UVrates(r%ixHII,:)=HM12_UVB_z(1,1,:)     ! HI   -> HII
+  if(r%isHe)then
+     tables%UVrates(r%ixHeII ,:)=HM12_UVB_z(2,1,:) ! HeI  -> HeII
+     tables%UVrates(r%ixHeIII,:)=HM12_UVB_z(2,2,:) ! HeII -> HeIII
+  endif
+#endif
+end subroutine update_UV_rates
 
 !=========================================================================
 subroutine update_metal_cooling(tables, aexp)

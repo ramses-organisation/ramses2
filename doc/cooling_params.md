@@ -14,7 +14,7 @@ The namelist block `&COOLING_PARAMS` is used to specify parameters controlling g
 | `mu_mol`            | `real`     | 1.2195  | Mean molecular weight of the gas. Used only if `cooling_ism=.true.`. |
 | `X_H`               | `real`     | 0.76    | Hydrogen mass fraction. |
 | `Y_He`              | `real`     | 0.24    | Helium mass fraction. Try and use `X_H + Y_He = 1`. |
-| `haardt_madau`      | `logical`  | .false. | Turn on or off the default UV background model in the code. |
+| `haardt_madau`      | `logical`  | .false. | Turn on or off the default UV background model in the code. With `neq_chem=.true.`, the Haardt & Madau (2012) rates from `./data/HM12` are used, switched on below `z_reion`; they are ignored in `DO_RT` and `DO_RTZ` builds (RTZ has `rtz_include_HM12_UVB`). |
 | `self_shielding`    | `logical`  | .false. | Turn on or off a simple self-shielding model to reduce the UV radiation using the following attenuation factor: `exp(-nH/0.01)`. |
 | `J21`               | `real`     | 0       | Nornalization of the UV background Spectral Energy Distribution at 13.6 eV in units of `10^21 erg`. |
 | `a_spec`            | `real`     | -1      | Power law of the UV background Spectral Energy Distribution as `J(nu)=J21*(nu/13.6)^(a_spec)`. |

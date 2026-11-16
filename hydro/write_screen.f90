@@ -10,6 +10,13 @@ subroutine write_screen(r,m)
   integer::ilevel,nleaf,i
   integer,dimension(:),allocatable::ll,ii
   real(kind=8),dimension(:),allocatable::xx,dd,uu,vv,ww,pp
+#if NION>0 && !defined(DO_RTZ)
+  ! Ionization fractions of non-equilibrium chemistry (xHII, xHeII, xHeIII)
+  integer::nx
+  integer,dimension(1:3)::ix
+  real(kind=8),dimension(:,:),allocatable::xi
+  character(len=33)::xhead
+#endif
 #ifdef MHD
   real(kind=8),dimension(:),allocatable::AA,BB,CC
 #endif
@@ -55,6 +62,22 @@ subroutine write_screen(r,m)
 #endif
      allocate(pp(1:nleaf))
      allocate(ii(1:nleaf))
+#if NION>0 && !defined(DO_RTZ)
+     nx=0
+     xhead=''
+     if(r%neq_chem)then
+        nx=1
+        ix(1)=r%iIons-1+r%ixHII
+        xhead='       xHII'
+        if(r%isHe)then
+           nx=3
+           ix(2)=r%iIons-1+r%ixHeII
+           ix(3)=r%iIons-1+r%ixHeIII
+           xhead='       xHII      xHeII     xHeIII'
+        endif
+     endif
+     allocate(xi(1:3,1:nleaf))
+#endif
 
      nleaf=0
      do ilevel=r%levelmin,r%nlevelmax
@@ -88,6 +111,11 @@ subroutine write_screen(r,m)
 #endif
                     pp(nleaf)=m%uold(ind,5,igrid)-ekin-emag-erad
                     pp(nleaf)=(r%gamma-1)*pp(nleaf)
+#if NION>0 && !defined(DO_RTZ)
+                    do i=1,nx
+                       xi(i,nleaf)=m%uold(ind,ix(i),igrid)/m%uold(ind,1,igrid)
+                    end do
+#endif
 
                     if(ABS(uu(nleaf))<1d-99)uu(nleaf)=0.0D0
                     if(ABS(vv(nleaf))<1d-99)vv(nleaf)=0.0D0
@@ -136,6 +164,20 @@ subroutine write_screen(r,m)
              & prad(1,ii(i))
      end do
      write(*,*)'================================================'
+#elif NION>0 && !defined(DO_RTZ)
+     write(*,*)'================================================'
+     write(*,114)nleaf
+     write(*,*)'lev      x           d          u          P'//trim(xhead)
+     do i=1,nleaf
+        write(*,117)      &
+             & ll(ii(i)), &
+             & xx(i),     &
+             & dd(ii(i)), &
+             & uu(ii(i)), &
+             & pp(ii(i)), &
+             & xi(1:nx,ii(i))
+     end do
+     write(*,*)'================================================'
 #else
      write(*,*)'================================================'
      write(*,114)nleaf
@@ -158,6 +200,9 @@ subroutine write_screen(r,m)
      deallocate(ww)
      deallocate(pp)
      deallocate(ii)
+#if NION>0 && !defined(DO_RTZ)
+     deallocate(xi)
+#endif
 #if NENER>0
      deallocate(prad)
 #endif
@@ -173,6 +218,7 @@ subroutine write_screen(r,m)
 114 format(' Output ',i5,' cells')
 115 format(i3,1x,1pe12.5,1x,8(1pe10.3,1x))
 116 format(i3,1x,1pe12.5,1x,4(1pe10.3,1x))
+117 format(i3,1x,1pe12.5,1x,6(1pe10.3,1x))
 
 #endif
 
