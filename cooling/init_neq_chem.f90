@@ -63,15 +63,12 @@ subroutine init_neq_chem(r,g,tables)
   ! UV suppression of metal cooling at the same epoch (zero without cosmology)
   tables%phi=0d0
   if(r%cosmo)call update_metal_cooling(tables, dble(g%aexp))
-  ! UV background rates at the same epoch (zero with DO_RT)
+  ! UV background rates at the same epoch (zero with DO_RT),
+  ! at z=0 without cosmology (g%aexp=1), as for equilibrium cooling
 #ifndef DO_RT
   if(r%haardt_madau)call load_UVB_data()
 #endif
-  if(r%cosmo)then
-     call update_UV_rates(r, tables, dble(g%aexp))
-  else
-     call update_UV_rates(r, tables, dble(r%aexp_ini))
-  endif
+  call update_UV_rates(r, tables, dble(g%aexp))
 #endif
 
 #ifdef DO_RTZ
