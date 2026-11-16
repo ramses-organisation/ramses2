@@ -360,7 +360,7 @@ MODOBJ +=  multigrid_fine_coarse.o rho_fine.o upload.o init_xion.o \
 	 input_hydro_condinit.o input_hydro_gadget.o init_flow_fine.o \
 	 condinit.o vecpotentialinit.o init_refine_adaptive.o init_refine_restart.o \
 	 init_refine_ramses.o title.o units.o move_fine.o rho_ana.o \
-	 star_formation.o feedback.o clump_merger.o output_clump.o clump_finder.o \
+	 star_formation.o feedback_kimm.o feedback.o clump_merger.o output_clump.o clump_finder.o \
 	 rt_star_feedback.o sink_formation.o tree_formation.o \
 	 sink_evolution.o sink_mechanical.o sink_merger.o task_manager.o rt_step.o cr_step.o amr_step.o \
 	 adaptive_loop.o write_gitinfo.o

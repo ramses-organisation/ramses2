@@ -484,6 +484,8 @@ subroutine m_read_params(pst)
   real(kind=8)::yield_SNII=0.1
   logical::thermal_feedback=.false.
   logical::mechanical_feedback=.false.
+  logical::mechanical_feedback_kimm=.false.
+  real(kind=8)::mechanical_r_thermal_dump=0.1d0
 
   ! Clump finder parameters
   logical::clump_finder=.false.
@@ -754,7 +756,8 @@ subroutine m_read_params(pst)
        & ,epsilon_radio,epsilon_quasar,agn_fbk_mode_switch_threshold &
        & ,agn_jet_opening_angle,agn_use_mass_weighting,agn_jet_vmax
   ! Supernovae feedback parameters
-  namelist/feedback_params/M_SNII,E_SNII,t_SNII,eta_SNII,yield_SNII,thermal_feedback,mechanical_feedback
+  namelist/feedback_params/M_SNII,E_SNII,t_SNII,eta_SNII,yield_SNII,thermal_feedback,mechanical_feedback &
+       & ,mechanical_feedback_kimm,mechanical_r_thermal_dump
   ! Clump finder parameters
   namelist/clump_params/clump_finder,clump_info &
        & ,output_clump,output_peak_grid,output_peak_part,output_peak_star,output_peak_sink,output_peak_tree &
@@ -1428,7 +1431,18 @@ subroutine m_read_params(pst)
      endif
   endif
 
+  ! The two mechanical feedback routines are exclusive
+  if(mechanical_feedback.and.mechanical_feedback_kimm)then
+     write(*,*)'Error: mechanical_feedback and mechanical_feedback_kimm cannot both be .true.'
+     nml_ok=.false.
+  endif
+
 #ifdef _CUDA
+  ! The GPU has no cell-grouped mechanical feedback
+  if(mechanical_feedback_kimm)then
+     write(*,*)'Error: mechanical_feedback_kimm is not supported on GPU'
+     nml_ok=.false.
+  endif
   ! The GPU sink evolution does not provide the high frequency sink dump
   if(sink.and.sink_delta_tout>0)then
      write(*,*)'Error: sink_delta_tout>0 (high frequency sink dump) is not supported on GPU'
@@ -2037,6 +2051,8 @@ subroutine m_read_params(pst)
   s%r%yield_SNII=yield_SNII
   s%r%thermal_feedback=thermal_feedback
   s%r%mechanical_feedback=mechanical_feedback
+  s%r%mechanical_feedback_kimm=mechanical_feedback_kimm
+  s%r%mechanical_r_thermal_dump=mechanical_r_thermal_dump
 
   s%r%clump_finder=clump_finder
   s%r%clump_info=clump_info

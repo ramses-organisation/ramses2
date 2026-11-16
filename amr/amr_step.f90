@@ -365,7 +365,7 @@ recursive subroutine m_amr_step(pst,ilevel,icount,done)
   !---------------------
   ! Mechanical feedback
   !---------------------
-  if(r%star.and.r%mechanical_feedback)then
+  if(r%star.and.(r%mechanical_feedback.or.r%mechanical_feedback_kimm))then
      ok_fbk=.false.
      if(ilevel==r%nlevelmax)then
         ok_fbk=.true.
