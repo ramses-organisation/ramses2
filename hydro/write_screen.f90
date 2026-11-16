@@ -114,16 +114,18 @@ subroutine write_screen(r,m)
 #if NION>0 && !defined(DO_RTZ)
                     do i=1,nx
                        xi(i,nleaf)=m%uold(ind,ix(i),igrid)/m%uold(ind,1,igrid)
+                       if(ABS(xi(i,nleaf))<1d-99)xi(i,nleaf)=0.0D0
                     end do
 #endif
 
+                    ! Values below 1d-99 would need a 3-digit exponent in the E10.3 format
                     if(ABS(uu(nleaf))<1d-99)uu(nleaf)=0.0D0
                     if(ABS(vv(nleaf))<1d-99)vv(nleaf)=0.0D0
                     if(ABS(ww(nleaf))<1d-99)ww(nleaf)=0.0D0
 #ifdef MHD
-                    if(ABS(AA(nleaf))<1d-99)uu(nleaf)=0.0D0
-                    if(ABS(BB(nleaf))<1d-99)vv(nleaf)=0.0D0
-                    if(ABS(CC(nleaf))<1d-99)ww(nleaf)=0.0D0
+                    if(ABS(AA(nleaf))<1d-99)AA(nleaf)=0.0D0
+                    if(ABS(BB(nleaf))<1d-99)BB(nleaf)=0.0D0
+                    if(ABS(CC(nleaf))<1d-99)CC(nleaf)=0.0D0
 #endif
                  endif
               end do
