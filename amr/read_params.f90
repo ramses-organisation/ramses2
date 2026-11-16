@@ -1436,6 +1436,13 @@ subroutine m_read_params(pst)
      write(*,*)'Error: mechanical_feedback and mechanical_feedback_kimm cannot both be .true.'
      nml_ok=.false.
   endif
+#ifdef TRCFLX
+  ! The feedback after the cooling resets the tracer mass fluxes
+  if(mechanical_feedback_kimm)then
+     write(*,*)'Error: mechanical_feedback_kimm is not supported with TRCFLX'
+     nml_ok=.false.
+  endif
+#endif
 
 #ifdef _CUDA
   ! The GPU has no cell-grouped mechanical feedback

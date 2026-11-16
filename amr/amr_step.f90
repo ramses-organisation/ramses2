@@ -365,7 +365,7 @@ recursive subroutine m_amr_step(pst,ilevel,icount,done)
   !---------------------
   ! Mechanical feedback
   !---------------------
-  if(r%star.and.(r%mechanical_feedback.or.r%mechanical_feedback_kimm))then
+  if(r%star.and.r%mechanical_feedback)then
      ok_fbk=.false.
      if(ilevel==r%nlevelmax)then
         ok_fbk=.true.
@@ -509,6 +509,29 @@ recursive subroutine m_amr_step(pst,ilevel,icount,done)
      call r_cooling_fine(pst,ilevel,1)
   endif
   call m_core_step(pst,core_state,CORE_PHASE_ACC_FINALIZE,ilevel=ilevel)
+
+  !---------------------------------------
+  ! Mechanical feedback after the cooling
+  !---------------------------------------
+  if(r%star.and.r%mechanical_feedback_kimm)then
+     ok_fbk=.false.
+     if(ilevel==r%nlevelmax)then
+        ok_fbk=.true.
+     else
+        if(m%noct_tot(ilevel+1)==0)then
+           ok_fbk=.true.
+        endif
+     end if
+     if(ok_fbk)then
+        call m_timer('star - feedback','start')
+        call r_set_unew(pst,ilevel,1)
+        call m_mechanical_feedback(pst,ilevel,mass_fbk)
+        if(mass_fbk>0)then
+           g%mass_star_tot=g%mass_star_tot-mass_fbk
+           call r_set_uold(pst,ilevel,1)
+        endif
+     endif
+  endif
 
   !----------------------------
   ! Sink merger
