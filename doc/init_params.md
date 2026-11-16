@@ -5,6 +5,7 @@ This sets of parameters, contained in the namelist block `&INIT_PARAMS`. This is
 | `initfile=' ' ` | `80*char` | Directory where IC files are stored.
 | `filetype='ascii'` | `20*char` | Type of initial conditions file for particles and gas cells. Possible choices are `ascii`, `gadget`, `grafic` or `grafic_zoom`. Default value is `ascii`. In this case, only particles are read in the ascii file called `ic_part`, `ic_star`or `ic_sink`. For gas cells, initial conditions are set using file `condinit.f90` via compilation time parameters or via a patch. If nothing is done to set user defined initial conditions, then the default setup strategy is basd on uniform regions as explained now. |
 | `aexp_ini=10.0` | `real` | This parameter sets the starting expansion factor for cosmology runs only. Default value is read in the IC file. |
+| `delta_ini=0.1` | `real` | Amplitude at `aexp_ini` of the sine-wave perturbation of the pancake test (`INIT=PANCAKE`, gas only). The particles are set up by `utils/py/pancake.py`, which must be run with the same `--delta_ini` and `--aexp_ini`. The caustic forms when the perturbation has grown by a factor `1/delta_ini`, i.e. at about `aexp_ini/delta_ini` in matter domination. Use 0 for a uniform universe. |
 | `boxlen_ini=1.0` | `real` | Box size in comoving Mpc/h used in grafic initial conditions. |
 | `omega_b=0.045` | `real` | This parameter sets the baryonic density parameter for cosmology runs.  |
 | `omega_m=1.0`   | `real` | Matter density parameter at z=0 for cosmology runs. |

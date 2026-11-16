@@ -69,6 +69,7 @@ subroutine m_read_params(pst)
   integer::nstepmax=1000000   ! Maximum number of time steps
   integer::ncontrol=1         ! Write control variables
   integer::nremap=10          ! Particle load balancing frequency (0: never)
+  real(kind=8)::da_over_a_max=0.1d0 ! Maximum relative change of aexp per time step
 
   ! Maximum number of allocatable particles
   integer::npartmax=0
@@ -193,6 +194,7 @@ subroutine m_read_params(pst)
 
   ! Initial conditions parameters from grafic
   real(kind=8)::aexp_ini=10.
+  real(kind=8)::delta_ini=0.1   ! Initial amplitude of the pancake perturbation (INIT=PANCAKE)
   real(kind=8)::boxlen_ini=1.0
   real(kind=8)::omega_b=0.045
   real(kind=8)::omega_m=1.0
@@ -608,7 +610,7 @@ subroutine m_read_params(pst)
   !--------------------------------------------------
   ! Global run parameter
   namelist/run_params/cosmo,pic,poisson,hydro,rt,cr &
-       & ,verbose,debug,nrestart,ncontrol,nstepmax,nsubcycle,nremap &
+       & ,verbose,debug,nrestart,ncontrol,nstepmax,nsubcycle,nremap,da_over_a_max &
        & ,static_mesh,static_gas,geom,overload &
        & ,clump_only
   ! Output parameters
@@ -641,7 +643,7 @@ subroutine m_read_params(pst)
        & ,varmin_frame,varmax_frame
   ! Initial conditions parameters
   namelist/init_params/filetype,initfile,multiple,nregion,region_type &
-       & ,x_center,y_center,z_center,aexp_ini,omega_b,omega_m,omega_l,h0 &
+       & ,x_center,y_center,z_center,aexp_ini,delta_ini,omega_b,omega_m,omega_l,h0 &
        & ,length_x,length_y,length_z,exp_region,boxlen_ini &
        & ,ic_scale_l,ic_scale_v,ic_scale_m &
 #if NENER>0
@@ -931,6 +933,11 @@ subroutine m_read_params(pst)
   if(nlevelmax<levelmin)then
      write(*,*)'Error in the namelist:'
      write(*,*)'levelmax should not be lower than levelmin'
+     nml_ok=.false.
+  end if
+  if(da_over_a_max<=0d0)then
+     write(*,*)'Error in the namelist:'
+     write(*,*)'da_over_a_max should be positive'
      nml_ok=.false.
   end if
   ! The keys go to level levelmax+1: levels_per_key levels per Hilbert word,
@@ -1631,6 +1638,7 @@ subroutine m_read_params(pst)
   s%r%nstepmax=nstepmax
   s%r%nsubcycle=nsubcycle
   s%r%nremap=nremap
+  s%r%da_over_a_max=da_over_a_max
   s%r%static_mesh=static_mesh
   s%r%static_gas=static_gas
   s%r%geom=geom
@@ -1871,6 +1879,7 @@ subroutine m_read_params(pst)
   s%r%initfile=initfile
   s%r%multiple=multiple
   s%r%aexp_ini=aexp_ini
+  s%r%delta_ini=delta_ini
   s%r%omega_b=omega_b
   s%r%boxlen_ini=boxlen_ini
   s%r%omega_m=omega_m

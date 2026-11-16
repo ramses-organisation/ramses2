@@ -1,14 +1,22 @@
+import argparse
 import numpy as np
 import scipy as sp
 
 """
-Parameters for the pancake collapse test
+Parameters for the pancake collapse test.
+delta_ini and aexp_ini must match the &INIT_PARAMS values of the run.
 """
+parser = argparse.ArgumentParser(description="Particle ICs (ic_part) for the pancake test")
+parser.add_argument("--delta_ini", type=float, default=0.1, help="perturbation amplitude at aexp_ini")
+parser.add_argument("--aexp_ini", type=float, default=0.01, help="starting expansion factor")
+parser.add_argument("--n", type=int, default=1024, help="number of particles")
+args = parser.parse_args()
+
 omega_m = 0.3
 omega_l = 0.7
-n = 1024
-del_ini = 0.1
-aexp_ini = 0.01
+n = args.n
+del_ini = args.delta_ini
+aexp_ini = args.aexp_ini
 
 def fy(a):
     """
@@ -46,4 +54,4 @@ mp = np.ones(n) / n
 xp = xp + disp - 0.5
 
 data = np.column_stack((xp, vp, mp))
-np.savetxt( "ic_part", data, fmt="%.10f", delimiter="  " )
+np.savetxt( "ic_part", data, fmt="%.10e", delimiter="  " )

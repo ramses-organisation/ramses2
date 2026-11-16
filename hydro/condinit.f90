@@ -70,7 +70,7 @@ subroutine condinit(r,g,x,q,dx,nn)
 #elif INIT==RTZEQM
   real(kind=8)::scale_nH,scale_T2,scale_l,scale_d,scale_t,scale_v,scale_m
 #elif INIT==PANCAKE
-  real(kind=8)::del_ini
+  real(kind=8)::del_ini,T2_ini
   real(kind=8)::scale_nH,scale_T2,scale_l,scale_d,scale_t,scale_v,scale_m
 #elif INIT==ALFVENWAVE
   real(kind=8)::del_ini
@@ -306,15 +306,22 @@ subroutine condinit(r,g,x,q,dx,nn)
 #endif
 
 #if INIT==PANCAKE
-  del_ini = 0.1
+  del_ini = r%delta_ini ! Must match --delta_ini of utils/py/pancake.py
   ! get cgs units
   call units(r,g,scale_l,scale_t,scale_d,scale_v,scale_nH,scale_T2)
+  ! Starting temperature T/mu (K): from the cooling model if any,
+  ! otherwise adiabatic evolution capped by T_CMB (neutral gas, mu=1.22)
+  if(r%cooling .or. r%neq_chem)then
+     T2_ini = g%T2_start
+  else
+     T2_ini = min(1.356d-2/g%aexp**2, 2.726d0/g%aexp/1.22d0)
+  endif
   do i = 1,nn
      q(i,1) = g%omega_b/g%omega_m/(1+del_ini*COS(2.0d0*pi*x(i,1)))
      q(i,2) = del_ini*g%vfact(1)*SIN(2.0d0*pi*x(i,1))/(2.0d0*pi)
      q(i,3) = 0.0 ! Vy
      q(i,4) = 0.0 ! Vz
-     q(i,5) = 100./scale_T2 ! Temperature is 10^2 K
+     q(i,5) = q(i,1)*T2_ini/scale_T2 ! Pressure
   end do
 #endif
 

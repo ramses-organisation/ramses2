@@ -39,6 +39,7 @@ module amr_commons
      integer::nstepmax=1000000   ! Maximum number of time steps
      integer,dimension(1:MAXLEVEL)::nsubcycle=2 ! Subcycling at each level
      integer::nremap=10          ! Load balancing frequency (0: never)
+     real(kind=8)::da_over_a_max=0.1d0 ! Maximum relative change of aexp per time step
      logical::static_mesh=.false.! Static mesh refinement mode activated
      logical::static_gas=.false. ! Turn off gas dynamics
      integer::geom    =1         ! 1: cartesian, 2: cylindrical, 3: spherical
@@ -205,6 +206,7 @@ module amr_commons
      real(kind=8)::omega_l=0.0D0  ! Omega Lambda
      real(kind=8)::h0=1.0D0       ! Hubble constant in km/s/Mpc
      real(kind=8)::aexp_ini=10.   ! Starting expansion factor
+     real(kind=8)::delta_ini=0.1  ! Initial amplitude of the pancake perturbation
 
      ! Refinement parameters for each level
      real(kind=8),dimension(1:MAXLEVEL)::m_refine = -1.0 ! Lagrangian threshold

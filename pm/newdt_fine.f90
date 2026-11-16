@@ -37,7 +37,7 @@ subroutine m_newdt_fine(pst,ilevel)
   ! This routine compute the time step using 3 constraints:
   ! 1- a Courant-type condition using particle velocity
   ! 2- the gravity free-fall time
-  ! 3- 10% maximum variation for aexp
+  ! 3- maximum relative variation da_over_a_max for aexp
   ! This routine also compute the particle kinetic energy.
   !-----------------------------------------------------------
   real(kind=8)::dx,tff,fourpi,threepi2
@@ -77,7 +77,7 @@ subroutine m_newdt_fine(pst,ilevel)
 
   ! Cosmic-expansion-based Courant condition
   if(r%cosmo)then
-     g%dtnew(ilevel)=MIN(g%dtnew(ilevel),0.1/g%hexp)
+     g%dtnew(ilevel)=MIN(g%dtnew(ilevel),r%da_over_a_max/g%hexp)
   end if
 
   ! Turbulence driving condition

@@ -2,6 +2,8 @@ This namelist performs a pancake collapse simulation with dark matter and gas.
 You need a ascii file for the initial conditions. You can execute the script
 python3 ./utils/py/pancake.py
 This will generate a file named ic_part in the parent folder.
+The script options --delta_ini and --aexp_ini (defaults 0.1 and 0.01) must match
+delta_ini and aexp_ini in the INIT_PARAMS block below.
 To compile the code with MPI (recommended), type in folder /bin the command line:
 make NDIM=1 MPI=1 UNITS=COSMO GRAV=1 HYDRO=1 NPSCAL=1 INIT=PANCAKE
 Then execute the code in the parent folder using:
@@ -31,6 +33,7 @@ omega_m=0.3
 omega_l=0.7
 boxlen_ini=25.
 aexp_ini=0.01
+delta_ini=0.1
 /
 
 &AMR_PARAMS

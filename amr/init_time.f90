@@ -390,7 +390,11 @@ subroutine init_cosmo(mdl,r,g)
   end if
   g%omega_k=1.d0-g%omega_l-g%omega_m
 
-  if(r%filetype=='ascii')return
+  if(r%filetype=='ascii')then
+     ! Velocity scale factor used by condinit (e.g. INIT=PANCAKE), as below
+     g%vfact(1)=g%aexp*fpeebl(g%aexp,g%omega_m,g%omega_l)*sqrt(g%omega_m/g%aexp+g%omega_l*g%aexp*g%aexp+g%omega_k)
+     return
+  endif
 
   ! Compute linear scaling factor between aexp and astart(ilevel)
   do ilevel=r%levelmin,g%nlevelmax_part
