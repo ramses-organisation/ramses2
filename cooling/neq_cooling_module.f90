@@ -15,7 +15,7 @@ module neq_cooling_module
 
   private   ! default
   public neq_set_model, neq_solve_cooling, updateRTGroups_CoolConstants &
-       ,update_metal_cooling, cmp_equilibrium_abundances, getmu
+       ,update_metal_cooling, cmp_equilibrium_abundances, getmu, HsurH0
 
   real(kind=8),parameter::T2_min_fix=1d-2 ! Min temperature [K]
 
@@ -53,7 +53,7 @@ SUBROUTINE neq_set_model(r, tables, h, omegab, omega0, omegaL, astart_sim, T2_si
   type(neq_cooling_t) :: tables
   real(kind=8) :: h, omegab, omega0, omegaL, astart_sim, T2_sim
   real(kind=8),dimension(1:nion) :: xion_sim
-  real(kind=8) :: astart=0.0001, aend, dasura, T2end=T2_min_fix, mu=1., ne
+  real(kind=8) :: astart=0.0001, aend, dasura, T2end=T2_min_fix, mu=1., ne, Ha
   !-------------------------------------------------------------------------
 
   ! Calculate initial temperature
@@ -65,15 +65,22 @@ SUBROUTINE neq_set_model(r, tables, h, omegab, omega0, omegaL, astart_sim, T2_si
   endif
   aend=astart_sim
   dasura=0.02d0
+  Ha = 1d7 * h / Mpc2cm                                          &
+       * HsurH0(1d0/astart-1d0, omega0, omegaL, 1d0-omega0-omegaL)
 
 !  call init_UV_background
-  call init_coolrates_tables(r, tables, astart_sim)
+  call init_coolrates_tables(r, tables, astart, Ha)
   call updateRTGroups_CoolConstants(r, tables)
 
   xion_sim=0d0
   if(r%nrestart==0 .and. r%cosmo)                                        &
       call neq_evol_single_cell(r, tables, astart, aend, dasura,         &
        &        h, omegab, omega0, omegaL, T2end, mu, ne, xion_sim, .false.)
+
+  ! Set the a-dependent rates to astart_sim
+  Ha = 1d7 * h / Mpc2cm                                          &
+       * HsurH0(1d0/astart_sim-1d0, omega0, omegaL, 1d0-omega0-omegaL)
+  call update_coolrates_tables(r, tables, astart_sim, Ha)
   T2_sim=T2end
 
 END SUBROUTINE neq_set_model
@@ -300,7 +307,7 @@ contains
     real(kind=8):: G0, eff_peh, cdex
     real(kind=8):: fluxMag, mom_fact
 #endif
-    real(kind=8):: rho, ncr
+    real(kind=8):: rho, ncr, Cpeebles, fHm, bHm
     logical:: newAtomicCons=.true.
     !-----------------------------------------------------------------------
     associate(ixHI=>r%ixHi,ixHII=>r%ixHII,ixHeII=>r%ixHeII,ixHeIII=>r%ixHeIII)
@@ -501,6 +508,13 @@ contains
     endif !if(rt)
 #endif
 
+    ! Fraction of H- surviving CMB photodissociation (H2 heating + update)
+    fHm = 1d0
+    if(r%isH2) then
+       bHm = inp_coolrates_table(tables,tables%tbl_beta_cmb_Hm,TK,.false.)
+       if(bHm > 0d0) fHm = nN(ixHII) / (nN(ixHII) + bHm)
+    endif
+
     ! UPDATE TEMPERATURE *************************************************
     !if(c_switch(icell) .and. .not. rt_isTconst .and. .not. r%rt_T_rad) then
     if(.not. r%neq_isTconst .and. .not. r%rt_T_rad) then
@@ -532,6 +546,7 @@ contains
 #endif
                                        ! H2 formation heating, Omukai 2000
                            ! and Hollenbach and McKee 1976, [erg cm-3 s-1]
+
           ncr   = 1d6 * TK**(-0.5)                                       &
                 / (1.6 * dxion(ixHI) * exp(-(400. / TK)**2)              &
                 + 1.4 * xH2 * exp(-12000. / (TK + 1200.)))        ! [cm-3]
@@ -542,7 +557,7 @@ contains
                 * nH(icell)**2 * dxion(ixHI)                             &
                 + 3.53 / (1. + ncr/nH(icell))                            &
                 * inp_coolrates_table(tables,tables%tbl_AlphaGP_H2,TK,.false.) &
-                * nH(icell) * dxion(ixHI) * ne                           &
+                * fHm * nH(icell) * dxion(ixHI) * ne                     &
                 + 4.48 / (1.+ncr / nH(icell))                            &
                 * inp_coolrates_table(tables,tables%tbl_Beta_H3B,TK,.false.) &
                 * nH(icell)**3 * dxion(ixHI)**2 * (dxion(ixHI) + xH2/8.))
@@ -620,7 +635,8 @@ contains
     if(r%isH2) then
        alpha(ixHI) = inp_coolrates_table(tables,tables%tbl_AlphaZ_H2, TK,.false.)      &
                    * Zsolar(icell) * f_dust * nH(icell)                  &
-                   + inp_coolrates_table(tables,tables%tbl_AlphaGP_H2,TK,.false.) * ne &
+                   + inp_coolrates_table(tables,tables%tbl_AlphaGP_H2,TK,.false.)      &
+                   * fHm * ne                                            &
                    + inp_coolrates_table(tables,tables%tbl_Beta_H3B,TK,.false.)        &
                    * nH(icell)**2 * dxion(ixHI) * (dxion(ixHI) + xH2/ 8.)
        beta(ixHI)  = inp_coolrates_table(tables,tables%tbl_Beta_H2HI, TK,.false.)      &
@@ -638,10 +654,19 @@ contains
        dxH2 = MIN(MAX(dxH2, x_min), 0.5d0)
     endif !if(isH2)
     ! Update xHI (also if .not. isH2, for stability)**********************
-    if(r%rt_otsa .or. .not. r%rt_advect) then     !    Recombination rates
-       alpha(ixHII) = inp_coolrates_table(tables,tables%tbl_AlphaB_HII, TK,.false.)
+    ! Peebles C factor
+    Cpeebles = 1d0 / (1d0                                                &
+        + inp_coolrates_table(tables,tables%tbl_beta_cmb_HI, TK,.false.) &
+        / (8.2206d0 + 1d0 / (nN(ixHII)                                   &
+        * inp_coolrates_table(tables,tables%tbl_beta_ly_red, TK,.false.))))
+                            ! Recombination rates, C applies to case B only
+    if(r%rt_otsa .or. .not. r%rt_advect) then
+       alpha(ixHII) = inp_coolrates_table(tables,tables%tbl_AlphaB_HII, TK,.false.) &
+                    * Cpeebles
     else
-       alpha(ixHII) = inp_coolrates_table(tables,tables%tbl_AlphaA_HII, TK,.false.)
+       alpha(ixHII) = inp_coolrates_table(tables,tables%tbl_AlphaA_HII, TK,.false.) &
+                    - inp_coolrates_table(tables,tables%tbl_AlphaB_HII, TK,.false.) &
+                    * (1d0 - Cpeebles)
     endif
     beta(ixHII) = inp_coolrates_table(tables,tables%tbl_Beta_HI, TK,.false.) ! Coll.ion.rate
     cr = alpha(ixHII) * ne * dxion(ixHII) + 2. * de * dxH2    !HI creation
@@ -649,6 +674,8 @@ contains
 #ifdef DO_RT
     photoRate = SUM(signc(:,ixHII)*dNp)           !                  [s-1]
 #endif
+    photoRate = photoRate + Cpeebles                                    &
+        * inp_coolrates_table(tables,tables%tbl_gamma_cmb_HI, TK,.false.)
     if(r%haardt_madau) photoRate = photoRate + tables%UVrates(ixHII,1)*ss_factor
     de = beta(ixHII) * ne + photoRate             !         HI destruction
     if(r%cosmic_rays) de = de + cosray_HI
@@ -883,7 +910,7 @@ SUBROUTINE cmp_equilibrium_abundances(r, tables, &
   real(kind=8)::mu,Zsolar
   real(kind=8),dimension(1:7)::nSpec
   !-------------------------------------------------------------------------
-  real(kind=8)::mu_mid, err_mu, mu_left, mu_right, T, nTot
+  real(kind=8)::mu_mid, err_mu, mu_left, mu_right, T
   integer::niter
   !-------------------------------------------------------------------------
   ! Iteration to find mu                     ! n_E     = n_spec(1) ! e
@@ -896,7 +923,7 @@ SUBROUTINE cmp_equilibrium_abundances(r, tables, &
   do while (err_mu > 1d-4 .and. niter <= 50)
      mu_mid=0.5*(mu_left+mu_right)
      T = T2*mu_mid
-     call cmp_chem_eq(r, tables, T, nH, phI_rates, nSpec, nTot, mu, Zsolar)
+     call cmp_chem_eq(r, tables, T, nH, phI_rates, nSpec, mu, Zsolar)
      if(mu - mu_mid > 0.)then
         mu_left = mu_mid
      else
@@ -913,7 +940,7 @@ SUBROUTINE cmp_equilibrium_abundances(r, tables, &
 END SUBROUTINE cmp_equilibrium_abundances
 
 !XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-SUBROUTINE cmp_chem_eq(r, tables, TK, nH, t_rad_spec, nSpec, nTot, mu, Zsol)
+SUBROUTINE cmp_chem_eq(r, tables, TK, nH, t_rad_spec, nSpec, mu, Zsol)
 
   ! Compute chemical equilibrium abundances of e,H2,HI,HII,HeI,HeII,HeIII.
   ! tables     => Object containing all non-equilibrium cooling tables
@@ -922,22 +949,22 @@ SUBROUTINE cmp_chem_eq(r, tables, TK, nH, t_rad_spec, nSpec, nTot, mu, Zsol)
   ! t_rad_spec => Photoionization rates [s-1] for H2, HI, HeI, HeII
   ! Zsol       => Metallicity in Solar units
   ! nSpec      <= Resulting species number densities
-  ! nTot       <= Resulting total number density (=sum of nSpec)
   ! mu         <= Resulting average particle mass in units of proton mass
   !------------------------------------------------------------------------
   implicit none
   type(run_t)::r
   type(neq_cooling_t)::tables
   real(kind=8),intent(in)::TK, nH, Zsol
-  real(kind=8),intent(out)::nTot, mu
+  real(kind=8),intent(out)::mu
   real(kind=8),dimension(nion),intent(in)::t_rad_spec
   real(kind=8),dimension(1:7),intent(out)::nSpec
   !------------------------------------------------------------------------
-  real(kind=8)::nHe
+  real(kind=8)::nHe, nTot
   real(kind=8)::n_H2, n_HI, n_HII, n_HEI, n_HEII, n_HEIII, n_E, n_E_min
-  real(kind=8)::g_H2=0,   g_HI=0,    g_HEI=0, g_HEII=0   ! Photoion/dissoc
-  real(kind=8)::aZ_H2=0,  aGP_H2,    a_HI=0,  a_HEI=0,   a_HEII=0  ! Formation
+  real(kind=8)::g_H2=0,   g_HI=0,    g_HEI=0, g_HEII=0,  g_cmb_HI=0   ! Photoion/dissoc
+  real(kind=8)::aZ_H2=0,  aGP_H2=0,  a_HI=0,  a_HEI=0,   a_HEII=0  ! Formation
   real(kind=8)::b_H2HI=0, b_H2H2=0,  b_H3B,   b_HI=0,    b_HEI=0, b_HEII=0!Col
+  real(kind=8)::b_Hm=0,   fHm=0                                  ! CMB
   real(kind=8)::C_HII=0,  C_H2=0,    D_H2=0,  f_HII=0,   f_H2=0  ! Cre & destr
   real(kind=8)::D_HEI=0,  C_HEIII=0, f_HeI=0, f_HeIII=0, f_dust=0! Cre & destr
   real(kind=8)::err_nE, err_nH2, n_H2_old, n_H2_new, beta_H2
@@ -948,11 +975,12 @@ SUBROUTINE cmp_chem_eq(r, tables, TK, nH, t_rad_spec, nSpec, nTot, mu, Zsol)
   g_HI   = t_rad_spec(ixHII)               !         Photoionization [s-1]
   if(r%isH2) then
      g_H2   = t_rad_spec(ixHI)                !    Photodissociation [s-1]
-     aZ_H2  = inp_coolrates_table(tables,tables%tbl_AlphaZ_H2, TK,.false.)  ! Dust form [cm3 s-1]
-     aGP_H2 = inp_coolrates_table(tables,tables%tbl_AlphaGP_H2, TK,.false.) ! Gas phase [cm3 s-1]
-     b_H3B  = inp_coolrates_table(tables,tables%tbl_Beta_H3B, TK,.false.)   ! 3 body H2 [cm3 s-1]
-     b_H2HI = inp_coolrates_table(tables,tables%tbl_Beta_H2HI, TK,.false.)  !     Cdiss [cm3 s-1]
-     b_H2H2 = inp_coolrates_table(tables,tables%tbl_Beta_H2H2, TK,.false.)  !     Cdiss [cm3 s-1]
+     aZ_H2  = inp_coolrates_table(tables,tables%tbl_AlphaZ_H2, TK,.false.)  ! Dust form   [cm3 s-1]
+     aGP_H2 = inp_coolrates_table(tables,tables%tbl_AlphaGP_H2, TK,.false.) ! Gas phase   [cm3 s-1]
+     b_H3B  = inp_coolrates_table(tables,tables%tbl_Beta_H3B, TK,.false.)   ! 3 body H2   [cm3 s-1]
+     b_H2HI = inp_coolrates_table(tables,tables%tbl_Beta_H2HI, TK,.false.)  !     Cdiss   [cm3 s-1]
+     b_H2H2 = inp_coolrates_table(tables,tables%tbl_Beta_H2H2, TK,.false.)  !     Cdiss   [cm3 s-1]
+     b_Hm   = inp_coolrates_table(tables,tables%tbl_Beta_cmb_Hm, TK,.false.)! CMB H- diss [cm3 s-1]
   endif
   if(r%rt_otsa) then                           !   Recombination [cm3 s-1]
      a_HI   = inp_coolrates_table(tables,tables%tbl_AlphaB_HII, TK,.false.)
@@ -963,7 +991,8 @@ SUBROUTINE cmp_chem_eq(r, tables, TK, nH, t_rad_spec, nSpec, nTot, mu, Zsol)
      a_HEI  = inp_coolrates_table(tables,tables%tbl_AlphaA_HeII, TK,.false.)
      a_HEII = inp_coolrates_table(tables,tables%tbl_AlphaA_HeIII, TK,.false.)
   endif
-  b_HI   = inp_coolrates_table(tables,tables%tbl_Beta_HI, TK,.false.)  !  Cion [cm3 s-1]
+  b_HI     = inp_coolrates_table(tables,tables%tbl_Beta_HI, TK,.false.)      !  Cion [cm3 s-1]
+  g_cmb_HI = inp_coolrates_table(tables,tables%tbl_gamma_cmb_HI, TK,.false.) !  CMBion [s-1]
   if(r%isHe) then
      nHe = r%Y_He/(1.-r%Y_He)/4.*nH
      g_HEI  = t_rad_spec(ixHeII)
@@ -979,14 +1008,16 @@ SUBROUTINE cmp_chem_eq(r, tables, TK, nH, t_rad_spec, nSpec, nTot, mu, Zsol)
 
   do while(err_nE > 1d-8 .or. err_nH2 > 1d-8)
      n_E_min = MAX(n_E,1e-15*nH)
-     C_HII = b_HI * n_E_min + g_HI                   !  HII creation (s-1)
+     C_HII = b_HI * n_E_min + g_HI + g_cmb_HI !  HII creation (s-1)
      if(r%cosmic_rays) C_HII = C_HII + cosray_HI
      f_HII = max(C_HII / a_HI / n_E_min, 1d-20)     ! Cre/Destr [unitless]
      f_H2 = 0d0
      if(r%isH2) then
         f_dust = 1d0-n_HII/nH
+        fHm = 1d0
+        if(b_Hm > 0d0) fHm = n_HI / (n_HI + b_Hm)
         C_H2   = aZ_H2 * nH * Zsol * f_dust                              &
-               + aGP_H2 * n_E_min                                        &
+               + fHm * aGP_H2 * n_E_min                                  &
                + b_H3B * n_HI * (n_HI + n_H2/ 8.)
         D_H2   = b_H2HI * n_HI + b_H2H2 * n_H2 + g_H2    ! H2 destr. (s-1)
         if(r%cosmic_rays) D_H2 = D_H2 + cosray_H2
@@ -1078,12 +1109,14 @@ SUBROUTINE neq_evol_single_cell(r, tables, astart, aend, dasura, &
   associate(ixHI=>r%ixHi, ixHII=>r%ixHII, ixHeII=>r%ixHeII, ixHeIII=>r%ixHeIII)
 
   aexp = astart
-  T2_com = 2.726d0 / aexp * aexp**2 / r%mu_mol
+  T2_com = 2.726d0 / aexp * aexp**2                    ! Temperature T [K]
   nH_com = omegab*rhoc*h**2*r%X_H/mH
   pHI_rates = 0.                              ! Initially no UV background
 
-  call cmp_equilibrium_abundances(r,tables,T2_com/aexp**2,nH_com/aexp**3 &
-        ,pHI_rates, mu, n_Spec, 0d0)
+  call cmp_chem_eq(r, tables, T2_com/aexp**2, nH_com/aexp**3             &
+        ,phI_rates, n_Spec, mu, 0d0)
+
+  T2_com = T2_com / mu                              ! Temperature T/mu [K]
 
   ! Initialize cell state
   T2(1)=T2_com                                          !      Temperature
@@ -1100,11 +1133,12 @@ SUBROUTINE neq_evol_single_cell(r, tables, astart, aend, dasura, &
 !  c_switch(1)=.true.
   do while (aexp < aend)
 !     call update_UVrates(aexp)
-     call update_coolrates_tables(r, tables, aexp)! Update Compton heating
+     call update_coolrates_tables(r, tables, aexp, 1d7 * h / Mpc2cm      &
+         * HsurH0(1d0/dble(aexp)-1d0, omega0, omegaL, 1.0d0-omega0-omegaL))! Update Compton heating
 
      daexp = dasura*aexp
      dt_cool = daexp                                                     &
-             / (aexp*100.*h*3.2408608e-20)                               &
+             / (aexp * 1d7 * h / Mpc2cm)                               &
              / HsurH0(1.0/dble(aexp)-1.,omega0,omegaL,1.-omega0-omegaL)
 
      nH(1) = nH_com/aexp**3

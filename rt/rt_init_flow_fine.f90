@@ -67,7 +67,7 @@ recursive subroutine r_rt_neq_updates(pst, nstep_coarse, input_size)
 #ifdef DO_RTZ
   use rtz_cooling_module, only: rtz_updateRTGroups_CoolConstants
 #else
-  use neq_cooling_module, only: updateRTGroups_CoolConstants, update_metal_cooling
+  use neq_cooling_module, only: updateRTGroups_CoolConstants, update_metal_cooling, HsurH0
 #ifdef _CUDA
   use neq_cooling_device, only: gpu_upload_neq_tables
 #endif
@@ -91,9 +91,13 @@ recursive subroutine r_rt_neq_updates(pst, nstep_coarse, input_size)
      ! Update reduced speed of light
      if(r%rt .and. r%cosmo) call update_rt_c(r, g, pst%s%tables)
 
-     ! Update Compton heating
+#ifndef DO_RTZ
+     ! Update cosmological rates
      if(r%neq_chem .and. r%cosmo) &
-        call update_coolrates_tables(r, pst%s%tables, dble(g%aexp))
+        call update_coolrates_tables(r, pst%s%tables, dble(g%aexp), &
+          dble(g%h0)*3.24077927d-20*HsurH0(1d0/dble(g%aexp)-1d0, &
+          dble(g%omega_m), dble(g%omega_l), 1.0d0-dble(g%omega_m)-dble(g%omega_l)))
+#endif
 
      if(r%rt .and. r%star .and. r%rt_advect .and. r%rt_star &
         .and. r%sedprops_update>0)then

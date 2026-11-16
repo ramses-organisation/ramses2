@@ -215,13 +215,19 @@ subroutine init_xion(r,g,m,tables,ilevel)
            ! (CIE at T2_start would wipe out the residual ionization)
            do i=1,nleaf
               nSpec(i,:)=0d0
-              nSpec(i,3)=(1d0-g%xion_start(ixHII))*nH(i)
-              nSpec(i,4)=g%xion_start(ixHII)*nH(i)
+              if(r%isH2) then
+                 nSpec(i,2)=0.5d0*(1d0-g%xion_start(ixHI)-g%xion_start(ixHII))
+                 nSpec(i,3)=g%xion_start(ixHI)
+              else
+                 nSpec(i,3)=1d0-g%xion_start(ixHII)
+              endif
+              nSpec(i,4)=g%xion_start(ixHII)
               if(r%isHe)then
                  nSpec(i,5)=1d0-g%xion_start(ixHeII)-g%xion_start(ixHeIII)
                  nSpec(i,6)=g%xion_start(ixHeII)
                  nSpec(i,7)=g%xion_start(ixHeIII)
               endif
+              nSpec(i,:)=nSpec(i,:)*nH(i)
            end do
         else
            do i=1,nleaf
@@ -233,11 +239,7 @@ subroutine init_xion(r,g,m,tables,ilevel)
         do i=1,nleaf ! Update ionization states in uold
 
           if(r%isH2) then
-              if(r%nrestart==0 .and. r%cosmo) then      ! No primordial H2
-                  x = (2.*nSpec(i,2)+nSpec(i,3))/(2.*nSpec(i,2)+nSpec(i,3)+nspec(i,4))  ! HI fraction
-              else
-                  x = nSpec(i,3)/(2.*nSpec(i,2)+nSpec(i,3)+nspec(i,4))   ! HI fraction
-              endif
+              x = nSpec(i,3)/(2.*nSpec(i,2)+nSpec(i,3)+nspec(i,4))   ! HI fraction
               m%uold(ind,r%iIons-1+ixHI,ind_leaf(i)) = x*m%uold(ind,1,ind_leaf(i))
           endif
 

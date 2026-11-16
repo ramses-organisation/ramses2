@@ -196,9 +196,10 @@ subroutine input_hydro_grafic(mdl,r,g,m,ilevel)
 
      ! For cosmo runs, rescale initial conditions to code units
      if(r%cosmo)then
-        if(.not. r%cooling)then
+        if(.not. r%cooling .and. .not. r%neq_chem)then
            ! Compute approximate average temperature in K
            g%T2_start=1.356d-2/g%aexp**2
+           if(g%myid==1)write(*,*)"Approximate temperature assumed using an adiabatic evolution, T/mu (K) = ",g%T2_start
         endif
         if(ivar==1)init_array=(1.0+g%dfact(ilevel)*init_array)*g%omega_b/g%omega_m
         if(ivar==2)init_array=g%dfact(ilevel)*g%vfact(1)*dx_loc/g%dxini(ilevel)*init_array/g%vfact(ilevel)
