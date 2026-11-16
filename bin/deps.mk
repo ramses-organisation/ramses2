@@ -41,7 +41,8 @@ cr_step.o: amr_parameters.o constants.o cr_godunov_fine.o cr_source_terms.o cr_u
 cr_upload.o: amr_commons.o amr_parameters.o cache.o cache_commons.o cr_parameters.o hydro_parameters.o mdl.o mdl_commons.o nbors_utils.o ramses_commons.o
 cross_sections_module.o: constants.o
 domain_hilbert.o: amr_parameters.o hilbert.o
-feedback.o: amr_parameters.o boundaries.o cache.o cache_commons.o cr_parameters.o godunov_fine.o hilbert.o hydro_parameters.o marshal.o mdl.o mdl_commons.o nbors_utils.o pm_commons.o ramses_commons.o
+feedback.o: amr_parameters.o boundaries.o cache.o cache_commons.o cr_parameters.o feedback_kimm.o godunov_fine.o hilbert.o hydro_parameters.o marshal.o mdl.o mdl_commons.o nbors_utils.o pm_commons.o ramses_commons.o
+feedback_kimm.o: amr_commons.o amr_parameters.o boundaries.o cache.o cache_commons.o cr_parameters.o godunov_fine.o hydro_parameters.o marshal.o mdl.o nbors_utils.o pm_commons.o ramses_commons.o
 flag_utils.o: amr_commons.o amr_parameters.o boundaries.o cache.o cache_commons.o hilbert.o hydro_flag.o marshal.o mdl.o mdl_commons.o nbors_utils.o pm_commons.o pm_parameters.o ramses_commons.o rt_flag.o smooth.o
 force_fine.o: multigrid_fine_coarse.o
 gadgetreadfile.o: amr_parameters.o

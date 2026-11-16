@@ -251,6 +251,8 @@ recursive subroutine r_mechanical_feedback(pst,input,input_size,output,output_si
   use mdl_parameters
 #ifdef _CUDA
   use gpu_runner, only: gpu_mechanical_feedback
+#else
+  use feedback_kimm_module, only: mechanical_feedback_kimm
 #endif
   implicit none
   type(pst_t)::pst
@@ -270,7 +272,11 @@ recursive subroutine r_mechanical_feedback(pst,input,input_size,output,output_si
 #ifdef _CUDA
      call gpu_mechanical_feedback(pst%s,input%ilevel,input%texp_old,output%mass)
 #else
-     call mechanical_feedback(pst%s,pst%s%star,input%ilevel,input%texp_old,output%mass)
+     if(pst%s%r%mechanical_feedback_kimm)then
+        call mechanical_feedback_kimm(pst%s,pst%s%star,input%ilevel,input%texp_old,output%mass)
+     else
+        call mechanical_feedback(pst%s,pst%s%star,input%ilevel,input%texp_old,output%mass)
+     endif
 #endif
   endif
 

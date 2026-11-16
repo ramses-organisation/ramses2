@@ -520,6 +520,7 @@ set(fortran_files
   sink/sink_evolution.f90
   sink/sink_mechanical.f90
   sink/sink_merger.f90
+  feedback/feedback_kimm.f90
   feedback/feedback.f90
   feedback/rt_star_feedback.f90
 

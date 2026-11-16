@@ -388,6 +388,8 @@ module amr_commons
      real(kind=8)::yield_SNII=0.1
      logical::thermal_feedback=.false.
      logical::mechanical_feedback=.false.
+     logical::mechanical_feedback_kimm=.false.
+     real(kind=8)::mechanical_r_thermal_dump=0.1d0
 
      ! Clump finder parameters
      logical::clump_finder=.false.
