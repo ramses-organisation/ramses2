@@ -433,7 +433,7 @@ subroutine input_params(mdl,r,g,filename,nfile_file,ncpu_file,levelmin_file,nlev
   ! are allowed to vary at restart.
   !-----------------------------------
   integer::ilun
-  integer::ndim_file,noutput_file
+  integer::ndim_file,noutput_file,iout_file
   integer::noutput_min,nlevelmax_min
   real(kind=8)::mass_sph_file,gamma_file
   real(kind=8),allocatable,dimension(:)::tout,aout,dtold,dtnew
@@ -456,8 +456,18 @@ subroutine input_params(mdl,r,g,filename,nfile_file,ncpu_file,levelmin_file,nlev
   ! Overwrite boxlen with value from file
   read(ilun)r%boxlen
   ! Read time variables
-  read(ilun)noutput_file,g%iout,g%ifout,g%ifbkp
+  read(ilun)noutput_file,iout_file,g%ifout,g%ifbkp
   noutput_min=MIN(r%noutput,noutput_file)
+  if(r%filetype=='ramses'.and.r%nrestart==0)then
+     ! Starting from a ramses output: new run with the output times of the
+     ! namelist, numbered from 1 (iout is set in init_time, this routine
+     ! is called again by m_init_refine_ramses)
+     g%ifout=1
+     g%ifbkp=1
+     noutput_min=0
+  else
+     g%iout=iout_file
+  endif
   allocate(tout(1:noutput_file))
   allocate(aout(1:noutput_file))
   read(ilun)tout

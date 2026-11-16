@@ -93,6 +93,16 @@ end subroutine r_init_time
      g%texp=g%t
   end if
 
+  ! Starting from a ramses output: the output times come from the namelist,
+  ! skip those already passed (same test as the output trigger in amr_step)
+  if(r%nrestart==0 .and. r%filetype=='ramses')then
+     g%iout=1
+     do while(g%iout<=r%noutput)
+        if(g%aexp<r%aout(g%iout) .and. g%t<r%tout(g%iout))exit
+        g%iout=g%iout+1
+     end do
+  endif
+
   ! Initialize cooling model
   if(r%cooling.and..not.r%cooling_ism.and..not.r%neq_chem.and..not.r%rtz_cooling)then
      call init_cooling(r,g,c)
