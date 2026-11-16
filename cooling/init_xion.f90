@@ -16,10 +16,10 @@ subroutine m_init_xion(pst)
   integer::ilevel
 
   if(pst%s%g%myid==1)then
-     if(pst%s%r%cosmo .and. pst%s%r%nrestart==0)then
+     if(pst%s%r%cosmo .and. pst%s%r%nrestart==0 .and. pst%s%r%filetype/='ramses')then
         write(*,*) 'Initialising to residual (freeze-out) ionisation fractions'
      else
-        write(*,*) 'Initialising to CIE ionisation fractions'
+        write(*,*) 'Initialising to equilibrium ionisation fractions'
      endif
   endif
   do ilevel=pst%s%r%nlevelmax,pst%s%r%levelmin,-1
@@ -82,7 +82,7 @@ subroutine init_xion(r,g,m,tables,ilevel)
   integer::ilevel
   integer::i,ind,igrid,idim,ngrid,nleaf
   real(kind=8)::scale_nH,scale_T2,scale_l,scale_d,scale_t,scale_v
-  real(kind=8)::mu,x
+  real(kind=8)::mu,x,ss_factor
   integer,dimension(1:nvector)::ind_leaf
   real(kind=8),dimension(1:nvector)::nH,T2,ekk,err,emag,Zsolar
   real(kind=8),dimension(nion)::phI_rates       ! Photoionization rates [s-1]
@@ -100,7 +100,6 @@ subroutine init_xion(r,g,m,tables,ilevel)
 
   ! Conversion factor from user units to cgs units
   call units(r,g,scale_l,scale_t,scale_d,scale_v,scale_nH,scale_T2)
-  pHI_rates(:)=0.0                   ! No UV background for the time being
 
 #ifdef HYDRO
   ! Loop over cells
@@ -210,8 +209,9 @@ subroutine init_xion(r,g,m,tables,ilevel)
           end if
         end do ! end loop over cells
 #else
-        if(r%cosmo .and. r%nrestart==0)then
-           ! Use the abundances from the single-cell evolution in neq_set_model
+        if(r%cosmo .and. r%nrestart==0 .and. r%filetype/='ramses')then
+           ! Fresh start from initial conditions: use the abundances from the
+           ! single-cell evolution in neq_set_model
            ! (CIE at T2_start would wipe out the residual ionization)
            do i=1,nleaf
               nSpec(i,:)=0d0
@@ -230,7 +230,15 @@ subroutine init_xion(r,g,m,tables,ilevel)
               nSpec(i,:)=nSpec(i,:)*nH(i)
            end do
         else
+           ! Equilibrium abundances at the cell temperature,
+           ! including the UV background if any (zero with DO_RT)
            do i=1,nleaf
+              pHI_rates(:)=0d0
+              if(r%haardt_madau)then
+                 ss_factor=1d0
+                 if(r%self_shielding)ss_factor=exp(-nH(i)/1d-2)
+                 pHI_rates(:)=tables%UVrates(:,1)*ss_factor
+              endif
               call cmp_equilibrium_abundances(r,tables,T2(i),nH(i),pHI_rates(:),mu,nSpec(i,:),Zsolar(i))
            end do
         endif

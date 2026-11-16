@@ -915,7 +915,9 @@ subroutine m_read_params(pst)
   !-------------------------------------------------
   ! Set default initialisation of ionisation states:
   ! -Off if restarting, but can set to true (for postprocessing)
-  ! -On otherwise, but can set to false
+  ! -On otherwise, but can set to false. When starting from
+  !  a ramses output (filetype='ramses'), this replaces the
+  !  ionisation states of the file by equilibrium values.
   !-------------------------------------------------
   if(nrestart .gt. 0) then
      is_init_xion=.false.
