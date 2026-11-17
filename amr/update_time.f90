@@ -172,8 +172,8 @@ subroutine m_update_time(pst,ilevel,done)
   ! Output controls to screen
   !----------------------------
   if(mod(g%nstep,r%ncontrol)==0)then
+     g%control_due=.true.
      if(itest==0)then
-        g%control_due=.true.
         if(r%part)then
 #if defined(_CUDA) || defined(_METAL)
            write(*,888)g%nstep,g%t,dt,g%aexp,real(100.0D0*dble(m%noct_used_max)/dble(m%ngridmax)),&
