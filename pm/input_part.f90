@@ -8,7 +8,7 @@ subroutine m_input_part(pst)
   use mdl_module
   use ramses_commons, only: pst_t
   use input_part_grafic_module, only: m_input_part_grafic
-  use input_part_ascii_module, only: m_input_part_ascii
+  use input_part_ascii_module, only: m_input_part_ascii, m_input_sink_ascii
   use input_part_restart_module, only: m_input_part_restart
   use input_part_ramses_module, only: m_input_part_ramses
   use input_part_gadget_module, only: m_input_part_gadget
@@ -24,6 +24,7 @@ subroutine m_input_part(pst)
   select case(pst%s%r%filetype)
   case ('grafic')
      call m_input_part_grafic(pst)
+     call m_input_sink_ascii(pst)
   case ('grafic_zoom')
      return
   case('ascii')

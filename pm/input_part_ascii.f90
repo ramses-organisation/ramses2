@@ -15,7 +15,7 @@ subroutine m_input_part_ascii(pst)
   ! from an ascii file.
   !--------------------------------------------------------------------
   real(kind=8)::xx1,xx2,xx3,vv1,vv2,vv3,mm1,zz1,tt1,jj1,jj2,jj3
-  integer(kind=8)::npart_tot,nstar_tot,nsink_tot
+  integer(kind=8)::npart_tot,nstar_tot
   character(LEN=flen)::filename
   integer(kind=8)::ncore_tot
   integer,allocatable,dimension(:)::input_array
@@ -125,55 +125,8 @@ subroutine m_input_part_ascii(pst)
 
   endif
 
-  if(s%r%sink)then
-
-     ! Compute total number of sinks in file
-     if(TRIM(s%r%initfile(s%r%levelmin)).NE.' ')then
-        filename=TRIM(s%r%initfile(s%r%levelmin))//'/ic_sink'
-        inquire(file=filename, exist=file_exist)
-        if(file_exist)then
-           write(*,*)'Opening file '//TRIM(filename)
-           open(10,file=filename,form='formatted')
-           nsink_tot=0
-           do
-#if NDIM==1
-              read(10,*,end=103)xx1,vv1,jj1,mm1,tt1
-              if(ABS(xx1)<s%r%box_size(1)/2.0d0)then
-#endif
-#if NDIM==2
-              read(10,*,end=103)xx1,xx2,vv1,vv2,jj1,jj2,mm1,tt1
-              if(ABS(xx1)<s%r%box_size(1)/2.0d0.AND.ABS(xx2)<s%r%box_size(2)/2.0d0)then
-#endif
-#if NDIM==3
-              read(10,*,end=103)xx1,xx2,xx3,vv1,vv2,vv3,jj1,jj2,jj3,mm1,tt1
-              if(ABS(xx1)<s%r%box_size(1)/2.0d0.AND.ABS(xx2)<s%r%box_size(2)/2.0d0.AND.ABS(xx3)<s%r%box_size(3)/2.0d0)then
-#endif
-                 nsink_tot=nsink_tot+1
-                 s%g%mass_sink_tot=s%g%mass_sink_tot+mm1
-              endif
-           end do
-103        continue
-           s%sink%npart_tot=nsink_tot
-           write(*,*)'Found nsink_tot=',s%sink%npart_tot
-           close(10)
-        else
-           write(*,*)'File '//TRIM(filename)//' not found'
-           s%sink%npart_tot=0
-        endif
-     else
-        s%sink%npart_tot=0
-     endif
-
-     ! If no particle found, no need to read
-     if(s%sink%npart_tot>0)then
-        ! Call recursive slave routine
-        allocate(input_array(1:storage_size(nsink_tot)/32))
-        input_array=transfer(nsink_tot,input_array)
-        call r_input_sink_ascii(pst,input_array,2)
-        deallocate(input_array)
-     endif
-
-  endif
+  ! Load sink particles with the appropriate subroutine
+  call m_input_sink_ascii(pst)
 
   if(s%r%core)then
 
@@ -506,6 +459,78 @@ subroutine input_star_ascii(mdl,r,g,p,npart_tot)
   endif
 
 end subroutine input_star_ascii
+!#########################################################################
+!#########################################################################
+!#########################################################################
+!#########################################################################
+subroutine m_input_sink_ascii(pst)
+  use ramses_commons, only: pst_t
+  use amr_parameters, only: flen
+  implicit none
+  type(pst_t)::pst
+  !--------------------------------------------------------------------
+  ! This routine is the master procedure to read and dispatch sink
+  ! particles from an ascii file.
+  ! --------------------------------------------------------------------
+  real(kind=8)::xx1,xx2,xx3,vv1,vv2,vv3,mm1,tt1,jj1,jj2,jj3
+  integer(kind=8)::nsink_tot
+  character(LEN=flen)::filename
+  integer,allocatable,dimension(:)::input_array
+  logical::file_exist
+
+  associate(s=>pst%s)
+
+  if(s%r%sink)then
+     ! Compute total number of sinks in file
+     if(TRIM(s%r%initfile(s%r%levelmin)).NE.' ')then
+        filename=TRIM(s%r%initfile(s%r%levelmin))//'/ic_sink'
+        inquire(file=filename, exist=file_exist)
+        if(file_exist)then
+           write(*,*)'Opening file '//TRIM(filename)
+           open(10,file=filename,form='formatted')
+           nsink_tot=0
+           do
+#if NDIM==1
+              read(10,*,end=103)xx1,vv1,jj1,mm1,tt1
+              if(ABS(xx1)<s%r%box_size(1)/2.0d0)then
+#endif
+#if NDIM==2
+              read(10,*,end=103)xx1,xx2,vv1,vv2,jj1,jj2,mm1,tt1
+              if(ABS(xx1)<s%r%box_size(1)/2.0d0.AND.ABS(xx2)<s%r%box_size(2)/2.0d0)then
+#endif
+#if NDIM==3
+              read(10,*,end=103)xx1,xx2,xx3,vv1,vv2,vv3,jj1,jj2,jj3,mm1,tt1
+              if(ABS(xx1)<s%r%box_size(1)/2.0d0.AND.ABS(xx2)<s%r%box_size(2)/2.0d0.AND.ABS(xx3)<s%r%box_size(3)/2.0d0)then
+#endif
+                 nsink_tot=nsink_tot+1
+                 s%g%mass_sink_tot=s%g%mass_sink_tot+mm1
+              endif
+           end do
+103        continue
+           s%sink%npart_tot=nsink_tot
+           write(*,*)'Found nsink_tot=',s%sink%npart_tot
+           close(10)
+        else
+           write(*,*)'File '//TRIM(filename)//' not found'
+           s%sink%npart_tot=0
+        endif
+     else
+        s%sink%npart_tot=0
+     endif
+
+     ! If no particle found, no need to read
+     if(s%sink%npart_tot>0)then
+        ! Call recursive slave routine
+        allocate(input_array(1:storage_size(nsink_tot)/32))
+        input_array=transfer(nsink_tot,input_array)
+        call r_input_sink_ascii(pst,input_array,2)
+        deallocate(input_array)
+     endif
+  endif
+
+  end associate
+
+end subroutine m_input_sink_ascii
 !#########################################################################
 !#########################################################################
 !#########################################################################
