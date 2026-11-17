@@ -950,6 +950,15 @@ void mr_compute_slopes(threadgroup const float *s, int i, int j, int k, int slop
     sz.Bx = 0.5f * slope_moncen(bxm, q.Bx, bxp, slope);
     sz.By = 0.5f * slope_moncen(bym, q.By, byp, slope);
     sz.Bz = 0.0f;
+
+    /* Normal velocity slopes limited by the momentum of the neighbors, as normal_bound in gpu_hydro.cuf */
+    float rinv = 1.0f / q.density;
+    sx.velocity_x = momentum_slope(sx.velocity_x, mr_local_get(s, 1, i - 1, j, k), q.velocity_x, mr_local_get(s, 1, i + 1, j, k),
+                                   mr_local_get(s, 0, i - 1, j, k) * rinv, mr_local_get(s, 0, i + 1, j, k) * rinv);
+    sy.velocity_y = momentum_slope(sy.velocity_y, mr_local_get(s, 2, i, j - 1, k), q.velocity_y, mr_local_get(s, 2, i, j + 1, k),
+                                   mr_local_get(s, 0, i, j - 1, k) * rinv, mr_local_get(s, 0, i, j + 1, k) * rinv);
+    sz.velocity_z = momentum_slope(sz.velocity_z, mr_local_get(s, 3, i, j, k - 1), q.velocity_z, mr_local_get(s, 3, i, j, k + 1),
+                                   mr_local_get(s, 0, i, j, k - 1) * rinv, mr_local_get(s, 0, i, j, k + 1) * rinv);
 }
 
 float mr_edge_x(threadgroup const float *s, int i, int j, int k) {

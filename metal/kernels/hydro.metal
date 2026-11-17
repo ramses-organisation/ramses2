@@ -201,6 +201,13 @@ float slope_moncen(float left, float middle, float right, int slope) {
     else           return max(f * max(sl, sr), sc);
 }
 
+/* momentum_slope — mirrors gpu_hydro.cuf
+ * A velocity slope limited by the momentum of the two neighbors in the frame of the cell,
+ * wl and wr being their densities over that of the cell. */
+float momentum_slope(float slope, float left, float middle, float right, float wl, float wr) {
+    return copysign(min(abs(slope), min(wl * abs(middle - left), wr * abs(right - middle))), slope);
+}
+
 /* ===========================================================================
  * compute_tvd_slopes — mirrors gpu_hydro.cuf (no MHD, no scalars)
  * ========================================================================= */
@@ -230,6 +237,15 @@ void compute_tvd_slopes(threadgroup local_subgrid_t &ls, int i, int j, int k, in
     sz.velocity_y = 0.5f * slope_moncen(ls.velocity_y[i][j][k-1], cell.velocity_y, ls.velocity_y[i][j][k+1], slope);
     sz.velocity_z = 0.5f * slope_moncen(ls.velocity_z[i][j][k-1], cell.velocity_z, ls.velocity_z[i][j][k+1], slope);
     sz.pressure   = 0.5f * slope_moncen(ls.pressure  [i][j][k-1], cell.pressure,   ls.pressure  [i][j][k+1], slope);
+
+    /* Normal velocity slopes limited by the momentum of the neighbors, as normal_bound in gpu_hydro.cuf */
+    float rinv = 1.0f / cell.density;
+    sx.velocity_x = momentum_slope(sx.velocity_x, ls.velocity_x[i-1][j][k], cell.velocity_x, ls.velocity_x[i+1][j][k],
+                                   ls.density[i-1][j][k] * rinv, ls.density[i+1][j][k] * rinv);
+    sy.velocity_y = momentum_slope(sy.velocity_y, ls.velocity_y[i][j-1][k], cell.velocity_y, ls.velocity_y[i][j+1][k],
+                                   ls.density[i][j-1][k] * rinv, ls.density[i][j+1][k] * rinv);
+    sz.velocity_z = momentum_slope(sz.velocity_z, ls.velocity_z[i][j][k-1], cell.velocity_z, ls.velocity_z[i][j][k+1],
+                                   ls.density[i][j][k-1] * rinv, ls.density[i][j][k+1] * rinv);
 }
 
 /* ===========================================================================
