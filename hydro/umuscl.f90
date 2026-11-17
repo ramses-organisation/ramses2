@@ -2362,6 +2362,8 @@ subroutine uslope(q,dq, &
   ! the cell, does not exceed that of the neighbor: rho*dq/2 <= rho_nbor*|u_nbor-u|.
   ! Without this bound, a thin dense layer between two supersonic flows (isothermal or
   ! cooling shock) gets faces moving with the flows and never launches its accretion shocks.
+  ! With it, the faces of the layer move at most at rho_nbor*|u_nbor-u|/rho, which is the
+  ! speed of the shock given by mass conservation, so the shock can leave the layer.
   if(slope_type>0)then
      do idim = 1, ndim
         n = idim+1
