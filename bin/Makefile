@@ -123,6 +123,9 @@ endif
 ifneq ($(NVECTOR),32)
    DEFINES += -DNVECTOR=$(NVECTOR)
 endif
+ifeq ($(COMPILER),METAL)
+   override NPRE = 4
+endif
 ifneq ($(NPRE),8)
    DEFINES += -DNPRE=$(NPRE)
 endif
@@ -239,7 +242,7 @@ endif
 ifeq ($(COMPILER),METAL)
    # NPRE=4 is hardcoded: Apple GPU has no float64.
    # No MPI support.
-   DEFINES     += -D_METAL -DNPRE=4 -DWITHOUTMPI
+   DEFINES     += -D_METAL -DWITHOUTMPI
    # Metal kernels support NSUBGRID=1 (hydro) and NSUBGRID=2 (MHD)
    ifeq ($(MHD),1)
       ifneq ($(NSUBGRID),2)
