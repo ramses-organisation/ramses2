@@ -46,6 +46,14 @@ subroutine m_update_time(pst,ilevel,done)
   if(g%first_coarse_restart)g%first_coarse_restart = .false.
 
   !-------------------------------------------------------------
+  ! Initial total mass, at the first call when all levels have
+  ! been summed once in newdt_fine on the initial grid (t=0).
+  !-------------------------------------------------------------
+  if(g%nstep_coarse==0.and.g%mass_tot_0==0.0D0)then
+     g%mass_tot_0=g%mass_tot+g%mass_star_tot+g%mass_sink_tot
+  end if
+
+  !-------------------------------------------------------------
   ! At this point, IF nstep_coarse has JUST changed, all levels
   ! are synchronised, and all new refinements have been done.
   !-------------------------------------------------------------
@@ -61,7 +69,6 @@ subroutine m_update_time(pst,ilevel,done)
      ! Check mass conservation
      !--------------------------
      if(g%mass_tot_0==0.0D0)then
-        g%mass_tot_0=g%mass_tot+g%mass_star_tot+g%mass_sink_tot
         mcons=0.0D0
      else
         mcons=(g%mass_tot+g%mass_star_tot+g%mass_sink_tot-g%mass_tot_0)/g%mass_tot_0
