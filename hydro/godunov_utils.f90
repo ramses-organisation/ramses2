@@ -389,7 +389,7 @@ subroutine riemann_llf(qleft,qright,fgdnv,params)
 #endif
   cr = sqrt(cr/rr)
   ! Local max. wave speed, capped to the largest speed allowed by the time step
-  cmax = min(max(abs(ul)+cl,abs(ur)+cr),params%smax_llf)
+  cmax = min(max(abs(ul)+cl,abs(ur)+cr),params%smax_cap)
 
   !===============================
   ! Compute conservative variables
@@ -538,9 +538,9 @@ subroutine riemann_hll(qleft,qright,fgdnv,params)
   end do
 #endif
   cr = sqrt(cr/rr)
-  ! Left and right max. wave speed
-  SL=min(min(ul,ur)-max(cl,cr),zero)
-  SR=max(max(ul,ur)+max(cl,cr),zero)
+  ! Left and right max. wave speed, capped to the largest speed allowed by the time step
+  SL=max(min(min(ul,ur)-max(cl,cr),zero),-params%smax_cap)
+  SR=min(max(max(ul,ur)+max(cl,cr),zero), params%smax_cap)
 
   !===============================
   ! Compute conservative variables
@@ -931,7 +931,7 @@ SUBROUTINE riemann_llf_mhd(qleft,qright,fgdnv,zero_flux,params)
   udiff  = half * ( uright - uleft )
 
   ! the local Lax-Friedrich flux
-  fgdnv = fmean - MIN(MAX(vleft,vright),params%smax_llf) * udiff
+  fgdnv = fmean - MIN(MAX(vleft,vright),params%smax_cap) * udiff
 
 END SUBROUTINE riemann_llf_mhd
 !###########################################################
@@ -966,8 +966,9 @@ SUBROUTINE riemann_hll_mhd(qleft,qright,fgdnv,params)
   CALL find_speed_fast(qright,cfright,params)
   vleft =qleft (2)
   vright=qright(2)
-  SL=min(min(vleft,vright)-max(cfleft,cfright),zero)
-  SR=max(max(vleft,vright)+max(cfleft,cfright),zero)
+  ! Capped to the largest speed allowed by the time step, as in riemann_llf_mhd
+  SL=max(min(min(vleft,vright)-max(cfleft,cfright),zero),-params%smax_cap)
+  SR=min(max(max(vleft,vright)+max(cfleft,cfright),zero), params%smax_cap)
 
   ! the HLL flux
   fgdnv = (SR*fleft-SL*fright+SR*SL*(uright-uleft))/(SR-SL)

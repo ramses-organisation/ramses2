@@ -687,7 +687,7 @@ module amr_commons
      real(kind=8),dimension(1:nener+1)::gamma_rad
      real(kind=8)::gamma,smallr,smallc
      real(kind=8)::courant_factor
-     real(kind=8)::smax_llf=huge(1.0d0)   ! Cap on the LLF wave speed, set to courant_factor*dx/dt in unsplit
+     real(kind=8)::smax_cap=huge(1.0d0)   ! Cap on the LLF and HLL wave speeds, set to courant_factor*dx/dt in unsplit
      real(kind=8)::difmag
      real(kind=8)::switch_llf_dmin,switch_llf_pmin
 #ifdef MHD
