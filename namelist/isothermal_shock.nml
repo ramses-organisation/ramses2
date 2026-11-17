@@ -1,0 +1,80 @@
+This is the RAMSES parameter file for the 1D isothermal colliding flow test.
+Two uniform flows (rho=1, Mach 10) collide at x=0.5 and form two
+isothermal shocks moving outward, with dense gas at rest in between.
+Units are km and s, so that eos_T2=120.27235 K gives c_s=1 km/s.
+Exact solution: rho2/rho1=X with sqrt(X)=(M+sqrt(M^2+4))/2,
+shock speed 1/sqrt(X).
+For M=10: rho2=101.99, v_shock=0.0990, so x_shock=0.5+-0.396 at t=4.
+Compile the code with:
+make NDIM=1 HYDRO=1
+
+&RUN_PARAMS
+hydro=.true.
+nsubcycle=10*2
+ncontrol=64
+/
+
+&AMR_PARAMS
+levelmin=5
+levelmax=12
+ngridmax=4000
+nexpand=1
+/
+
+&BOUNDARY_PARAMS
+bound_levelmin=5
+box_size=1.0
+box_xmin=1
+box_xmax=-1
+nbound=2
+periodic=.false.
+bound_dir=1,1
+bound_type=3,3
+bound_shift=1,-1
+bound_xmin=0,-1
+bound_xmax=1,0
+d_bound=1.0,1.0
+u_bound=10.0,-10.0
+p_bound=1.0,1.0
+/
+
+&INIT_PARAMS
+nregion=2
+region_type(1)='square'
+region_type(2)='square'
+x_center=0.25,0.75
+length_x=0.5,0.5
+d_region=1.0,1.0
+u_region=10.0,-10.0
+p_region=1.0,1.0
+/
+
+&OUTPUT_PARAMS
+tout=1.0,2.0,3.0,4.0
+/
+
+&UNITS_PARAMS
+units_density=1.0
+units_time=1.0
+units_length=1d5
+/
+
+&COOLING_PARAMS
+isothermal=.true.
+eos_type=1
+eos_T2=120.27235
+/
+
+&HYDRO_PARAMS
+gamma=1.4
+courant_factor=0.8
+slope_type=0
+riemann='hllc'
+/
+
+&REFINE_PARAMS
+err_grad_d=0.05
+err_grad_u=0.05
+interpol_var=0
+interpol_type=2
+/

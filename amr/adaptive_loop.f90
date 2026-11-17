@@ -165,7 +165,7 @@ subroutine adaptive_loop(pst)
 #else
      tt2 = mdl_wtime(mdl)
 #endif
-     if(mod(g%nstep_coarse,r%ncontrol)==0)then
+     if(g%control_due)then
         if(.not. done)print '(A,F0.7)',' Time elapsed since last coarse step: ',tt2-tt1
      endif
 

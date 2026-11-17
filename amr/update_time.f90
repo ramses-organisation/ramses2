@@ -83,7 +83,8 @@ subroutine m_update_time(pst,ilevel,done)
              &(-(g%epot_tot-g%epot_tot_int-g%const)+g%ekin_tot)
      end if
 
-     if(mod(g%nstep_coarse,r%ncontrol)==0.or.g%output_done)then
+     if(g%control_due.or.g%output_done)then
+        g%control_due=.false.
 
         !-------------------------------
         ! Output AMR structure to screen
@@ -165,6 +166,7 @@ subroutine m_update_time(pst,ilevel,done)
   !----------------------------
   if(mod(g%nstep,r%ncontrol)==0)then
      if(itest==0)then
+        g%control_due=.true.
         if(r%part)then
 #if defined(_CUDA) || defined(_METAL)
            write(*,888)g%nstep,g%t,dt,g%aexp,real(100.0D0*dble(m%noct_used_max)/dble(m%ngridmax)),&

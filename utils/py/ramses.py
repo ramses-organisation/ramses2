@@ -945,7 +945,7 @@ def rd_cell(nout,**kwargs):
                 for ivar in range(0,nvar):
                     c.u[ivar, icell:icell+nc] = h[ilev].u[ivar,ind,mask]
                 c.dx[icell:icell+nc] = dx
-                c.level[icell:icell+nc] = ilev
+                c.level[icell:icell+nc] = ilev+1
                 icell = icell + nc
 
     # Filtering cells

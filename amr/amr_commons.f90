@@ -706,6 +706,7 @@ module amr_commons
      integer::ifbkp=1            ! Increment for backup files
 
      logical::output_done=.false.                  ! Output just performed
+     logical::control_due=.false.                  ! ncontrol fine steps done, print summary at next coarse step
      logical::init=.false.                         ! Set up or run
      integer::nstep=0                              ! Time step
      integer::nstep_coarse=0                       ! Coarse step
