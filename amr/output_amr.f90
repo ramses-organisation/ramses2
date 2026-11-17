@@ -330,11 +330,22 @@ subroutine output_compil(filename)
 #else
   write(11,'(" UNITS = ")')
 #endif
-#define INSTA 2
-#define DOUBLEMACH 3
-#define LOOP 4
-#define OT 5
-#define PONO 6
+! INIT names (COEUR is already defined above); values only need to be
+! distinct here, condinit.f90 and vecpotentialinit.f90 have their own.
+#define INSTA 11
+#define DOUBLEMACH 12
+#define LOOP 13
+#define OT 14
+#define PONO 15
+#define ABC 16
+#define CURRENTSHEET 17
+#define RTZEQM 18
+#define PANCAKE 19
+#define ALFVENWAVE 20
+#define COLLAPSE 21
+#define CPAW 22
+#define CR_LOOP 23
+#define BELTRAMI 24
 #if INIT==COEUR
   write(11,'(" INIT = COEUR")')
 #elif INIT==INSTA
@@ -347,6 +358,24 @@ subroutine output_compil(filename)
   write(11,'(" INIT = OT")')
 #elif INIT==PONO
   write(11,'(" INIT = PONO")')
+#elif INIT==ABC
+  write(11,'(" INIT = ABC")')
+#elif INIT==CURRENTSHEET
+  write(11,'(" INIT = CURRENTSHEET")')
+#elif INIT==RTZEQM
+  write(11,'(" INIT = RTZEQM")')
+#elif INIT==PANCAKE
+  write(11,'(" INIT = PANCAKE")')
+#elif INIT==ALFVENWAVE
+  write(11,'(" INIT = ALFVENWAVE")')
+#elif INIT==COLLAPSE
+  write(11,'(" INIT = COLLAPSE")')
+#elif INIT==CPAW
+  write(11,'(" INIT = CPAW")')
+#elif INIT==CR_LOOP
+  write(11,'(" INIT = CR_LOOP")')
+#elif INIT==BELTRAMI
+  write(11,'(" INIT = BELTRAMI")')
 #else
   write(11,'(" INIT = ")')
 #endif

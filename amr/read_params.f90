@@ -39,6 +39,7 @@ subroutine m_read_params(pst)
   real(kind=8)::delta_tout=0,tend=0
   real(kind=8)::delta_aout=0,aend=0
   logical::nml_ok
+  logical::need_uvb,uvb_ok
 
   !--------------------------------------------------
   ! Namelist variables
@@ -1282,6 +1283,26 @@ subroutine m_read_params(pst)
     print*,'Using radiation hydrodynamics, so switching to non-equilibrum cooling'
     cooling=.false.
     neq_chem=.true.
+  endif
+
+  !--------------------------------------------------
+  ! Check that the HM12 UV background tables exist,
+  ! when init_neq_chem will read them (load_UVB_data)
+  !--------------------------------------------------
+#if defined(DO_RTZ)
+  need_uvb=neq_chem
+#elif defined(DO_RT)
+  need_uvb=.false.
+#else
+  need_uvb=neq_chem.and.haardt_madau
+#endif
+  if(need_uvb)then
+     INQUIRE(file='./data/HM12/redshifts.dat',exist=uvb_ok)
+     if(.not.uvb_ok)then
+        write(*,*)'Error: UV background table ./data/HM12/redshifts.dat not found'
+        write(*,*)'Run from a directory with data/HM12, e.g. ln -s <ramses>/utils/data data'
+        nml_ok=.false.
+     endif
   endif
   !----------------------------------------------------------------
   ! Set number of used ionisation fractions, indices of ionization
