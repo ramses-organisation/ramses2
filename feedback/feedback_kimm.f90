@@ -396,9 +396,11 @@ subroutine nb_rebuild(mesh,cap,purge)
         igrid=hash_getp(mesh%grid_dict,key_grid)
         if(igrid>0.and.igrid<=mesh%ngridmax)then
            keep=.true.
+#ifdef HYDRO
            do ivar=1,5
               if(o_old(ivar,i)/=mesh%uold(ind,ivar,igrid))keep=.false.
            end do
+#endif
         else
            keep=any(p_old(:,i)/=0d0)
         endif
@@ -495,6 +497,7 @@ subroutine unpack_flush_kimm_mech(mesh,igrid,msg_size,msg_array,hash_key)
   mesh%grid(igrid)%lev=int(hash_key(0),kind=4)
   mesh%grid(igrid)%ckey(1:ndim)=int(hash_key(1:ndim),kind=4)
   msg=transfer(msg_array,msg)
+#ifdef HYDRO
   do ind=1,twotondim
      if(all(msg%du(ind,1:4)==0d0))cycle
      call cell_key(mesh,igrid,ind,key)
@@ -546,6 +549,7 @@ subroutine unpack_flush_kimm_mech(mesh,igrid,msg_size,msg_array,hash_key)
         nb_s(it)=s_new
      endif
   end do
+#endif
 end subroutine unpack_flush_kimm_mech
 !##############################################################################
 !##############################################################################
