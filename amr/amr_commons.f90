@@ -686,6 +686,8 @@ module amr_commons
      integer::slope_type,slope_mag_type,riemann,riemann2d
      real(kind=8),dimension(1:nener+1)::gamma_rad
      real(kind=8)::gamma,smallr,smallc
+     real(kind=8)::courant_factor
+     real(kind=8)::smax_llf=huge(1.0d0)   ! Cap on the LLF wave speed, set to courant_factor*dx/dt in unsplit
      real(kind=8)::difmag
      real(kind=8)::switch_llf_dmin,switch_llf_pmin
 #ifdef MHD
@@ -928,6 +930,7 @@ contains
     h_params%gamma_rad=r%gamma_rad
     h_params%smallr=r%smallr
     h_params%smallc=r%smallc
+    h_params%courant_factor=r%courant_factor
     h_params%slope_type=r%slope_type
     h_params%slope_mag_type=r%slope_mag_type
     h_params%riemann=r%riemann

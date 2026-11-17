@@ -94,6 +94,10 @@ subroutine unsplit(uin,gravin,qin,cin,flux,tmp,dq,qm,qp,fx,tx,divu,&
   jlo=MIN(1,ju1+2); jhi=MAX(1,ju2-2)
   klo=MIN(1,ku1+2); khi=MAX(1,ku2-2)
 
+  ! Cap the LLF wave speed to the largest signal speed allowed by the time step,
+  ! so that spurious face states cannot make LLF violate the CFL condition
+  params%smax_llf=params%courant_factor*dx/dt
+
   ! Translate to primative variables, compute sound speeds
   call ctoprim(uin,qin,cin,gravin, &
 #ifdef MHD

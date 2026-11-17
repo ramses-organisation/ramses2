@@ -388,8 +388,8 @@ subroutine riemann_llf(qleft,qright,fgdnv,params)
   end do
 #endif
   cr = sqrt(cr/rr)
-  ! Local max. wave speed
-  cmax = max(abs(ul)+cl,abs(ur)+cr)
+  ! Local max. wave speed, capped to the largest speed allowed by the time step
+  cmax = min(max(abs(ul)+cl,abs(ur)+cr),params%smax_llf)
 
   !===============================
   ! Compute conservative variables
@@ -931,7 +931,7 @@ SUBROUTINE riemann_llf_mhd(qleft,qright,fgdnv,zero_flux,params)
   udiff  = half * ( uright - uleft )
 
   ! the local Lax-Friedrich flux
-  fgdnv = fmean - MAX(vleft,vright) * udiff
+  fgdnv = fmean - MIN(MAX(vleft,vright),params%smax_llf) * udiff
 
 END SUBROUTINE riemann_llf_mhd
 !###########################################################
