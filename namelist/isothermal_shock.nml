@@ -68,7 +68,7 @@ eos_T2=120.27235
 &HYDRO_PARAMS
 gamma=1.4
 courant_factor=0.8
-slope_type=0
+slope_type=2
 riemann='hllc'
 /
 
