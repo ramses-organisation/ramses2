@@ -169,6 +169,7 @@ module amr_commons
      integer ::niter_riemann=10
      integer ::slope_type=1
      integer ::slope_mag_type=1
+     logical ::slope_couple_up=.false.              ! Common limiter for normal velocity and pressure slopes
      real(kind=8)::difmag=0.0d0                     ! Explicit diffusion of conservative variables
      real(kind=8)::etamag=0.0d0                     ! Ohmic magnetic diffusivity
      real(kind=8)::eta_ad=0.0d0                     ! Ambipolar diffusion coefficient
@@ -684,6 +685,7 @@ module amr_commons
 
   type hydro_params_t
      integer::slope_type,slope_mag_type,riemann,riemann2d
+     logical::slope_couple_up
      real(kind=8),dimension(1:nener+1)::gamma_rad
      real(kind=8)::gamma,smallr,smallc
      real(kind=8)::difmag
@@ -930,6 +932,7 @@ contains
     h_params%smallc=r%smallc
     h_params%slope_type=r%slope_type
     h_params%slope_mag_type=r%slope_mag_type
+    h_params%slope_couple_up=r%slope_couple_up
     h_params%riemann=r%riemann
     h_params%riemann2d=r%riemann2d
     h_params%difmag=r%difmag
