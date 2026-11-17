@@ -2353,71 +2353,7 @@ subroutine uslope(q,dq, &
 #endif
 #endif
 
-  ! Common limiter for the normal velocity and pressure slopes
-  if(params%slope_couple_up.and.(slope_type==1.or.slope_type==2))then
-     call couple_up_slopes(q,dq,iu1,iu2,ju1,ju2,ku1,ku2,ilo,ihi,jlo,jhi,klo,khi,params%gamma)
-  end if
-
 end subroutine uslope
-!###########################################################
-!###########################################################
-!###########################################################
-!###########################################################
-subroutine couple_up_slopes(q,dq,iu1,iu2,ju1,ju2,ku1,ku2,ilo,ihi,jlo,jhi,klo,khi,gamma)
-  use amr_parameters, only: ndim
-  use hydro_parameters, only: nprim
-  use const
-  implicit none
-  ! In each direction, limit the slopes of the normal velocity and of the
-  ! pressure with the same limiter, phi = min(phi_u, phi_p), where phi_q is the
-  ! ratio of the limited slope to the centered slope of q. A pressure extremum
-  ! then also flattens the velocity slope, so that a thin stagnation layer
-  ! (isothermal or radiative shock) gets no spurious inflow velocity at its faces.
-  ! A nearly uniform variable (both one-sided jumps below 1d-3 c or 1d-3 p)
-  ! does not constrain the other one. A significant extremum gives phi_q=0,
-  ! even if it is symmetric (zero centered slope).
-  integer::iu1,iu2,ju1,ju2,ku1,ku2,ilo,ihi,jlo,jhi,klo,khi
-  real(kind=8)::gamma
-  real(kind=8),dimension(iu1:iu2,ju1:ju2,ku1:ku2,1:nprim)::q
-  real(kind=8),dimension(iu1:iu2,ju1:ju2,ku1:ku2,1:nprim,1:ndim)::dq
-  ! local variables
-  integer::i,j,k,idim,iun,di,dj,dk
-  integer,parameter::ip=5
-  real(kind=8)::cs,dcu,dcp,phiu,phip,phi,varu,varp
-
-  do idim = 1, ndim
-     di=0; dj=0; dk=0
-     if(idim==1)di=1
-     if(idim==2)dj=1
-     if(idim==3)dk=1
-     iun = 1+idim
-     do k = klo, khi
-        do j = jlo, jhi
-           do i = ilo, ihi
-              cs = sqrt(gamma*q(i,j,k,ip)/q(i,j,k,1))
-              dcu = half*(q(i+di,j+dj,k+dk,iun)-q(i-di,j-dj,k-dk,iun))
-              dcp = half*(q(i+di,j+dj,k+dk,ip )-q(i-di,j-dj,k-dk,ip ))
-              varu = max(abs(q(i+di,j+dj,k+dk,iun)-q(i,j,k,iun)),abs(q(i,j,k,iun)-q(i-di,j-dj,k-dk,iun)))
-              varp = max(abs(q(i+di,j+dj,k+dk,ip )-q(i,j,k,ip )),abs(q(i,j,k,ip )-q(i-di,j-dj,k-dk,ip )))
-              phiu = one
-              if(varu>1d-3*cs)then
-                 phiu = zero
-                 if(dcu/=zero)phiu = dq(i,j,k,iun,idim)/dcu
-              endif
-              phip = one
-              if(varp>1d-3*q(i,j,k,ip))then
-                 phip = zero
-                 if(dcp/=zero)phip = dq(i,j,k,ip,idim)/dcp
-              endif
-              phi = max(min(phiu,phip),zero)
-              dq(i,j,k,iun,idim) = sign(one,dq(i,j,k,iun,idim))*min(abs(dq(i,j,k,iun,idim)),phi*abs(dcu))
-              dq(i,j,k,ip ,idim) = sign(one,dq(i,j,k,ip ,idim))*min(abs(dq(i,j,k,ip ,idim)),phi*abs(dcp))
-           end do
-        end do
-     end do
-  end do
-
-end subroutine couple_up_slopes
 !###########################################################
 !###########################################################
 !###########################################################

@@ -315,7 +315,6 @@ subroutine m_read_params(pst)
   integer ::niter_riemann=10
   integer ::slope_type=1
   integer ::slope_mag_type=-1
-  logical ::slope_couple_up=.false.
   real(kind=8)::gamma=1.4d0
   real(kind=8),dimension(1:512)::gamma_rad=1.33333333334d0
   real(kind=8)::courant_factor=0.5d0
@@ -675,7 +674,7 @@ subroutine m_read_params(pst)
        & ,d_region,u_region,v_region,w_region,p_region
   ! Hydro solver parameters
   namelist/hydro_params/gamma,courant_factor,smallr,smallc &
-       & ,slope_type,slope_mag_type,slope_couple_up,difmag,etamag,eta_ohm,eta_ad,nimhd_solver,nimhd_split,nimhd_courant,nimhd_alpha,gamma_rad &
+       & ,slope_type,slope_mag_type,difmag,etamag,eta_ohm,eta_ad,nimhd_solver,nimhd_split,nimhd_courant,nimhd_alpha,gamma_rad &
        & ,dual_energy,T2_fix,induction,entropy,sgs_turb,equilibrium_sgs,riemann,riemann2d,constant_gravity &
        & ,niter_riemann,scheme,switch_llf_dmin,switch_llf_pmin,smagorinsky_lilly_constant
   ! Grid refinement parameters
@@ -1455,18 +1454,6 @@ subroutine m_read_params(pst)
      endif
   endif
 
-  ! The common velocity-pressure limiter works on top of minmod or moncen only
-  if(slope_couple_up.and.slope_type/=1.and.slope_type/=2)then
-     write(*,*)'Error: slope_couple_up=.true. needs slope_type=1 or 2'
-     nml_ok=.false.
-  endif
-#if defined(_CUDA) || defined(_METAL)
-  if(slope_couple_up)then
-     write(*,*)'Error: slope_couple_up is not supported on GPU'
-     nml_ok=.false.
-  endif
-#endif
-
   ! The two mechanical feedback routines are exclusive
   if(mechanical_feedback.and.mechanical_feedback_kimm)then
      write(*,*)'Error: mechanical_feedback and mechanical_feedback_kimm cannot both be .true.'
@@ -1799,7 +1786,6 @@ subroutine m_read_params(pst)
   else
      s%r%slope_mag_type=slope_mag_type
   endif
-  s%r%slope_couple_up=slope_couple_up
   s%r%difmag=difmag
   s%r%etamag=etamag
   s%r%eta_ad=eta_ad
