@@ -41,6 +41,7 @@ p_region=1.0,0.1
 
 &OUTPUT_PARAMS
 tout=0.245
+nlanding=3
 /
 
 &HYDRO_PARAMS
