@@ -465,6 +465,44 @@ contains
   ! ==========================================================================
 
   ! ==========================================================================
+  !> A velocity slope limited by the momentum of the two neighbors in the frame of the cell:
+  !> |slope| <= w*|difference| on each side, w being the density of the neighbor over that of
+  !> the cell (twice that for a full slope dq).
+  attributes(device) function momentum_slope(slope, left, middle, right, wl, wr)
+    real(kind=dp), value :: slope, left, middle, right, wl, wr
+    real(kind=dp) :: momentum_slope
+
+    momentum_slope = sign(min(abs(slope), wl*abs(middle - left), wr*abs(right - middle)), slope)
+  end function momentum_slope
+
+  !> The slope of a normal velocity: slope_moncen, limited by the momentum of the two neighbors.
+  attributes(device) function slope_velocity(left, middle, right, wl, wr, slope)
+    real(kind=dp), value :: left, middle, right, wl, wr
+    integer, value :: slope
+    real(kind=dp) :: slope_velocity
+
+    slope_velocity = momentum_slope(slope_moncen(left, middle, right, slope), left, middle, right, 2.0_dp*wl, 2.0_dp*wr)
+  end function slope_velocity
+
+  !> Limit the slopes (half*dq) of the normal velocity in x, y and z by the momentum of the
+  !> neighbors, as uslope on the CPU.
+  attributes(device) subroutine normal_bound(local_subgrid, i, j, k, sx, sy, sz)
+    type(subgrid_6x6x6cell_primitive), intent(in) :: local_subgrid
+    integer, value :: i, j, k
+    real(kind=dp), intent(inout) :: sx, sy, sz
+    real(kind=dp) :: rinv
+
+    rinv = 1.0_dp/local_subgrid%density(i,j,k)
+    sx = momentum_slope(sx, local_subgrid%velocity_x(i-1,j,k), local_subgrid%velocity_x(i,j,k), local_subgrid%velocity_x(i+1,j,k), &
+         & local_subgrid%density(i-1,j,k)*rinv, local_subgrid%density(i+1,j,k)*rinv)
+    sy = momentum_slope(sy, local_subgrid%velocity_y(i,j-1,k), local_subgrid%velocity_y(i,j,k), local_subgrid%velocity_y(i,j+1,k), &
+         & local_subgrid%density(i,j-1,k)*rinv, local_subgrid%density(i,j+1,k)*rinv)
+    sz = momentum_slope(sz, local_subgrid%velocity_z(i,j,k-1), local_subgrid%velocity_z(i,j,k), local_subgrid%velocity_z(i,j,k+1), &
+         & local_subgrid%density(i,j,k-1)*rinv, local_subgrid%density(i,j,k+1)*rinv)
+  end subroutine normal_bound
+  ! ==========================================================================
+
+  ! ==========================================================================
   !> Unsplit 3D slopes (half*dq) for slope_type=3, as uslope on the CPU.
   ! Written by Daniel Han (mini-ramses version October 2026).
   attributes(device) subroutine slope_unsplit3d(f, i, j, k, sx, sy, sz)
@@ -617,6 +655,7 @@ contains
     integer, value :: i, j, k, slope
     type(primitive_t), intent(out) :: slopes_x, slopes_y, slopes_z
     type(primitive_t) :: cell
+    real(kind=dp) :: rinv
 #if NVAR>5+NENER
     real(kind=dp), intent(in) :: scalar_sub(0:2*nsubgrid+3, 0:2*nsubgrid+3, 0:2*nsubgrid+3, 1:nscalar)
     real(kind=dp), intent(out) :: dscal_x(1:nscalar), dscal_y(1:nscalar), dscal_z(1:nscalar)
@@ -663,23 +702,28 @@ contains
        call slope_unsplit3d(local_subgrid%velocity_y, i, j, k, slopes_x%velocity_y, slopes_y%velocity_y, slopes_z%velocity_y)
        call slope_unsplit3d(local_subgrid%velocity_z, i, j, k, slopes_x%velocity_z, slopes_y%velocity_z, slopes_z%velocity_z)
        call slope_unsplit3d(local_subgrid%pressure,   i, j, k, slopes_x%pressure,   slopes_y%pressure,   slopes_z%pressure)
+       call normal_bound(local_subgrid, i, j, k, slopes_x%velocity_x, slopes_y%velocity_y, slopes_z%velocity_z)
     else
+       rinv = 1.0_dp/cell%density
        slopes_x%density    = 0.5_dp * slope_moncen(local_subgrid%density   (i - 1, j, k), cell%density,    local_subgrid%density   (i + 1, j, k), slope)
-       slopes_x%velocity_x = 0.5_dp * slope_moncen(local_subgrid%velocity_x(i - 1, j, k), cell%velocity_x, local_subgrid%velocity_x(i + 1, j, k), slope)
+       slopes_x%velocity_x = 0.5_dp * slope_velocity(local_subgrid%velocity_x(i - 1, j, k), cell%velocity_x, local_subgrid%velocity_x(i + 1, j, k), &
+            & local_subgrid%density(i - 1, j, k)*rinv, local_subgrid%density(i + 1, j, k)*rinv, slope)
        slopes_x%velocity_y = 0.5_dp * slope_moncen(local_subgrid%velocity_y(i - 1, j, k), cell%velocity_y, local_subgrid%velocity_y(i + 1, j, k), slope)
        slopes_x%velocity_z = 0.5_dp * slope_moncen(local_subgrid%velocity_z(i - 1, j, k), cell%velocity_z, local_subgrid%velocity_z(i + 1, j, k), slope)
        slopes_x%pressure   = 0.5_dp * slope_moncen(local_subgrid%pressure  (i - 1, j, k), cell%pressure,   local_subgrid%pressure  (i + 1, j, k), slope)
 
        slopes_y%density    = 0.5_dp * slope_moncen(local_subgrid%density   (i, j - 1, k), cell%density,    local_subgrid%density(   i, j + 1, k), slope)
        slopes_y%velocity_x = 0.5_dp * slope_moncen(local_subgrid%velocity_x(i, j - 1, k), cell%velocity_x, local_subgrid%velocity_x(i, j + 1, k), slope)
-       slopes_y%velocity_y = 0.5_dp * slope_moncen(local_subgrid%velocity_y(i, j - 1, k), cell%velocity_y, local_subgrid%velocity_y(i, j + 1, k), slope)
+       slopes_y%velocity_y = 0.5_dp * slope_velocity(local_subgrid%velocity_y(i, j - 1, k), cell%velocity_y, local_subgrid%velocity_y(i, j + 1, k), &
+            & local_subgrid%density(i, j - 1, k)*rinv, local_subgrid%density(i, j + 1, k)*rinv, slope)
        slopes_y%velocity_z = 0.5_dp * slope_moncen(local_subgrid%velocity_z(i, j - 1, k), cell%velocity_z, local_subgrid%velocity_z(i, j + 1, k), slope)
        slopes_y%pressure   = 0.5_dp * slope_moncen(local_subgrid%pressure  (i, j - 1, k), cell%pressure,   local_subgrid%pressure(  i, j + 1, k), slope)
 
        slopes_z%density    = 0.5_dp * slope_moncen(local_subgrid%density   (i, j, k - 1), cell%density,    local_subgrid%density   (i, j, k + 1), slope)
        slopes_z%velocity_x = 0.5_dp * slope_moncen(local_subgrid%velocity_x(i, j, k - 1), cell%velocity_x, local_subgrid%velocity_x(i, j, k + 1), slope)
        slopes_z%velocity_y = 0.5_dp * slope_moncen(local_subgrid%velocity_y(i, j, k - 1), cell%velocity_y, local_subgrid%velocity_y(i, j, k + 1), slope)
-       slopes_z%velocity_z = 0.5_dp * slope_moncen(local_subgrid%velocity_z(i, j, k - 1), cell%velocity_z, local_subgrid%velocity_z(i, j, k + 1), slope)
+       slopes_z%velocity_z = 0.5_dp * slope_velocity(local_subgrid%velocity_z(i, j, k - 1), cell%velocity_z, local_subgrid%velocity_z(i, j, k + 1), &
+            & local_subgrid%density(i, j, k - 1)*rinv, local_subgrid%density(i, j, k + 1)*rinv, slope)
        slopes_z%pressure   = 0.5_dp * slope_moncen(local_subgrid%pressure  (i, j, k - 1), cell%pressure,   local_subgrid%pressure  (i, j, k + 1), slope)
     end if
 #ifdef MHD
@@ -2136,6 +2180,8 @@ contains
                & slopes_x2%velocity_z, slopes_y2%velocity_z, slopes_z2%velocity_z)
           call slope_unsplit3d_pair(local_subgrid%pressure,   i, j, k, slopes_x%pressure,   slopes_y%pressure,   slopes_z%pressure, &
                & slopes_x2%pressure,   slopes_y2%pressure,   slopes_z2%pressure)
+          call normal_bound(local_subgrid, i, j, k,   slopes_x%velocity_x,  slopes_y%velocity_y,  slopes_z%velocity_z)
+          call normal_bound(local_subgrid, i, j, k+1, slopes_x2%velocity_x, slopes_y2%velocity_y, slopes_z2%velocity_z)
           call trace_hydro_cell(local_subgrid, i, j, k, slopes_x, slopes_y, slopes_z, &
                & left_interfaces_x, right_interfaces_x, left_interfaces_y, right_interfaces_y, &
                & left_interfaces_z, right_interfaces_z, gamma, smallr, smallp, dtdx)
@@ -7520,7 +7566,7 @@ contains
 
     ! Thread-private variables
     integer(kind=4) :: ix, iy, iz, ivar, im, ic, ip
-    real(dp), value :: Uin(nvar), dU(nvar), invD, Ekin, div_v, hdx, dtdx, idx
+    real(dp), value :: Uin(nvar), dU(nvar), invD, Ekin, div_v, hdx, dtdx, idx, wgt
     type(primitive_t) :: left_state, right_state
     type(conserved_t) :: flux_result
 
@@ -7581,6 +7627,14 @@ contains
              ! Z direction
              qds(ix,iy,ivar,3) = slope_moncen(q_storage(ix,iy,ivar,im), q_storage(ix,iy,ivar,ic), q_storage(ix,iy,ivar,ip), slope) * idx
           end do
+          ! Gradients of the normal velocity limited by the momentum of the neighbors, as normal_bound
+          wgt = 2.0_dp*idx/q_storage(ix,iy,i_rho,ic)
+          qds(ix,iy,i_px,1) = momentum_slope(qds(ix,iy,i_px,1), q_storage(ix-1,iy,i_px,ic), q_storage(ix,iy,i_px,ic), q_storage(ix+1,iy,i_px,ic), &
+               & wgt*q_storage(ix-1,iy,i_rho,ic), wgt*q_storage(ix+1,iy,i_rho,ic))
+          qds(ix,iy,i_py,2) = momentum_slope(qds(ix,iy,i_py,2), q_storage(ix,iy-1,i_py,ic), q_storage(ix,iy,i_py,ic), q_storage(ix,iy+1,i_py,ic), &
+               & wgt*q_storage(ix,iy-1,i_rho,ic), wgt*q_storage(ix,iy+1,i_rho,ic))
+          qds(ix,iy,i_pz,3) = momentum_slope(qds(ix,iy,i_pz,3), q_storage(ix,iy,i_pz,im), q_storage(ix,iy,i_pz,ic), q_storage(ix,iy,i_pz,ip), &
+               & wgt*q_storage(ix,iy,i_rho,im), wgt*q_storage(ix,iy,i_rho,ip))
         ! FIXME, other slopes ideally inlined, and at the very least cleaned up to lessen register pressure and branches
         ! FIXME see how this is done in the code above
         !call compute_slopes(q_storage, qds, ix, iy, ic, im, ip, idx, slope, mf, nvar)

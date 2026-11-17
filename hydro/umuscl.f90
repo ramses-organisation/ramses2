@@ -1926,6 +1926,7 @@ subroutine uslope(q,dq, &
   ! local arrays
   integer::slope_type, slope_mag_type
   integer::i, j, k, n
+  integer::idim, di, dj, dk
   integer::ilo, ihi, jlo, jhi, klo, khi
   real(kind=8)::dsgn, dlim, dcen, dlft, drgt, slop
   real(kind=8)::vmin,vmax
@@ -2356,6 +2357,32 @@ subroutine uslope(q,dq, &
   endif
 #endif
 #endif
+
+  ! Limit the slope of the normal velocity so that the momentum at a face, in the frame of
+  ! the cell, does not exceed that of the neighbor: rho*dq/2 <= rho_nbor*|u_nbor-u|.
+  ! Without this bound, a thin dense layer between two supersonic flows (isothermal or
+  ! cooling shock) gets faces moving with the flows and never launches its accretion shocks.
+  ! With it, the faces of the layer move at most at rho_nbor*|u_nbor-u|/rho, which is the
+  ! speed of the shock given by mass conservation, so the shock can leave the layer.
+  if(slope_type>0)then
+     do idim = 1, ndim
+        n = idim+1
+        di=0; dj=0; dk=0
+        if(idim==1)di=1
+        if(idim==2)dj=1
+        if(idim==3)dk=1
+        do k = klo, khi
+           do j = jlo, jhi
+              do i = ilo, ihi
+                 dlft = q(i-di,j-dj,k-dk,1)*abs(q(i,j,k,n)-q(i-di,j-dj,k-dk,n))
+                 drgt = q(i+di,j+dj,k+dk,1)*abs(q(i+di,j+dj,k+dk,n)-q(i,j,k,n))
+                 dlim = two*min(dlft,drgt)/q(i,j,k,1)
+                 dq(i,j,k,n,idim) = sign(min(abs(dq(i,j,k,n,idim)),dlim),dq(i,j,k,n,idim))
+              end do
+           end do
+        end do
+     end do
+  end if
 
 end subroutine uslope
 !###########################################################
