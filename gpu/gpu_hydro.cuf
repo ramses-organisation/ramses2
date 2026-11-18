@@ -257,7 +257,12 @@ module hydro_device
 #elif NPRE == 4 && NSUBGRID == 2
 #define UCT_FACE_LB launch_bounds(UCT_THREADS,7)
 #define UCT_GHOST_LB launch_bounds(UCT_GHOST_THREADS,3)
+#if defined(B200_GODUNOV) && defined(GPU_FASTMATH)
+#define UCT_UPDATE_THREADS 96
+#define UCT_UPDATE_LB launch_bounds(UCT_UPDATE_THREADS,12)
+#else
 #define UCT_UPDATE_LB launch_bounds(UCT_THREADS,9)
+#endif
 #define UCT_AMR_UPDATE_LB launch_bounds(UCT_THREADS,7)
 #elif NPRE == 4
 #define UCT_FACE_LB launch_bounds(UCT_THREADS,14)
@@ -276,6 +281,11 @@ module hydro_device
 #define UCT_AMR_UPDATE_LB launch_bounds(UCT_THREADS,12)
 #endif
   integer, parameter :: uct_threads = UCT_THREADS, uct_ghost_threads = UCT_GHOST_THREADS
+#ifdef UCT_UPDATE_THREADS
+  integer, parameter :: uct_update_threads = UCT_UPDATE_THREADS
+#else
+  integer, parameter :: uct_update_threads = uct_threads
+#endif
 
   type, public :: uct_face_smem_t
      type(subgrid_6x6x6cell_primitive)  :: local_subgrid
@@ -7934,7 +7944,15 @@ contains
   ! so kernels without launch_bounds are defined before every kernel that has them.
   ! Double precision is register-limited: cap the registers (threads per block set in gpu_runner.cuf).
   ! MHD bounds were measured on Orszag-Tang at 512^3 on B200 and H200 and at 256^3 on A100.
-#if defined(MHD) && (defined(B200_GODUNOV) || (defined(GPU_SM) && GPU_SM == 90))
+#if defined(B200_GODUNOV) && defined(GPU_FASTMATH) && NPRE == 4 && NSUBGRID != 2
+#if defined(MHD)
+#define HYDRO_LB launch_bounds(64,14)
+#elif NSUBGRID == 4
+#define HYDRO_LB launch_bounds(608,2)
+#else
+#define HYDRO_LB launch_bounds(32,32)
+#endif
+#elif defined(MHD) && (defined(B200_GODUNOV) || (defined(GPU_SM) && GPU_SM == 90))
 #if NPRE == 4 && NSUBGRID == 2
 #define HYDRO_LB launch_bounds(256,3)
 #elif NPRE == 4

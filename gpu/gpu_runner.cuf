@@ -879,7 +879,7 @@ contains
 #ifndef PAPER
     use hydro_device, only: uct_face_kernel, uct_update_kernel, uct_update_amr_kernel, &
          & uct_ghost_list_kernel, uct_ghost_face_kernel, uct_ghost_bn_kernel, uct_threads, uct_ghost_threads, &
-         & uct_ghost_smem_t, uct_face_smem_t, uct_update_smem_t, uct_product_fields
+         & uct_update_threads, uct_ghost_smem_t, uct_face_smem_t, uct_update_smem_t, uct_product_fields
     use hydro_device, only: uct_riemann_d
     use hydro_parameters, only: solver_uct_hlld, solver_uct_llf, solver_uct_hll
 #endif
@@ -989,7 +989,11 @@ contains
 #else
     if(nsubgrid == 2)threads_per_block = 128
 #endif
+#if defined(B200_GODUNOV) && defined(GPU_FASTMATH) && NSUBGRID == 4
+    threads_per_block = 608
+#else
     if(nsubgrid == 4)threads_per_block = 512
+#endif
 #else
     if(nsubgrid == 4)threads_per_block = 640
 #endif
@@ -1088,7 +1092,7 @@ contains
       if(sim%r%levelmin == sim%r%nlevelmax)then
          istat = cudaFuncSetAttribute(uct_update_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, shmem_bytes)
          call check_smem(istat, shmem_bytes)
-         call uct_update_kernel<<<num_blocks, uct_threads, shmem_bytes>>>(unew, bnew, nbor, uct_products, &
+         call uct_update_kernel<<<num_blocks, uct_update_threads, shmem_bytes>>>(unew, bnew, nbor, uct_products, &
               & head_idx, num_subgrids, dt, dx, slope_mag, etamag)
       else
          istat = cudaFuncSetAttribute(uct_update_amr_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, shmem_bytes)
