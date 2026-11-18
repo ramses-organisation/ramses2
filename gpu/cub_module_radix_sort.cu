@@ -1,4 +1,5 @@
 #include "cub_module_radix_sort.h"
+#include <iostream>
 #include <cub/cub.cuh>
 #include <cstdint>
 
