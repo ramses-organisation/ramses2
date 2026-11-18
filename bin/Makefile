@@ -4,7 +4,6 @@
 # Compilation time parameters
 COMPILER = GNU
 CUDA_ARCH = sm_80
-FASTMATH = 0
 NSUBGRID = 1
 NDIM = 3
 MPI = 0
@@ -40,6 +39,7 @@ NVECTOR = 32
 NPRE = 8
 PATCH =
 CUDA_PROFILE = 0
+FASTMATH = 0
 PAPER = 0
 CUB_SORT_PART = 1
 CUB_SORT_REFINE = 1
