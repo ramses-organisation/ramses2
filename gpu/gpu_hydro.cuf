@@ -6,6 +6,10 @@ module hydro_device
   use turb_commons, only: TURB_GS, turb_gs_real
   use cudafor
   implicit none
+#if defined(GPU_SM) && GPU_SM == 100 && NDIM == 3 && NVAR == 5 && !defined(PAPER) \
+    && (NSUBGRID <= 2 || (!defined(MHD) && NSUBGRID == 4))
+#define B200_GODUNOV
+#endif
   private :: mix64, fnv64, fnv32, hash_set, hash_get, get_cell_by_key, hash_update, hash_free
 
   !> @brief
@@ -209,12 +213,13 @@ module hydro_device
   integer, parameter :: uct_product_vt1 = uct_product_record+4, uct_product_bn = uct_product_record+6
 
   ! UCT launch configuration: threads per block, and the resident blocks per SM in the launch bounds
-  ! of each kernel. Measured on Orszag-Tang at 512^3 on an H200 and on an A100 (256^3 in double
-  ! precision); the A100 (sm_80, GPU_SM from CUDA_ARCH) has its own values, other GPUs use the H200
-  ! ones. NVHPC applies the bounds of a kernel to the kernels that follow it, so every UCT kernel
-  ! gives its own, except the double precision NSUBGRID=2 face kernel, which is fastest without: it
-  ! inherits the bounds of hydro_integrator_kernel, none or launch_bounds(256,1), which admit its threads.
-#if defined(GPU_SM) && GPU_SM == 80 && NSUBGRID == 2
+  ! of each kernel. Measured on 512^3 Orszag-Tang on B200 and H200, and on A100 (256^3 in double
+  ! precision). NVHPC propagates bounds to subsequent kernels. The double precision NSUBGRID=2
+  ! face kernel inherits the fused integrator's bound, which must admit its launch size.
+#if defined(B200_GODUNOV) && NSUBGRID != 2
+#define UCT_THREADS 32
+#define UCT_GHOST_THREADS 32
+#elif defined(GPU_SM) && GPU_SM == 80 && NSUBGRID == 2
 #define UCT_THREADS 192
 #define UCT_GHOST_THREADS 256
 #elif NSUBGRID == 2
@@ -224,7 +229,17 @@ module hydro_device
 #define UCT_THREADS 64
 #define UCT_GHOST_THREADS 64
 #endif
-#if defined(GPU_SM) && GPU_SM == 80 && NPRE == 4 && NSUBGRID == 2
+#if defined(B200_GODUNOV) && NPRE == 4 && NSUBGRID != 2
+#define UCT_FACE_LB launch_bounds(UCT_THREADS,20)
+#define UCT_GHOST_LB launch_bounds(UCT_GHOST_THREADS,6)
+#define UCT_UPDATE_LB launch_bounds(UCT_THREADS,20)
+#define UCT_AMR_UPDATE_LB launch_bounds(UCT_THREADS,6)
+#elif defined(B200_GODUNOV) && NSUBGRID != 2
+#define UCT_FACE_LB launch_bounds(UCT_THREADS,12)
+#define UCT_GHOST_LB launch_bounds(UCT_GHOST_THREADS,6)
+#define UCT_UPDATE_LB launch_bounds(UCT_THREADS,20)
+#define UCT_AMR_UPDATE_LB launch_bounds(UCT_THREADS,16)
+#elif defined(GPU_SM) && GPU_SM == 80 && NPRE == 4 && NSUBGRID == 2
 #define UCT_FACE_LB launch_bounds(UCT_THREADS,4)
 #define UCT_GHOST_LB launch_bounds(UCT_GHOST_THREADS,3)
 #define UCT_UPDATE_LB launch_bounds(UCT_THREADS,8)
@@ -7918,21 +7933,27 @@ contains
   ! NVHPC applies a kernel's launch_bounds to every kernel that follows it in the module,
   ! so kernels without launch_bounds are defined before every kernel that has them.
   ! Double precision is register-limited: cap the registers (threads per block set in gpu_runner.cuf).
-  ! MHD (64 threads at nsubgrid=1, 256 at nsubgrid=2): measured on Orszag-Tang, 512^3 on an H200
-  ! and 256^3 on an A100. The best caps differ between sm_90 and sm_80 (GPU_SM, from CUDA_ARCH);
-  ! other GPUs use no cap.
-#if defined(MHD) && defined(GPU_SM) && GPU_SM == 90 && NPRE == 4 && NSUBGRID == 2
+  ! MHD bounds were measured on Orszag-Tang at 512^3 on B200 and H200 and at 256^3 on A100.
+#if defined(MHD) && (defined(B200_GODUNOV) || (defined(GPU_SM) && GPU_SM == 90))
+#if NPRE == 4 && NSUBGRID == 2
 #define HYDRO_LB launch_bounds(256,3)
-#elif defined(MHD) && defined(GPU_SM) && GPU_SM == 90 && NPRE == 4
+#elif NPRE == 4
 #define HYDRO_LB launch_bounds(64,12)
-#elif defined(MHD) && defined(GPU_SM) && GPU_SM == 90 && NSUBGRID != 2
+#elif NSUBGRID != 2
 #define HYDRO_LB launch_bounds(64,5)
+#elif GPU_SM == 100
+#define HYDRO_LB launch_bounds(320,1)
+#else
+#define HYDRO_LB
+#endif
 #elif defined(MHD) && defined(GPU_SM) && GPU_SM == 80 && NPRE != 4 && NSUBGRID == 2
 #define HYDRO_LB launch_bounds(256,1)
 #elif defined(MHD) && defined(GPU_SM) && GPU_SM == 80 && NPRE != 4
 #define HYDRO_LB launch_bounds(64,6)
 #elif defined(MHD) || (defined(NPRE) && NPRE == 4)
 #define HYDRO_LB
+#elif defined(B200_GODUNOV) && NSUBGRID <= 1
+#define HYDRO_LB launch_bounds(32,24)
 #elif !defined(NSUBGRID) || NSUBGRID == 1
 #define HYDRO_LB launch_bounds(64,16)
 #elif NSUBGRID == 2
@@ -8158,8 +8179,14 @@ contains
          & switch_llf_dmin, switch_llf_pmin, induction, etamag, constant_gravity, smem, .false.)
   end subroutine hydro_integrator_kernel
 
-  ! slope_type=3. In single precision, 64 registers keep two blocks of 512 threads per SM at NSUBGRID=4.
-#if defined(NPRE) && NPRE == 4 && NSUBGRID == 2
+  ! The slope_type=3 pair kernel has its own measured launch configuration.
+#if defined(B200_GODUNOV) && NSUBGRID == 2 && NPRE == 4
+#define HYDRO_PAIR_LB launch_bounds(96,8)
+#elif defined(B200_GODUNOV) && NSUBGRID == 4 && NPRE == 4
+#define HYDRO_PAIR_LB launch_bounds(448,2)
+#elif defined(B200_GODUNOV) && NSUBGRID == 4
+#define HYDRO_PAIR_LB launch_bounds(512,1)
+#elif defined(NPRE) && NPRE == 4 && NSUBGRID == 2
 #define HYDRO_PAIR_LB launch_bounds(128,8)
 #elif defined(NPRE) && NPRE == 4
 #define HYDRO_PAIR_LB launch_bounds(512,2)
