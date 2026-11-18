@@ -292,6 +292,9 @@ subroutine init_refine_ramses(s,ilevel,ncpu_file,levelmin_file,nlevelmax_file,no
 
   ! Set grid at current level
   igrid=igrid_start-1
+  ! Head and tail are set even if no oct is read at this level
+  m%head(ilevel)=igrid_start
+  m%tail(ilevel)=igrid
 
   !-------------------------------------------
   ! Count cumulative numbers of octs per file
