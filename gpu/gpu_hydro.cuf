@@ -225,6 +225,15 @@ module hydro_device
   integer, parameter :: uct_product_record = 5+uct_product_nscalar
   integer, parameter :: uct_product_vt1 = uct_product_record+4, uct_product_bn = uct_product_record+6
 
+  ! Level ranges and the contiguous subgrids being updated. nface includes real halo subgrids.
+  type :: uct_chunk_t
+     integer :: level_head, level_size, first_ghost
+     integer :: first, count, nface
+     logical :: mapped
+  end type uct_chunk_t
+  !> The chunk being updated, read by the UCT kernels from constant memory
+  type(uct_chunk_t), constant :: uct_chunk
+
   type, public :: uct_face_smem_t
      type(subgrid_6x6x6cell_primitive)  :: local_subgrid
 #if NVAR>5+NENER
@@ -4412,16 +4421,48 @@ contains
          & + d1L*b2L - d1R*b2R - d2L*b1L + d2R*b1R
   end function uct_edge_emf
 
-  ! Owned faces (the low faces of the subgrid cells): solve once and store the fluxes and record
-  ! in the owner oct's products.
+  ! One map entry per real subgrid, followed by one per ghost oct of this level.
+  attributes(device) integer function uct_halo_key(oct_idx) result(key)
+    integer, value :: oct_idx
+    if (oct_idx >= uct_chunk%first_ghost) then
+       key = uct_chunk%level_size + (oct_idx - uct_chunk%first_ghost) + 1
+    else
+       key = (oct_idx-1)/nsubgridtondim - (uct_chunk%level_head-1) + 1
+    endif
+  end function uct_halo_key
+
+  ! Keep global indices for state. Products hold the chunk's octs, other real owners, then ghosts.
+  attributes(device) subroutine uct_load_nbor(nbor, slot, subgrid, snbor, pnbor, thread_idx)
+    integer, device :: nbor(subgridsize,*)
+    integer, device, optional :: slot(*)
+    integer, value :: subgrid, thread_idx
+    integer :: snbor(subgridsize), pnbor(subgridsize)
+    integer :: w, oct_idx, idx
+    do w = thread_idx+1, subgridsize, blockDim%x
+       oct_idx = nbor(w,subgrid)
+       idx = oct_idx - (uct_chunk%first-1)*nsubgridtondim
+       if (oct_idx >= uct_chunk%first_ghost) then
+          idx = oct_idx - uct_chunk%first_ghost + 1
+          if (uct_chunk%mapped) idx = slot(uct_halo_key(oct_idx))
+          idx = uct_chunk%nface*nsubgridtondim + idx
+       else if (uct_chunk%mapped .and. (idx < 1 .or. idx > uct_chunk%count*nsubgridtondim)) then
+          idx = slot(uct_halo_key(oct_idx)) + mod(oct_idx-1,nsubgridtondim)
+       endif
+       snbor(w) = oct_idx
+       pnbor(w) = idx
+    end do
+  end subroutine uct_load_nbor
+
+  ! Owned faces (the low faces of the subgrid cells): solve once per chunk and store the fluxes and
+  ! record in the owner oct's products.
   attributes(device) subroutine riemann_uct_owned(lx, rx, ly, ry, lz, rz, products, &
-       & nbor, thread_idx, gamma, smallr, smallc2, smax_cap, induction)
+       & nbor, product_offset, thread_idx, gamma, smallr, smallc2, smax_cap, induction)
     type(subgrid_3x2x2cell_primitive), intent(in) :: lx, rx
     type(subgrid_2x3x2cell_primitive), intent(in) :: ly, ry
     type(subgrid_2x2x3cell_primitive), intent(in) :: lz, rz
     real(kind=dp), device :: products(1:twotondim,1:3*uct_product_fields,*)
     integer(kind=4) :: nbor(1:subgridsize)
-    integer, value :: thread_idx
+    integer, value :: product_offset, thread_idx
     real(kind=dp), value :: gamma, smallr, smallc2, smax_cap
     logical, value :: induction
     integer :: work_idx, ncell, orientation, i, j, k, oct_idx, cell_idx, solver
@@ -4433,7 +4474,7 @@ contains
     do work_idx = thread_idx, 3*ncell - 1, blockDim%x
        orientation = work_idx/ncell
        call index_1Dto3D(mod(work_idx, ncell), 2*nsubgrid, 2*nsubgrid, i, j, k)
-       oct_idx = nbor(1 + (1+i/2) + nsubgridp2*(1+j/2) + nsubgridp2sq*(1+k/2))
+       oct_idx = nbor(1 + (1+i/2) + nsubgridp2*(1+j/2) + nsubgridp2sq*(1+k/2)) + product_offset
        cell_idx = 1 + mod(i,2) + 2*mod(j,2) + 4*mod(k,2)
        call uct_gather_face(lx, rx, ly, ry, lz, rz, orientation, i, j, k, ql, qr)
        flux = uct_face_solve(ql, qr, gamma, smallr, smallc2, smax_cap, record, solver)
@@ -4599,11 +4640,11 @@ contains
   ! AMR level: the t^n face B, the mean of the values on both sides, in the Bn slot of every face a
   ! subgrid reads that a ghost oct owns (the half-step value from interpolated cells is less
   ! accurate). Every subgrid reading a face stores the same value, with atomic exchanges.
-  attributes(device) subroutine set_uct_ghost_face_bn(products, bold, nbor, first_oct, last_oct, thread_idx)
+  attributes(device) subroutine set_uct_ghost_face_bn(products, bold, nbor, pnbor, first_ghost, thread_idx)
     real(kind=dp), device :: products(1:twotondim,1:3*uct_product_fields,*)
     real(kind=dp), device :: bold(1:twotondim,1:6,*)
-    integer(kind=4) :: nbor(1:subgridsize)
-    integer, value :: first_oct, last_oct, thread_idx
+    integer(kind=4) :: nbor(1:subgridsize), pnbor(1:subgridsize)
+    integer, value :: first_ghost, thread_idx
     integer :: work_idx, slab, i, j, k, ib, jb, kb, cell_idx, ind, oct_idx
     real(kind=dp) :: old
 
@@ -4613,12 +4654,12 @@ contains
        cell_idx = 1 + ib + 2*jb + 4*kb
        ind = 1 + i/2 + nsubgridp2*(j/2) + nsubgridp2sq*(k/2)
        oct_idx = nbor(ind)
-       if (oct_idx >= first_oct .and. oct_idx <= last_oct) cycle
-       if (slab /= 0) old = atomicexch(products(cell_idx, uct_product_bn, oct_idx), &
+       if (oct_idx < first_ghost) cycle
+       if (slab /= 0) old = atomicexch(products(cell_idx, uct_product_bn, pnbor(ind)), &
             & 0.5_dp*(bold(cell_idx, 1, oct_idx) + bold(cell_idx + 1 - 2*ib, 4, nbor(ind - (1 - ib)))))
-       if (slab /= 1) old = atomicexch(products(cell_idx, uct_product_fields+uct_product_bn, oct_idx), &
+       if (slab /= 1) old = atomicexch(products(cell_idx, uct_product_fields+uct_product_bn, pnbor(ind)), &
             & 0.5_dp*(bold(cell_idx, 2, oct_idx) + bold(cell_idx + 2*(1 - 2*jb), 5, nbor(ind - nsubgridp2*(1 - jb)))))
-       if (slab /= 2) old = atomicexch(products(cell_idx, 2*uct_product_fields+uct_product_bn, oct_idx), &
+       if (slab /= 2) old = atomicexch(products(cell_idx, 2*uct_product_fields+uct_product_bn, pnbor(ind)), &
             & 0.5_dp*(bold(cell_idx, 3, oct_idx) + bold(cell_idx + 4*(1 - 2*kb), 6, nbor(ind - nsubgridp2sq*(1 - kb)))))
     end do
   end subroutine set_uct_ghost_face_bn
@@ -7822,48 +7863,65 @@ contains
 
 #ifndef PAPER
 #ifdef MHD
+  ! Assign each distinct halo owner one slot.
+  attributes(global) subroutine uct_chunk_halo_kernel(nbor, slot, halo, counts)
+    integer, device :: nbor(subgridsize,*), slot(*), halo(*), counts(2)
+    integer :: oct_idx, idx, key, n, old
+    oct_idx = nbor(threadIdx%x,uct_chunk%first + (blockIdx%x-1))
+    idx = oct_idx - (uct_chunk%first-1)*nsubgridtondim
+    if (idx >= 1 .and. idx <= uct_chunk%count*nsubgridtondim) return
+    key = uct_halo_key(oct_idx)
+    old = atomiccas(slot(key), 0, -1)
+    if (old /= 0) return
+    ! A real halo subgrid gets the product index of its first oct after the chunk's octs; a ghost oct
+    ! gets its rank among the chunk's ghosts, counted after all real product octs (uct_load_nbor).
+    if (oct_idx >= uct_chunk%first_ghost) then
+       n = atomicadd(counts(2), 1)
+       idx = n+1
+    else
+       n = atomicadd(counts(1), 1)
+       halo(n+1) = (oct_idx-1)/nsubgridtondim + 1
+       idx = (uct_chunk%count+n)*nsubgridtondim + 1
+    endif
+    old = atomicexch(slot(key), idx)
+  end subroutine uct_chunk_halo_kernel
+
   ! Subgrids of an AMR level with an oct of their stencil off the level (a ghost oct).
-  attributes(global) subroutine uct_ghost_list_kernel(nbor, ghost_list, ghost_count, head_idx, num_subgrids)
+  attributes(global) subroutine uct_ghost_list_kernel(nbor, ghost_list, ghost_count)
     integer, device :: nbor(1:subgridsize,*)
     integer(kind=4), device :: ghost_list(*)
     integer(kind=4), device :: ghost_count
-    integer(kind=4), intent(in), value :: head_idx, num_subgrids
-    integer :: s, w, first_oct, last_oct, oct_idx, ghost, n
+    integer :: s, w, oct_idx, ghost, n
 
-    s = (blockIdx%x - 1)*blockDim%x + threadIdx%x
-    if (s > num_subgrids) return
-    first_oct = (head_idx - 1)*nsubgridtondim + 1
-    last_oct = (head_idx + num_subgrids - 1)*nsubgridtondim
+    s = (blockIdx%x - 1)*blockDim%x + (threadIdx%x-1)
+    if (s >= uct_chunk%count) return
+    s = uct_chunk%first + s
     ghost = 0
     do w = 1, subgridsize
-       oct_idx = nbor(w, head_idx + s - 1)
-       if (oct_idx < first_oct .or. oct_idx > last_oct) ghost = 1
+       oct_idx = nbor(w, s)
+       if (oct_idx >= uct_chunk%first_ghost) ghost = 1
     end do
     if (ghost == 1) then
        n = atomicadd(ghost_count, 1)
-       ghost_list(n+1) = head_idx + s - 1
+       ghost_list(n+1) = s
     endif
   end subroutine uct_ghost_list_kernel
 
   ! AMR level, after the ghost-face kernel: t^n face B of the ghost-owned faces the listed subgrids read.
-  attributes(global) subroutine uct_ghost_bn_kernel(bold, nbor, products, ghost_list, head_idx, num_subgrids)
+  attributes(global) subroutine uct_ghost_bn_kernel(bold, nbor, products, ghost_list, slot)
     real(kind=dp), device :: bold(1:twotondim,1:6,*)
     integer, device :: nbor(1:subgridsize,*)
     real(kind=dp), device :: products(1:twotondim,1:3*uct_product_fields,*)
     integer(kind=4), device :: ghost_list(*)
-    integer(kind=4), intent(in), value :: head_idx, num_subgrids
-    integer(kind=4), shared :: snbor(subgridsize)
-    integer :: thread_idx, subgrid_idx, first_oct, last_oct, w
+    integer, device, optional :: slot(*)
+    integer(kind=4), shared :: snbor(subgridsize), pnbor(subgridsize)
+    integer :: thread_idx, subgrid_idx
 
     thread_idx = threadIdx%x - 1
     subgrid_idx = ghost_list(blockIdx%x)
-    first_oct = (head_idx - 1)*nsubgridtondim + 1
-    last_oct = (head_idx + num_subgrids - 1)*nsubgridtondim
-    do w = thread_idx, subgridsize - 1, blockDim%x
-       snbor(w+1) = nbor(w+1, subgrid_idx)
-    end do
+    call uct_load_nbor(nbor, slot, subgrid_idx, snbor, pnbor, thread_idx)
     call syncthreads()
-    call set_uct_ghost_face_bn(products, bold, snbor, first_oct, last_oct, thread_idx)
+    call set_uct_ghost_face_bn(products, bold, snbor, pnbor, uct_chunk%first_ghost, thread_idx)
   end subroutine uct_ghost_bn_kernel
 
 #endif
@@ -8137,9 +8195,9 @@ contains
 #ifndef PAPER
 #ifdef MHD
 
-  ! Solve every owned face of the level once and store the fluxes and records in products.
+  ! Solve and store the owned faces of the chunk and its real halo subgrids.
   attributes(global) UCT_FACE_LB subroutine uct_face_kernel(grid, uold, bold, f, nbor, products, &
-       & head_idx, num_subgrids, gamma, smallr, smallc2, dt, dx, smax_cap, slope, slope_mag, &
+       & halo, gamma, smallr, smallc2, dt, dx, smax_cap, slope, slope_mag, &
        & induction, constant_gravity)
     type(oct), device :: grid(*)
     integer, device :: nbor(1:subgridsize,*)
@@ -8148,22 +8206,27 @@ contains
     real(kind=dp), device :: uold(1:twotondim,1:nvar,*)
     real(kind=dp), device :: bold(1:twotondim,1:6,*)
     real(kind=dp), device :: products(1:twotondim,1:3*uct_product_fields,*)
-    integer(kind=4), intent(in), value :: head_idx, num_subgrids
+    integer, device, optional :: halo(*)
     real(kind=dp), intent(in), value :: gamma, smallr, smallc2, dt, dx, smax_cap
     integer, intent(in), value :: slope, slope_mag
     logical, intent(in), value :: induction
     type(uct_face_smem_t), shared :: smem(*)
     integer(kind=4), shared :: snbor(subgridsize)
     real(kind=dp) :: dtdx, smallc
-    integer :: block_idx, thread_idx, w
+    integer :: block_idx, thread_idx, w, subgrid_idx, product_offset
 
     block_idx = blockIdx%x - 1
     thread_idx = threadIdx%x - 1
-    if (block_idx >= num_subgrids) return
+    if (block_idx < uct_chunk%count) then
+       subgrid_idx = uct_chunk%first + block_idx
+    else
+       subgrid_idx = halo(block_idx-uct_chunk%count+1)
+    endif
+    product_offset = (blockIdx%x-subgrid_idx)*nsubgridtondim
     dtdx = dt/dx
     smallc = sqrt(smallc2)
     do w = thread_idx, subgridsize - 1, blockDim%x
-       snbor(w+1) = nbor(w+1, head_idx + block_idx)
+       snbor(w+1) = nbor(w+1, subgrid_idx)
     end do
     call syncthreads()
 
@@ -8193,7 +8256,7 @@ contains
          & gamma=gamma, smallr=smallr, smallc2=smallc2, dtdx=dtdx, slope=slope, owned_only=.true.)
 
     call riemann_uct_owned(left_interfaces_x, right_interfaces_x, left_interfaces_y, right_interfaces_y, &
-         & left_interfaces_z, right_interfaces_z, products, snbor, &
+         & left_interfaces_z, right_interfaces_z, products, snbor, product_offset, &
          & thread_idx, gamma, smallr, smallc2, smax_cap, induction)
 
     end associate
@@ -8202,7 +8265,7 @@ contains
   ! AMR level: the faces a listed subgrid reads whose owner is a ghost oct. Every subgrid next to
   ! the ghost oct solves them from the same cells, so the values stored are identical.
   attributes(global) UCT_GHOST_FACE_LB subroutine uct_ghost_face_kernel(grid, uold, bold, f, nbor, products, &
-       & ghost_list, head_idx, num_subgrids, gamma, smallr, smallc2, dt, dx, smax_cap, slope, slope_mag, &
+       & ghost_list, slot, gamma, smallr, smallc2, dt, dx, smax_cap, slope, slope_mag, &
        & induction, constant_gravity)
     type(oct), device :: grid(*)
     integer, device :: nbor(1:subgridsize,*)
@@ -8212,32 +8275,28 @@ contains
     real(kind=dp), device :: bold(1:twotondim,1:6,*)
     real(kind=dp), device :: products(1:twotondim,1:3*uct_product_fields,*)
     integer(kind=4), device :: ghost_list(*)
-    integer(kind=4), intent(in), value :: head_idx, num_subgrids
+    integer, device, optional :: slot(*)
     real(kind=dp), intent(in), value :: gamma, smallr, smallc2, dt, dx, smax_cap
     integer, intent(in), value :: slope, slope_mag
     logical, intent(in), value :: induction
     type(uct_ghost_smem_t), shared :: smem(*)
-    integer(kind=4), shared :: snbor(subgridsize)
+    integer(kind=4), shared :: snbor(subgridsize), pnbor(subgridsize)
     integer, shared :: slist(uct_ghost_candidates), scount
     real(kind=dp) :: dtdx, smallc
-    integer :: thread_idx, subgrid_idx, first_oct, last_oct, w, c, n
+    integer :: thread_idx, subgrid_idx, c, n
     integer :: orientation, normal, t1, t2, oct_idx, cell_idx
 
     thread_idx = threadIdx%x - 1
     subgrid_idx = ghost_list(blockIdx%x)
     dtdx = dt/dx
     smallc = sqrt(smallc2)
-    first_oct = (head_idx - 1)*nsubgridtondim + 1
-    last_oct = (head_idx + num_subgrids - 1)*nsubgridtondim
     if (thread_idx == 0) scount = 0
-    do w = thread_idx, subgridsize - 1, blockDim%x
-       snbor(w+1) = nbor(w+1, subgrid_idx)
-    end do
+    call uct_load_nbor(nbor, slot, subgrid_idx, snbor, pnbor, thread_idx)
     call syncthreads()
     do c = thread_idx, uct_ghost_candidates - 1, blockDim%x
        call uct_ghost_candidate(c, orientation, normal, t1, t2)
        call uct_face_owner(snbor, orientation, normal, t1, t2, oct_idx, cell_idx)
-       if (oct_idx < first_oct .or. oct_idx > last_oct) then
+       if (oct_idx >= uct_chunk%first_ghost) then
           n = atomicadd(scount, 1)
           slist(n+1) = c
        endif
@@ -8273,43 +8332,40 @@ contains
 
     call solve_uct_ghost_faces(left_interfaces_x, right_interfaces_x, left_interfaces_y, right_interfaces_y, &
          & left_interfaces_z, right_interfaces_z, smem(1)%shell_left, smem(1)%shell_right, &
-         & products, snbor, slist, scount, thread_idx, gamma, smallr, smallc2, smax_cap, induction)
+         & products, pnbor, slist, scount, thread_idx, gamma, smallr, smallc2, smax_cap, induction)
 
     end associate
   end subroutine uct_ghost_face_kernel
 
   ! Edge EMFs and the conservative update from the face products, when levelmin = levelmax.
   attributes(global) UCT_UPDATE_LB subroutine uct_update_kernel(unew, bnew, nbor, products, &
-       & head_idx, num_subgrids, dt, dx, slope_mag, etamag)
+       & slot, dt, dx, slope_mag, etamag)
     real(kind=dp), device :: unew(1:twotondim,1:nvar,*)
     real(kind=dp), device :: bnew(1:twotondim,1:6,*)
     integer(kind=4), device :: nbor(1:subgridsize,*)
     real(kind=dp), device :: products(1:twotondim,1:3*uct_product_fields,*)
-    integer(kind=4), intent(in), value :: head_idx, num_subgrids
+    integer, device, optional :: slot(*)
     real(kind=dp), intent(in), value :: dt, dx, etamag
     integer, intent(in), value :: slope_mag
     type(uct_update_smem_t), shared :: smem(*)
-    integer(kind=4), shared :: snbor(subgridsize)
-    integer :: block_idx, thread_idx, w
+    integer(kind=4), shared :: snbor(subgridsize), pnbor(subgridsize)
+    integer :: block_idx, thread_idx
 
     block_idx = blockIdx%x - 1
     thread_idx = threadIdx%x - 1
-    if (block_idx >= num_subgrids) return
-    do w = thread_idx, subgridsize - 1, blockDim%x
-       snbor(w+1) = nbor(w+1, head_idx + block_idx)
-    end do
+    call uct_load_nbor(nbor, slot, uct_chunk%first+block_idx, snbor, pnbor, thread_idx)
     call syncthreads()
 
     associate(left_interfaces_x => smem(1)%left_interfaces_x, &
          & left_interfaces_y => smem(1)%left_interfaces_y, left_interfaces_z => smem(1)%left_interfaces_z, &
          & bf => smem(1)%bf, emfx => smem(1)%emfx, emfy => smem(1)%emfy, emfz => smem(1)%emfz)
 
-    call load_uct_face_bn(products, snbor, bf, thread_idx)
-    call load_uct_product_fluxes(products, snbor, &
+    call load_uct_face_bn(products, pnbor, bf, thread_idx)
+    call load_uct_product_fluxes(products, pnbor, &
          & left_interfaces_x, left_interfaces_y, left_interfaces_z, thread_idx)
     call syncthreads()
 
-    call cmp_mag_flx_uct_product(products, snbor, .false., 0, 0, bf, slope_mag, &
+    call cmp_mag_flx_uct_product(products, pnbor, .false., 0, 0, bf, slope_mag, &
          & emfx, emfy, emfz, thread_idx)
 
     if (etamag > 0.0_dp) then
@@ -8326,32 +8382,29 @@ contains
   ! field (uct_ghost_bn_kernel), the fluxes and EMFs next to refined cells are zeroed, and above
   ! levelmin the coarser cells are corrected.
   attributes(global) UCT_UPDATE_AMR_LB subroutine uct_update_amr_kernel(grid, unew, bnew, father, nbor, &
-       & products, head_idx, num_subgrids, ngridmax, ilevel, levelmin, levelmax, dt, dx, slope_mag, etamag)
+       & products, slot, ngridmax, ilevel, levelmin, levelmax, dt, dx, slope_mag, etamag)
     type(oct), device :: grid(*)
     integer, device :: father(*)
     real(kind=dp), device :: unew(1:twotondim,1:nvar,*)
     real(kind=dp), device :: bnew(1:twotondim,1:6,*)
     integer(kind=4), device :: nbor(1:subgridsize,*)
     real(kind=dp), device :: products(1:twotondim,1:3*uct_product_fields,*)
-    integer(kind=4), intent(in), value :: head_idx, num_subgrids
+    integer, device, optional :: slot(*)
     integer, intent(in), value :: ngridmax, ilevel, levelmin, levelmax
     real(kind=dp), intent(in), value :: dt, dx, etamag
     integer, intent(in), value :: slope_mag
     type(uct_update_smem_t), shared :: smem(*)
-    integer(kind=4), shared :: snbor(subgridsize)
+    integer(kind=4), shared :: snbor(subgridsize), pnbor(subgridsize)
     logical(kind=1), shared :: refined(1:2*nsubgrid+2, 1:2*nsubgrid+2, 1:2*nsubgrid+2)
-    integer :: block_idx, thread_idx, w, i, j, k, oct_idx, first_oct, last_oct, coarse
+    integer :: block_idx, thread_idx, w, i, j, k, oct_idx, coarse
     real(kind=dp) :: dtdx
 
     block_idx = blockIdx%x - 1
     thread_idx = threadIdx%x - 1
-    if (block_idx >= num_subgrids) return
     dtdx = dt/dx
-    first_oct = (head_idx - 1)*nsubgridtondim + 1
-    last_oct = (head_idx + num_subgrids - 1)*nsubgridtondim
+    call uct_load_nbor(nbor, slot, uct_chunk%first+block_idx, snbor, pnbor, thread_idx)
     coarse = 0
     do w = thread_idx, subgridsize - 1, blockDim%x
-       snbor(w+1) = nbor(w+1, head_idx + block_idx)
        if (snbor(w+1) > ngridmax) coarse = 1
     end do
     coarse = syncthreads_or(coarse)
@@ -8368,12 +8421,12 @@ contains
          & left_interfaces_y => smem(1)%left_interfaces_y, left_interfaces_z => smem(1)%left_interfaces_z, &
          & bf => smem(1)%bf, emfx => smem(1)%emfx, emfy => smem(1)%emfy, emfz => smem(1)%emfz)
 
-    call load_uct_face_bn(products, snbor, bf, thread_idx)
-    call load_uct_product_fluxes(products, snbor, &
+    call load_uct_face_bn(products, pnbor, bf, thread_idx)
+    call load_uct_product_fluxes(products, pnbor, &
          & left_interfaces_x, left_interfaces_y, left_interfaces_z, thread_idx)
     call syncthreads()
 
-    call cmp_mag_flx_uct_product(products, snbor, .true., first_oct, last_oct, bf, slope_mag, &
+    call cmp_mag_flx_uct_product(products, pnbor, .true., 1, uct_chunk%nface*nsubgridtondim, bf, slope_mag, &
          & emfx, emfy, emfz, thread_idx)
 
     if (etamag > 0.0_dp) then
