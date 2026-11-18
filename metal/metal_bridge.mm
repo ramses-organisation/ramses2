@@ -3,17 +3,6 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
-#include <mach/mach.h>
-
-/* Returns resident set size in pages (4096 bytes each), matching Linux /proc/self/stat field 24. */
-extern "C" long getmem_mac(void)
-{
-    struct task_basic_info info;
-    mach_msg_type_number_t count = TASK_BASIC_INFO_COUNT;
-    if (task_info(mach_task_self(), TASK_BASIC_INFO, (task_info_t)&info, &count) != KERN_SUCCESS)
-        return 0L;
-    return (long)(info.resident_size / 4096);
-}
 
 #include "metal_types.h"
 #include "metal_config.h"

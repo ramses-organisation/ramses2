@@ -296,8 +296,6 @@ end subroutine r_hash_stats
 subroutine writemem(usedmem)
   real::usedmem
 
-  usedmem=usedmem*4096
-
   if(usedmem>1024.**3.)then
      write(*,999)usedmem/1024.**3.
   else if (usedmem>1024.**2.) then
@@ -313,49 +311,44 @@ subroutine writemem(usedmem)
 end subroutine writemem
 
 subroutine getmem(outmem)
-  use iso_c_binding, only: c_long
+  ! Returns the memory used by this process in bytes: the current resident
+  ! set size (VmRSS) on Linux, the peak resident set size on macOS.
+  use iso_c_binding, only: c_int, c_long
   real::outmem
-  character(len=300) :: dir, dir2, file
-  integer::ind,j,nmem,read_status
+  character(len=300) :: line, file
+  integer::read_status
+  integer(kind=8)::nmem
   logical::file_exists
-#ifdef _METAL
+  integer(c_long)::rusage(18) ! struct rusage: 2 timevals + 14 longs
   interface
-    function getmem_mac() bind(c, name='getmem_mac')
-      import c_long
-      integer(c_long) :: getmem_mac
-    end function getmem_mac
+    function getrusage(who, usage) bind(c, name='getrusage')
+      import c_int, c_long
+      integer(c_int), value :: who
+      integer(c_long) :: usage(18)
+      integer(c_int) :: getrusage
+    end function getrusage
   end interface
-  outmem = real(getmem_mac(), kind=4)
-  return
-#endif
 
-  file='/proc/self/stat'
+  outmem=0.
+  file='/proc/self/status'
   inquire(file=file, exist=file_exists)
   if (file_exists) then
-     open(unit=1,file=file,form='formatted')
-     read(1,'(A300)',IOSTAT=read_status)dir
+     ! Linux: VmRSS is in kB, independent of the page size
+     open(unit=1,file=file,form='formatted',status='old')
+     do
+        read(1,'(A300)',IOSTAT=read_status)line
+        if (read_status/=0) exit
+        if (line(1:6)=='VmRSS:') then
+           read(line(7:),*,IOSTAT=read_status)nmem
+           if (read_status==0) outmem=real(nmem,kind=4)*1024.
+           exit
+        endif
+     end do
      close(1)
   else
-     read_status=-1000
+     ! macOS: ru_maxrss (5th long, after the 2 timevals) is in bytes
+     if (getrusage(0_c_int, rusage)==0) outmem=real(rusage(5),kind=4)
   endif
-
-  if (read_status < 0)then
-     outmem=0.
-     if (read_status .ne. -1000)write(*,*)'Problem in checking free memory'
-  else
-     ind=300
-     j=0
-     do while (j<23)
-        ind=index(dir,' ')
-        dir2=dir(ind+1:300)
-        j=j+1
-        dir=dir2
-     end do
-     ind=index(dir,' ')
-     dir2=dir(1:ind)
-     read(dir2,'(I12)')nmem
-     outmem=real(nmem,kind=4)
-  end if
 
 end subroutine getmem
 end module update_time_module
