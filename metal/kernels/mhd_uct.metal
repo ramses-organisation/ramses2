@@ -433,7 +433,7 @@ mr_uct_record_t mr_llf_record_lmax(primitive_t left, primitive_t right, float A,
     return record;
 }
 
-float mr_llf_signal_speed(primitive_t left, primitive_t right, float gamma, float smallr, float smallc2) {
+float mr_llf_signal_speed(primitive_t left, primitive_t right, float gamma, float smallr, float smallc2, float smax_cap) {
     float smallp = smallc2 / gamma;
     left.density = max(left.density, smallr);
     right.density = max(right.density, smallr);
@@ -448,19 +448,19 @@ float mr_llf_signal_speed(primitive_t left, primitive_t right, float gamma, floa
     float c2r = gamma * right.pressure / right.density;
     float h2r = 0.5f * (b2r / right.density + c2r);
     float cfr = sqrt(h2r + sqrt(max(h2r * h2r - c2r * A * A / right.density, 0.0f)));
-    return max(abs(left.velocity_x) + cfl, abs(right.velocity_x) + cfr);
+    return min(max(abs(left.velocity_x) + cfl, abs(right.velocity_x) + cfr), smax_cap);
 }
 
-mr_uct_record_t mr_llf_record(primitive_t left, primitive_t right, float gamma, float smallr, float smallc2) {
+mr_uct_record_t mr_llf_record(primitive_t left, primitive_t right, float gamma, float smallr, float smallc2, float smax_cap) {
     float A = 0.5f * (left.Bx + right.Bx);
-    float lmax = mr_llf_signal_speed(left, right, gamma, smallr, smallc2);
+    float lmax = mr_llf_signal_speed(left, right, gamma, smallr, smallc2, smax_cap);
     return mr_llf_record_lmax(left, right, A, lmax);
 }
 
-conserved_t mr_hll_mhd_flux_lmax(primitive_t left, primitive_t right, float gamma, float smallr, float smallc2, thread float &lmax_out) {
+conserved_t mr_hll_mhd_flux_lmax(primitive_t left, primitive_t right, float gamma, float smallr, float smallc2, float smax_cap, thread float &lmax_out) {
     float smallp = smallc2 / gamma;
     float A = 0.5f * (left.Bx + right.Bx);
-    lmax_out = mr_llf_signal_speed(left, right, gamma, smallr, smallc2);
+    lmax_out = mr_llf_signal_speed(left, right, gamma, smallr, smallc2, smax_cap);
     left.Bx = A;
     right.Bx = A;
     left.density = max(left.density, smallr);
@@ -505,12 +505,12 @@ conserved_t mr_hll_mhd_flux_lmax(primitive_t left, primitive_t right, float gamm
     return flux;
 }
 
-conserved_t mr_hll_mhd_flux(primitive_t left, primitive_t right, float gamma, float smallr, float smallc2) {
+conserved_t mr_hll_mhd_flux(primitive_t left, primitive_t right, float gamma, float smallr, float smallc2, float smax_cap) {
     float lmax;
-    return mr_hll_mhd_flux_lmax(left, right, gamma, smallr, smallc2, lmax);
+    return mr_hll_mhd_flux_lmax(left, right, gamma, smallr, smallc2, smax_cap, lmax);
 }
 
-conserved_t mr_hlld_mhd_flux(primitive_t left, primitive_t right, float gamma, float smallr, float smallc2, thread mr_uct_record_t &uct, bool make_uct_record) {
+conserved_t mr_hlld_mhd_flux(primitive_t left, primitive_t right, float gamma, float smallr, float smallc2, float smax_cap, thread mr_uct_record_t &uct, bool make_uct_record) {
     float smallp = smallc2 / gamma;
     float entho = 1.0f / (gamma - 1.0f);
     primitive_t raw_left = left;
@@ -610,7 +610,7 @@ conserved_t mr_hlld_mhd_flux(primitive_t left, primitive_t right, float gamma, f
         else mr_set_uct_record(uct, ul, ur, vl, vr, wl, wr, A, SL, SR, ustar, SAL, SAR);
         if (mr_uct_record_nonfinite(uct, SL, SR, ustar, SAL, SAR)) {
             float llf_lmax;
-            conserved_t llf_flux = mr_hll_mhd_flux_lmax(raw_left, raw_right, gamma, smallr, smallc2, llf_lmax);
+            conserved_t llf_flux = mr_hll_mhd_flux_lmax(raw_left, raw_right, gamma, smallr, smallc2, smax_cap, llf_lmax);
             uct = mr_llf_record_lmax(left, right, A, llf_lmax);
             return llf_flux;
         }
@@ -851,7 +851,7 @@ float mr_hlld_2d_emf(primitive_t stateLL, primitive_t stateLR, primitive_t state
     return (SAL * SAB * EstarRR - SAL * SAT * EstarRL - SAR * SAB * EstarLR + SAR * SAT * EstarLL) / (SAR - SAL) / (SAT - SAB) - SAT * SAB / (SAT - SAB) * (AstarT - AstarB) + SAR * SAL / (SAR - SAL) * (BstarR - BstarL);
 }
 
-float mr_llf_2d_emf(primitive_t stateLL, primitive_t stateLR, primitive_t stateRL, primitive_t stateRR, float gamma, float smallr, float smallc2) {
+float mr_llf_2d_emf(primitive_t stateLL, primitive_t stateLR, primitive_t stateRL, primitive_t stateRR, float gamma, float smallr, float smallc2, float smax_cap) {
     primitive_t xleft;
     primitive_t xright;
     xleft.density = 0.5f * (stateLL.density + stateLR.density);
@@ -870,7 +870,7 @@ float mr_llf_2d_emf(primitive_t stateLL, primitive_t stateLR, primitive_t stateR
     xright.By = 0.5f * (stateRR.By + stateRL.By);
     xleft.Bz = 0.5f * (stateLL.Bz + stateLR.Bz);
     xright.Bz = 0.5f * (stateRR.Bz + stateRL.Bz);
-    float xdiff = -0.5f * mr_llf_signal_speed(xleft, xright, gamma, smallr, smallc2) * (xright.By - xleft.By);
+    float xdiff = -0.5f * mr_llf_signal_speed(xleft, xright, gamma, smallr, smallc2, smax_cap) * (xright.By - xleft.By);
 
     primitive_t yleft;
     primitive_t yright;
@@ -890,7 +890,7 @@ float mr_llf_2d_emf(primitive_t stateLL, primitive_t stateLR, primitive_t stateR
     yright.By = 0.5f * (stateRR.Bx + stateLR.Bx);
     yleft.Bz = 0.5f * (stateLL.Bz + stateRL.Bz);
     yright.Bz = 0.5f * (stateRR.Bz + stateLR.Bz);
-    float ydiff = -0.5f * mr_llf_signal_speed(yleft, yright, gamma, smallr, smallc2) * (yright.By - yleft.By);
+    float ydiff = -0.5f * mr_llf_signal_speed(yleft, yright, gamma, smallr, smallc2, smax_cap) * (yright.By - yleft.By);
 
     float ELL = stateLL.velocity_x * stateLL.By - stateLL.velocity_y * stateLL.Bx;
     float ERL = stateRL.velocity_x * stateRL.By - stateRL.velocity_y * stateRL.Bx;
@@ -1122,7 +1122,7 @@ float mr_uct_edge(mr_uct_record_t f1lo, mr_uct_record_t f1hi, mr_uct_record_t f2
     return a1L * v1.left * b2.left + a1R * v1.right * b2.right - a2L * v2.left * b1.left - a2R * v2.right * b1.right + d1L * b2.left - d1R * b2.right - d2L * b1.left + d2R * b1.right;
 }
 
-mr_uct_record_t mr_shell_solve(threadgroup const float *s, int shell, float gamma, float smallr, float smallc2, float dtdx, int slope, int slope_mag, int induction, float switch_dmin, float switch_pmin) {
+mr_uct_record_t mr_shell_solve(threadgroup const float *s, int shell, float gamma, float smallr, float smallc2, float smax_cap, float dtdx, int slope, int slope_mag, int induction, float switch_dmin, float switch_pmin) {
     int orientation;
     int normal;
     int t1;
@@ -1149,9 +1149,9 @@ mr_uct_record_t mr_shell_solve(threadgroup const float *s, int shell, float gamm
     primitive_t left = mr_rotate_face(mr_traced_face(s, tl, orientation, 1, il, jl, kl, smallr, smallc2), orientation);
     primitive_t right = mr_rotate_face(mr_traced_face(s, tr, orientation, -1, ir, jr, kr, smallr, smallc2), orientation);
     bool use_llf = mr_switch_to_llf(min(left.density, right.density), min(left.pressure, right.pressure), switch_dmin, switch_pmin);
-    if (use_llf) return mr_llf_record(left, right, gamma, smallr, smallc2);
+    if (use_llf) return mr_llf_record(left, right, gamma, smallr, smallc2, smax_cap);
     mr_uct_record_t record;
-    mr_hlld_mhd_flux(left, right, gamma, smallr, smallc2, record, true);
+    mr_hlld_mhd_flux(left, right, gamma, smallr, smallc2, smax_cap, record, true);
     return record;
 }
 
@@ -1572,6 +1572,7 @@ kernel void uct_velocity_kernel(
     constant float *constant_gravity [[buffer(16)]],
     device const float *f [[buffer(17)]],
     device float *velocity [[buffer(18)]],
+    constant float &smax_cap [[buffer(19)]],
     uint block_idx [[threadgroup_position_in_grid]],
     uint tid [[thread_position_in_threadgroup]],
     uint threads_per_group [[threads_per_threadgroup]])
@@ -1604,8 +1605,8 @@ kernel void uct_velocity_kernel(
         primitive_t right = mr_rotate_face(mr_traced_face(state, tr, orientation, -1, ir, jr, kr, smallr, smallc2), orientation);
         bool use_llf = mr_switch_to_llf(min(left.density, right.density), min(left.pressure, right.pressure), switch_llf_dmin, switch_llf_pmin);
         mr_uct_record_t record;
-        if (use_llf) record = mr_llf_record(left, right, gamma, smallr, smallc2);
-        else mr_hlld_mhd_flux(left, right, gamma, smallr, smallc2, record, true);
+        if (use_llf) record = mr_llf_record(left, right, gamma, smallr, smallc2, smax_cap);
+        else mr_hlld_mhd_flux(left, right, gamma, smallr, smallc2, smax_cap, record, true);
         int source_idx = mr_nbor_get(nbor, subgrid_idx, 1 + 1 + i / 2 + MR_NSUBGRIDP2 * (1 + j / 2) + MR_NSUBGRIDP2 * MR_NSUBGRIDP2 * (1 + k / 2));
         int cell_idx = 1 + i % 2 + 2 * (j % 2) + 4 * (k % 2);
         mr_staged_velocity_set(velocity, source_idx, orientation, cell_idx, record);
@@ -1632,6 +1633,7 @@ kernel void mhd_uct_face_product_kernel(
     constant float *constant_gravity [[buffer(16)]],
     device const float *f [[buffer(17)]],
     device float *product [[buffer(18)]],
+    constant float &smax_cap [[buffer(19)]],
     uint block_idx [[threadgroup_position_in_grid]],
     uint tid [[thread_position_in_threadgroup]],
     uint threads_per_group [[threads_per_threadgroup]])
@@ -1667,10 +1669,10 @@ kernel void mhd_uct_face_product_kernel(
         conserved_t flux;
         if (use_llf) {
             float llf_lmax;
-            flux = mr_hll_mhd_flux_lmax(left, right, gamma, smallr, smallc2, llf_lmax);
+            flux = mr_hll_mhd_flux_lmax(left, right, gamma, smallr, smallc2, smax_cap, llf_lmax);
             record = mr_llf_record_lmax(left, right, 0.5f * (left.Bx + right.Bx), llf_lmax);
         } else {
-            flux = mr_hlld_mhd_flux(left, right, gamma, smallr, smallc2, record, true);
+            flux = mr_hlld_mhd_flux(left, right, gamma, smallr, smallc2, smax_cap, record, true);
         }
         flux = mr_unrotate_flux(flux, orientation);
         if (induction != 0) {
@@ -1818,7 +1820,7 @@ void mr_hlld_corner_stage(threadgroup float *s, int orientation, mr_trace_t t, i
     }
 }
 
-float mr_hlld_edge_solve(threadgroup const float *s, int edge, float gamma, float smallr, float smallc2, float switch_llf_dmin, float switch_llf_pmin, int riemann2d) {
+float mr_hlld_edge_solve(threadgroup const float *s, int edge, float gamma, float smallr, float smallc2, float smax_cap, float switch_llf_dmin, float switch_llf_pmin, int riemann2d) {
     primitive_t qLL = mr_hlld_corner_get(s, edge, 0);
     primitive_t qRL = mr_hlld_corner_get(s, edge, 1);
     primitive_t qLR = mr_hlld_corner_get(s, edge, 2);
@@ -1836,10 +1838,10 @@ float mr_hlld_edge_solve(threadgroup const float *s, int edge, float gamma, floa
     qRL.By = b2RL;
     qRR.By = b2RL;
     if (riemann2d == MR_SOLVER2D_HLLD) return mr_hlld_2d_emf(qLL, qLR, qRL, qRR, gamma, smallr, sqrt(smallc2), switch_llf_dmin, switch_llf_pmin);
-    return mr_llf_2d_emf(qLL, qLR, qRL, qRR, gamma, smallr, smallc2);
+    return mr_llf_2d_emf(qLL, qLR, qRL, qRR, gamma, smallr, smallc2, smax_cap);
 }
 
-void hlld_emf_driver(threadgroup float *s, threadgroup const bool *refined, int ilevel, int levelmax, float gamma, float smallr, float smallc2, float dtdx, float dx, float etamag, int slope, int slope_mag, int induction, float switch_llf_dmin, float switch_llf_pmin, int riemann2d, int tid, int threads_per_group) {
+void hlld_emf_driver(threadgroup float *s, threadgroup const bool *refined, int ilevel, int levelmax, float gamma, float smallr, float smallc2, float smax_cap, float dtdx, float dx, float etamag, int slope, int slope_mag, int induction, float switch_llf_dmin, float switch_llf_pmin, int riemann2d, int tid, int threads_per_group) {
     int i = 0;
     int j = 0;
     int k = 0;
@@ -1858,7 +1860,7 @@ void hlld_emf_driver(threadgroup float *s, threadgroup const bool *refined, int 
             int I;
             int J;
             int K;
-            float emf = mr_hlld_edge_solve(s, tid, gamma, smallr, smallc2, switch_llf_dmin, switch_llf_pmin, riemann2d);
+            float emf = mr_hlld_edge_solve(s, tid, gamma, smallr, smallc2, smax_cap, switch_llf_dmin, switch_llf_pmin, riemann2d);
             if (orientation == 0) {
                 index_1Dto3D(tid, MR_M + 1, MR_M + 1, I, J, K);
                 if (etamag > 0.0f) {
@@ -1910,7 +1912,7 @@ void hlld_emf_driver(threadgroup float *s, threadgroup const bool *refined, int 
     threadgroup_barrier(mem_flags::mem_threadgroup);
 }
 
-void riemann_driver_mhd(threadgroup float *s, int tid, float gamma, float smallr, float smallc2, float dtdx, int slope, int slope_mag, int induction, int riemann, float switch_llf_dmin, float switch_llf_pmin) {
+void riemann_driver_mhd(threadgroup float *s, int tid, float gamma, float smallr, float smallc2, float smax_cap, float dtdx, int slope, int slope_mag, int induction, int riemann, float switch_llf_dmin, float switch_llf_pmin) {
     bool use_uct = riemann == MR_SOLVER_UCT_HLLD;
     primitive_t left_face;
     primitive_t right_face;
@@ -1929,10 +1931,10 @@ void riemann_driver_mhd(threadgroup float *s, int tid, float gamma, float smallr
         conserved_t flux;
         if (use_llf) {
             float llf_lmax;
-            flux = mr_hll_mhd_flux_lmax(left_face, right_face, gamma, smallr, smallc2, llf_lmax);
+            flux = mr_hll_mhd_flux_lmax(left_face, right_face, gamma, smallr, smallc2, smax_cap, llf_lmax);
             if (use_uct) record = mr_llf_record_lmax(left_face, right_face, 0.5f * (left_face.Bx + right_face.Bx), llf_lmax);
         } else {
-            flux = mr_hlld_mhd_flux(left_face, right_face, gamma, smallr, smallc2, record, use_uct);
+            flux = mr_hlld_mhd_flux(left_face, right_face, gamma, smallr, smallc2, smax_cap, record, use_uct);
         }
         flux = mr_unrotate_flux(flux, orientation);
         if (induction != 0) {
@@ -1952,7 +1954,7 @@ void riemann_driver_mhd(threadgroup float *s, int tid, float gamma, float smallr
     threadgroup_barrier(mem_flags::mem_threadgroup);
     if (use_uct) {
         mr_uct_record_t shell_record;
-        if (tid < MR_ALL_SHELLS) shell_record = mr_shell_solve(s, tid, gamma, smallr, smallc2, dtdx, slope, slope_mag, induction, switch_llf_dmin, switch_llf_pmin);
+        if (tid < MR_ALL_SHELLS) shell_record = mr_shell_solve(s, tid, gamma, smallr, smallc2, smax_cap, dtdx, slope, slope_mag, induction, switch_llf_dmin, switch_llf_pmin);
         threadgroup_barrier(mem_flags::mem_threadgroup);
         if (tid < MR_ALL_SHELLS) mr_shell_record_store(s, tid, shell_record);
         threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -2150,6 +2152,7 @@ kernel void hydro_integrator_kernel(
     constant float *constant_gravity [[buffer(26)]],
     device const float *f [[buffer(27)]],
     device const float *velocity [[buffer(28)]],
+    constant float &smax_cap [[buffer(29)]],
     uint block_idx [[threadgroup_position_in_grid]],
     uint tid [[thread_position_in_threadgroup]],
     uint threads_per_group [[threads_per_threadgroup]])
@@ -2162,7 +2165,7 @@ kernel void hydro_integrator_kernel(
     subgrid_conserved_2_primitive_mhd(grid, uold, bold, f, nbor, constant_gravity, subgrid_idx, gamma, smallr, smallc2, dt, smem, refined, int(tid), int(threads_per_group));
     threadgroup_barrier(mem_flags::mem_threadgroup);
     trace_3d_mhd(smem, int(tid), gamma, smallr, smallc2, dtdx, slope, slope_mag, induction);
-    riemann_driver_mhd(smem, int(tid), gamma, smallr, smallc2, dtdx, slope, slope_mag, induction, riemann, switch_llf_dmin, switch_llf_pmin);
+    riemann_driver_mhd(smem, int(tid), gamma, smallr, smallc2, smax_cap, dtdx, slope, slope_mag, induction, riemann, switch_llf_dmin, switch_llf_pmin);
     if (riemann == MR_SOLVER_UCT_HLLD) uct_emf_driver(smem, refined, velocity, nbor, subgrid_idx, head_idx, num_subgrids, ilevel, levelmax, etamag, dx, slope_mag, int(tid), int(threads_per_group));
     zero_fine_fluxes_mhd(smem, refined, ilevel, levelmax, int(tid));
     if (riemann == MR_SOLVER_UCT_HLLD) {
@@ -2172,7 +2175,7 @@ kernel void hydro_integrator_kernel(
         conservative_update_mhd(unew, bnew, nbor, smem, subgrid_idx, int(tid), dtdx, true, false);
         if (ilevel > levelmin) mr_coarse_hydro_update(smem, grid, father, nbor, unew, subgrid_idx, ngridmax, int(tid), dtdx);
         threadgroup_barrier(mem_flags::mem_threadgroup);
-        hlld_emf_driver(smem, refined, ilevel, levelmax, gamma, smallr, smallc2, dtdx, dx, etamag, slope, slope_mag, induction, switch_llf_dmin, switch_llf_pmin, riemann2d, int(tid), int(threads_per_group));
+        hlld_emf_driver(smem, refined, ilevel, levelmax, gamma, smallr, smallc2, smax_cap, dtdx, dx, etamag, slope, slope_mag, induction, switch_llf_dmin, switch_llf_pmin, riemann2d, int(tid), int(threads_per_group));
         conservative_update_mhd(unew, bnew, nbor, smem, subgrid_idx, int(tid), dtdx, false, true);
         if (ilevel > levelmin && tid == 0) mr_coarse_ct_update(smem, grid, father, nbor, bnew, subgrid_idx, ngridmax, dtdx);
     }

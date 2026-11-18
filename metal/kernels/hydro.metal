@@ -467,7 +467,7 @@ float hll_flux(float sl, float sr, float fl, float fr, float cl, float cr) {
 
 /* hll_fluxes — mirrors gpu_hydro.cuf; llf=true → LLF wave speeds */
 conserved_t hll_fluxes(thread primitive_t &left, thread primitive_t &right,
-                       float gamma, float smallr, float smallc2, bool llf) {
+                       float gamma, float smallr, float smallc2, float smax_cap, bool llf) {
     float smallp = smallc2 / gamma;
     left.density   = max(left.density,   smallr);
     right.density  = max(right.density,  smallr);
@@ -478,11 +478,11 @@ conserved_t hll_fluxes(thread primitive_t &left, thread primitive_t &right,
     float cr = sound_speed(right, gamma);
     float sl, sr;
     if (llf) {
-        float spd = max(abs(left.velocity_x) + cl, abs(right.velocity_x) + cr);
+        float spd = min(max(abs(left.velocity_x) + cl, abs(right.velocity_x) + cr), smax_cap);
         sl = -spd; sr = spd;
     } else {
-        sl = min(min(left.velocity_x, right.velocity_x) - max(cl, cr), 0.0f);
-        sr = max(max(left.velocity_x, right.velocity_x) + max(cl, cr), 0.0f);
+        sl = clamp(min(left.velocity_x, right.velocity_x) - max(cl, cr), -smax_cap, 0.0f);
+        sr = clamp(max(left.velocity_x, right.velocity_x) + max(cl, cr), 0.0f, smax_cap);
     }
 
     conserved_t lc = primitive_2_conserved(left,  gamma);
@@ -559,11 +559,11 @@ conserved_t hllc_fluxes(thread primitive_t &left, thread primitive_t &right,
 
 /* riemann_fluxes — dispatcher, mirrors gpu_hydro.cuf (no MHD) */
 conserved_t riemann_fluxes(thread primitive_t &left, thread primitive_t &right,
-                            float gamma, float smallr, float smallc2, int riemann) {
+                            float gamma, float smallr, float smallc2, float smax_cap, int riemann) {
     if      (riemann == SOLVER_HLLC) return hllc_fluxes(left, right, gamma, smallr, smallc2);
-    else if (riemann == SOLVER_HLL)  return hll_fluxes (left, right, gamma, smallr, smallc2, false);
-    else if (riemann == SOLVER_LLF)  return hll_fluxes (left, right, gamma, smallr, smallc2, true);
-    else                             return hll_fluxes (left, right, gamma, smallr, smallc2, true); /* LLF */
+    else if (riemann == SOLVER_HLL)  return hll_fluxes (left, right, gamma, smallr, smallc2, smax_cap, false);
+    else if (riemann == SOLVER_LLF)  return hll_fluxes (left, right, gamma, smallr, smallc2, smax_cap, true);
+    else                             return hll_fluxes (left, right, gamma, smallr, smallc2, smax_cap, true); /* LLF */
 }
 
 /* ===========================================================================
@@ -579,7 +579,7 @@ void riemann_driver(
     threadgroup interfaces_y_t &left_y,  threadgroup interfaces_y_t &right_y,
     threadgroup interfaces_z_t &left_z,  threadgroup interfaces_z_t &right_z,
     int thread_idx, uint threads_per_tg,
-    float gamma, float smallr, float smallc2, int riemann)
+    float gamma, float smallr, float smallc2, float smax_cap, int riemann)
 {
     /* interface_array_size = (2*NSUBGRID_HY+1)*(2*NSUBGRID_HY)^2 = 3*4 = 12 for nsubgrid=1 */
     const int ias = (2*NSUBGRID_HY+1) * (2*NSUBGRID_HY) * (2*NSUBGRID_HY);
@@ -599,7 +599,7 @@ void riemann_driver(
             R.velocity_y=right_x.velocity_y[i][j][k]; R.velocity_z=right_x.velocity_z[i][j][k];
             R.pressure=right_x.pressure[i][j][k];
 
-            flux = riemann_fluxes(L, R, gamma, smallr, smallc2, riemann);
+            flux = riemann_fluxes(L, R, gamma, smallr, smallc2, smax_cap, riemann);
 
             left_x.density   [i][j][k] = flux.density;
             left_x.velocity_x[i][j][k] = flux.momentum_x;
@@ -619,7 +619,7 @@ void riemann_driver(
             R.velocity_y=right_y.velocity_z[i][j][k];
             R.velocity_z=right_y.velocity_x[i][j][k];
 
-            flux = riemann_fluxes(L, R, gamma, smallr, smallc2, riemann);
+            flux = riemann_fluxes(L, R, gamma, smallr, smallc2, smax_cap, riemann);
 
             /* Rotate flux back: mx→vy slot, my→vz slot, mz→vx slot */
             left_y.density   [i][j][k] = flux.density;
@@ -640,7 +640,7 @@ void riemann_driver(
             R.velocity_y=right_z.velocity_x[i][j][k];
             R.velocity_z=right_z.velocity_y[i][j][k];
 
-            flux = riemann_fluxes(L, R, gamma, smallr, smallc2, riemann);
+            flux = riemann_fluxes(L, R, gamma, smallr, smallc2, smax_cap, riemann);
 
             /* Rotate flux back: mx→vz slot, my→vx slot, mz→vy slot */
             left_z.density   [i][j][k] = flux.density;
@@ -1151,6 +1151,7 @@ kernel void hydro_integrator_kernel(
     constant float      *constant_gravity [[buffer(17)]],
     device const int    *father           [[buffer(18)]],
     device const float  *f                [[buffer(19)]],
+    constant float      &smax_cap         [[buffer(20)]],
     uint block_idx      [[threadgroup_position_in_grid]],
     uint thread_idx     [[thread_position_in_threadgroup]],
     uint threads_per_tg [[threads_per_threadgroup]])
@@ -1184,7 +1185,7 @@ kernel void hydro_integrator_kernel(
      * Compute fluxes via Riemann solver (overwrites left_interfaces_*)
      * ========================================================================= */
     riemann_driver(left_x, right_x, left_y, right_y, left_z, right_z,
-                   int(thread_idx), threads_per_tg, gamma, smallr, smallc2, riemann);
+                   int(thread_idx), threads_per_tg, gamma, smallr, smallc2, smax_cap, riemann);
 
     /* Zero fine-level fluxes at refined faces so they do not corrupt coarse update. */
     if (ilevel < levelmax) {

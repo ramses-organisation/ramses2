@@ -891,7 +891,7 @@ contains
     !
     integer(kind=4) :: head_idx, num_subgrids
     integer :: threads_per_block, num_blocks
-    real(dp) :: dt, dx, gamma, smallr, smallc2, switch_llf_dmin, switch_llf_pmin, etamag
+    real(dp) :: dt, dx, smax_cap, gamma, smallr, smallc2, switch_llf_dmin, switch_llf_pmin, etamag
     integer :: slope, riemann, slope_mag, riemann2d
     logical :: induction
 #ifdef MHD
@@ -917,6 +917,7 @@ contains
 
     dt = sim%g%dtnew(ilevel)
     dx = sim%r%boxlen/2**ilevel
+    smax_cap = sim%r%courant_factor*(sim%r%boxlen/2**ilevel)/sim%g%dtnew(ilevel)
     gamma = sim%r%gamma
     smallr = sim%r%smallr
     smallc2 = sim%r%smallc**2
@@ -945,7 +946,7 @@ contains
     threads_per_block = ((threads_per_block + 31) / 32) * 32
     call hydro_integrator_paper_kernel<<<num_blocks, threads_per_block>>>(grid, uold, unew, f, father, nbor, &
          & head_idx, num_subgrids, sim%m%ngridmax, ilevel, sim%r%levelmin, sim%r%nlevelmax, &
-         & gamma, dt, dx, slope, riemann, constant_gravity)
+         & gamma, dt, dx, smax_cap, slope, riemann, constant_gravity)
     call GPU_Error_Check(__FILE__, __LINE__)
 #else
     if(nsubgrid == 1)threads_per_block = 64
@@ -968,7 +969,7 @@ contains
     call hydro_integrator_kernel<<<num_blocks, threads_per_block, shmem_bytes>>>(grid, uold, unew, bold, bnew, &
          & f, father, nbor, &
          & head_idx, num_subgrids, sim%m%ngridmax, ilevel, sim%r%levelmin, sim%r%nlevelmax, &
-         & gamma, smallr, smallc2, dt, dx, slope, slope_mag, riemann, riemann2d, &
+         & gamma, smallr, smallc2, dt, dx, smax_cap, slope, slope_mag, riemann, riemann2d, &
          & switch_llf_dmin, switch_llf_pmin, induction, etamag, constant_gravity)
     call GPU_Error_Check(__FILE__, __LINE__)
 #else
@@ -1000,14 +1001,14 @@ contains
        call hydro_integrator_pair_kernel<<<num_blocks, threads_per_block, shmem_bytes>>>(grid, uold, unew, bold, bnew, &
             & f, father, nbor, &
             & head_idx, num_subgrids, sim%m%ngridmax, ilevel, sim%r%levelmin, sim%r%nlevelmax, &
-            & gamma, smallr, smallc2, dt, dx, slope, slope_mag, riemann, riemann2d, &
+            & gamma, smallr, smallc2, dt, dx, smax_cap, slope, slope_mag, riemann, riemann2d, &
             & switch_llf_dmin, switch_llf_pmin, induction, etamag, constant_gravity)
     else
 #endif
     call hydro_integrator_kernel<<<num_blocks, threads_per_block, shmem_bytes>>>(grid, uold, unew, bold, bnew, &
          & f, father, nbor, &
          & head_idx, num_subgrids, sim%m%ngridmax, ilevel, sim%r%levelmin, sim%r%nlevelmax, &
-         & gamma, smallr, smallc2, dt, dx, slope, slope_mag, riemann, riemann2d, &
+         & gamma, smallr, smallc2, dt, dx, smax_cap, slope, slope_mag, riemann, riemann2d, &
          & switch_llf_dmin, switch_llf_pmin, induction, etamag, constant_gravity)
 #ifdef HYDRO_PAIR
     endif
@@ -1039,7 +1040,7 @@ contains
       istat = cudaFuncSetAttribute(uct_face_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, shmem_bytes)
       call check_smem(istat, shmem_bytes)
       call uct_face_kernel<<<num_blocks, uct_threads, shmem_bytes>>>(grid, uold, bold, f, nbor, &
-           & uct_products, head_idx, num_subgrids, gamma, smallr, smallc2, dt, dx, &
+           & uct_products, head_idx, num_subgrids, gamma, smallr, smallc2, dt, dx, smax_cap, &
            & slope, slope_mag, induction, constant_gravity)
       call GPU_Error_Check(__FILE__, __LINE__)
       if(ilevel > sim%r%levelmin)then
@@ -1054,7 +1055,7 @@ contains
             istat = cudaFuncSetAttribute(uct_ghost_face_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, shmem_bytes)
             call check_smem(istat, shmem_bytes)
             call uct_ghost_face_kernel<<<num_ghost, uct_ghost_threads, shmem_bytes>>>(grid, uold, bold, f, nbor, &
-                 & uct_products, uct_ghost_list, head_idx, num_subgrids, gamma, smallr, smallc2, dt, dx, &
+                 & uct_products, uct_ghost_list, head_idx, num_subgrids, gamma, smallr, smallc2, dt, dx, smax_cap, &
                  & slope, slope_mag, induction, constant_gravity)
             call GPU_Error_Check(__FILE__, __LINE__)
             call uct_ghost_bn_kernel<<<num_ghost, 128>>>(bold, nbor, uct_products, uct_ghost_list, &

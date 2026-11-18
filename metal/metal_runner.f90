@@ -270,7 +270,7 @@ subroutine metal_godunov(sim, ilevel)
   type(ramses_t), intent(inout) :: sim
   integer,        intent(in)    :: ilevel
 
-  real(c_float) :: gamma, smallr, smallc2, dt, dx
+  real(c_float) :: gamma, smallr, smallc2, dt, dx, smax_cap
   real(c_float) :: constant_gravity(3)
 #ifdef MHD
   integer(c_int) :: head_idx, num_subgrids, nsubgrid_l, nsubgridtondim_l, induction
@@ -281,6 +281,7 @@ subroutine metal_godunov(sim, ilevel)
   smallc2          = real(sim%r%smallc**2,          c_float)
   dt               = real(sim%g%dtnew(ilevel),      c_float)
   dx               = real(sim%r%boxlen / 2**ilevel, c_float)
+  smax_cap         = real(sim%r%courant_factor*(sim%r%boxlen/2**ilevel)/sim%g%dtnew(ilevel), c_float)
   constant_gravity = real(sim%r%constant_gravity,   c_float)
 
 #ifdef MHD
@@ -314,7 +315,7 @@ subroutine metal_godunov(sim, ilevel)
        int(sim%r%levelmin,     c_int), &
        int(sim%r%nlevelmax,    c_int), &
        gamma, smallr, smallc2,         &
-       dt, dx,                         &
+       dt, dx, smax_cap,               &
        int(sim%r%slope_type,   c_int), &
 #ifdef MHD
        int(sim%r%slope_mag_type, c_int), &
