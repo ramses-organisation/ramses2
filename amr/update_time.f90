@@ -16,6 +16,7 @@ subroutine m_update_time(pst,ilevel,done)
   use update_rt_c_module, only: r_rt_neq_updates
   use update_cr_c_module, only: r_cr_updates
   use turb_update_module, only: r_update_turb
+  use color_module, only: c_bold, c_dim, c_cyan, c_green, c_yellow, c_mark, c_reset
   implicit none
   type(pst_t)::pst
   integer::ilevel
@@ -26,6 +27,7 @@ subroutine m_update_time(pst,ilevel,done)
   double precision,save::ttstart=0.0
   real(kind=8)::dt,econs,mcons
   integer::i,itest
+  character(len=256)::line
   type(in_broadcast_aexp_t)::in_broadcast_aexp
 #ifdef _METAL
   real(kind=8), external :: wallclock
@@ -96,11 +98,12 @@ subroutine m_update_time(pst,ilevel,done)
         !-------------------------------
         ! Output AMR structure to screen
         !-------------------------------
-        write(*,*)'Mesh structure'
+        write(*,'(1x,a)')c_bold()//c_cyan()//'Mesh structure'//c_reset()
         do i=r%levelmin,r%nlevelmax
-           if(m%noct_tot(i)>0)write(*,999)i,m%noct_tot(i),m%noct_min(i),m%noct_max(i),m%noct_tot(i)/g%ncpu
+           if(m%noct_tot(i)>0)write(*,999)c_bold(),i,m%noct_tot(i),c_reset()//c_dim(),&
+                & m%noct_min(i),m%noct_max(i),m%noct_tot(i)/g%ncpu,c_reset()
         end do
-999     format(' Level ',I0,' has ',I0,' grids (',I0,',',I0,',',I0,')')
+999     format(' ',A,'Level ',I0,' has ',I0,' grids ',A,'(',I0,',',I0,',',I0,')',A)
 
         !------------------------
         ! Output timing data
@@ -112,39 +115,40 @@ subroutine m_update_time(pst,ilevel,done)
         !----------------------------------------------
         if(r%hydro)then
 #ifdef MHD
-           write(*,779)g%nstep_coarse,mcons,econs,g%epot_tot,g%ekin_tot,g%eint_tot,g%emag_tot
+           write(*,779)c_bold()//c_yellow(),g%nstep_coarse,c_reset(),mcons,econs,g%epot_tot,g%ekin_tot,g%eint_tot,g%emag_tot
 #else
-           write(*,778)g%nstep_coarse,mcons,econs,g%epot_tot,g%ekin_tot,g%eint_tot
+           write(*,778)c_bold()//c_yellow(),g%nstep_coarse,c_reset(),mcons,econs,g%epot_tot,g%ekin_tot,g%eint_tot
 #endif
         else
-           write(*,777)g%nstep_coarse,mcons,econs,g%epot_tot,g%ekin_tot
+           write(*,777)c_bold()//c_yellow(),g%nstep_coarse,c_reset(),mcons,econs,g%epot_tot,g%ekin_tot
         end if
         if(r%star)write(*,'(" Total mass in stars=",1PE14.7)')g%mass_star_tot
         if(r%sink.or.r%core)write(*,'(" Total mass in sinks=",1PE14.7)')g%mass_sink_tot
-777     format(' Main step= ',i0,' mcons=',1pe9.2,' econs=',1pe9.2,' epot=',1pe9.2,' ekin=',1pe9.2)
-778     format(' Main step= ',i0,' mcons=',1pe9.2,' econs=',1pe9.2,' epot=',1pe9.2,' ekin=',1pe9.2,' eint=',1pe9.2)
-779     format(' Main step= ',i0,' mcons=',1pe9.2,' econs=',1pe9.2,' epot=',1pe9.2,' ekin=',1pe9.2,' eint=',1pe9.2,' emag=',1pe9.2)
+777     format(' ',a,'Main step= ',i0,a,' mcons=',1pe9.2,' econs=',1pe9.2,' epot=',1pe9.2,' ekin=',1pe9.2)
+778     format(' ',a,'Main step= ',i0,a,' mcons=',1pe9.2,' econs=',1pe9.2,' epot=',1pe9.2,' ekin=',1pe9.2,' eint=',1pe9.2)
+779     format(' ',a,'Main step= ',i0,a,' mcons=',1pe9.2,' econs=',1pe9.2,' epot=',1pe9.2,' ekin=',1pe9.2,' eint=',1pe9.2,' emag=',1pe9.2)
 
         !----------------------------------------------
         ! Output fine step information and used memory
         !----------------------------------------------
         if(r%part)then
 #if defined(_CUDA) || defined(_METAL)
-           write(*,888)g%nstep,g%t,dt,g%aexp,real(100.0D0*dble(m%noct_used_max)/dble(m%ngridmax)),&
+           write(line,888)g%nstep,g%t,dt,g%aexp,real(100.0D0*dble(m%noct_used_max)/dble(m%ngridmax)),&
                 & real(100.0D0*dble(m%ifree_cache)/dble(m%ncachemax)),&
                 & real(100.0D0*dble(p%npart_max)/dble(r%npartmax+1))
 #else
-           write(*,888)g%nstep,g%t,dt,g%aexp,real(100.0D0*dble(m%noct_used_max)/dble(m%ngridmax)),&
+           write(line,888)g%nstep,g%t,dt,g%aexp,real(100.0D0*dble(m%noct_used_max)/dble(m%ngridmax)),&
                 & real(100.0D0*dble(p%npart_max)/dble(r%npartmax+1))
 #endif
         else
 #if defined(_CUDA) || defined(_METAL)
-           write(*,888)g%nstep,g%t,dt,g%aexp,real(100.0D0*dble(m%noct_used_max)/dble(m%ngridmax)),&
+           write(line,888)g%nstep,g%t,dt,g%aexp,real(100.0D0*dble(m%noct_used_max)/dble(m%ngridmax)),&
                 & real(100.0D0*dble(m%ifree_cache)/dble(m%ncachemax))
 #else
-                write(*,888)g%nstep,g%t,dt,g%aexp,real(100.0D0*dble(m%noct_used_max)/dble(m%ngridmax))
+           write(line,888)g%nstep,g%t,dt,g%aexp,real(100.0D0*dble(m%noct_used_max)/dble(m%ngridmax))
 #endif
         endif
+        write(*,'(a)')c_dim()//trim(line)//c_reset()
         itest=1
      end if
      g%output_done=.false.
@@ -153,7 +157,7 @@ subroutine m_update_time(pst,ilevel,done)
      ! Exit program
      !---------------
      if(g%t>=r%tout(r%noutput).or.g%aexp>=r%aout(r%noutput).or.g%nstep_coarse>=r%nstepmax)then
-        write(*,*)'Run completed'
+        write(*,'(1x,a)')c_bold()//c_green()//c_mark()//'Run completed'//c_reset()
 #ifdef _METAL
         ttend = wallclock()
 #else
@@ -176,21 +180,22 @@ subroutine m_update_time(pst,ilevel,done)
      if(itest==0)then
         if(r%part)then
 #if defined(_CUDA) || defined(_METAL)
-           write(*,888)g%nstep,g%t,dt,g%aexp,real(100.0D0*dble(m%noct_used_max)/dble(m%ngridmax)),&
+           write(line,888)g%nstep,g%t,dt,g%aexp,real(100.0D0*dble(m%noct_used_max)/dble(m%ngridmax)),&
                 & real(100.0D0*dble(m%ifree_cache)/dble(m%ncachemax)),&
                 & real(100.0D0*dble(p%npart_max)/dble(r%npartmax+1))
 #else
-           write(*,888)g%nstep,g%t,dt,g%aexp,real(100.0D0*dble(m%noct_used_max)/dble(m%ngridmax)),&
+           write(line,888)g%nstep,g%t,dt,g%aexp,real(100.0D0*dble(m%noct_used_max)/dble(m%ngridmax)),&
                 & real(100.0D0*dble(p%npart_max)/dble(r%npartmax+1))
 #endif
         else
 #if defined(_CUDA) || defined(_METAL)
-           write(*,888)g%nstep,g%t,dt,g%aexp,real(100.0D0*dble(m%noct_used_max)/dble(m%ngridmax)),&
+           write(line,888)g%nstep,g%t,dt,g%aexp,real(100.0D0*dble(m%noct_used_max)/dble(m%ngridmax)),&
                 & real(100.0D0*dble(m%ifree_cache)/dble(m%ncachemax))
 #else
-                write(*,888)g%nstep,g%t,dt,g%aexp,real(100.0D0*dble(m%noct_used_max)/dble(m%ngridmax))
+           write(line,888)g%nstep,g%t,dt,g%aexp,real(100.0D0*dble(m%noct_used_max)/dble(m%ngridmax))
 #endif
         endif
+        write(*,'(a)')c_dim()//trim(line)//c_reset()
      end if
   end if
 888 format(' Fine step= ',i0,' t=',1pe12.5,' dt=',1pe10.3,' a=',1pe10.3,' mem=',0pF0.1,'% ',0pF0.1,'% ',0pF0.1,'%')
@@ -294,19 +299,20 @@ end subroutine r_hash_stats
 !##############################################################
 !##############################################################
 subroutine writemem(usedmem)
+  use color_module, only: c_dim, c_reset
   real::usedmem
 
   if(usedmem>1024.**3.)then
-     write(*,999)usedmem/1024.**3.
+     write(*,999)c_dim(),usedmem/1024.**3.,c_reset()
   else if (usedmem>1024.**2.) then
-     write(*,998)usedmem/1024.**2
+     write(*,998)c_dim(),usedmem/1024.**2,c_reset()
   else if (usedmem>1024.) then
-     write(*,997)usedmem/1024.
+     write(*,997)c_dim(),usedmem/1024.,c_reset()
   endif
 
-997 format(' Used memory: ',F0.1,' kb')
-998 format(' Used memory: ',F0.1,' Mb')
-999 format(' Used memory: ',F0.1,' Gb')
+997 format(' ',A,'Used memory: ',F0.1,' kb',A)
+998 format(' ',A,'Used memory: ',F0.1,' Mb',A)
+999 format(' ',A,'Used memory: ',F0.1,' Gb',A)
 
 end subroutine writemem
 

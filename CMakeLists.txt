@@ -378,6 +378,7 @@ set(fortran_files
   amr/sort.f90
   amr/marshal.f90
   amr/cache.f90
+  amr/color_module.f90
   amr/timer.f90
   amr/title.f90
   amr/units.f90

@@ -99,12 +99,14 @@ subroutine m_output_timer(write_file,filename)
   use amr_parameters, only: flen
   use mdl_module
   use timer_module
+  use color_module, only: c_bold, c_reset
   implicit none
   real(kind=8)::total
   character(len=*)::filename
   character(len=flen)::fileloc
   logical::write_file
   integer::ilun,jtimer
+  character(len=:),allocatable::cb,cr
   if(write_file)then
      ilun=11
      fileloc=TRIM(filename) ! Open file for timing info
@@ -112,7 +114,12 @@ subroutine m_output_timer(write_file,filename)
   else
      ilun=6
   endif
-  write (ilun,'(/a,i7,a)') '     seconds         %    STEP'
+  if(write_file)then
+     cb=''; cr=''
+  else
+     cb=c_bold(); cr=c_reset()
+  endif
+  write (ilun,'(/a)') cb//'     seconds         %    STEP'//cr
   total = 1e-9
   do jtimer = 1,ntimer
      total = total + time(jtimer)
@@ -121,7 +128,7 @@ subroutine m_output_timer(write_file,filename)
      if (time(jtimer)/total >= 0.001) write (ilun,'(f12.3,4x,f6.1,4x,a24)') &
           time(jtimer), 100.*time(jtimer)/total,labels(jtimer)
   end do
-  write (ilun,'(f12.3,4x,f6.1,4x,a)') total, 100., 'TOTAL'
+  write (ilun,'(a,f12.3,4x,f6.1,4x,a)') cb, total, 100., 'TOTAL'//cr
   write(ilun,*)
   if(write_file)close(ilun)
 end subroutine m_output_timer

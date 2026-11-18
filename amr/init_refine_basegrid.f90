@@ -6,6 +6,7 @@ contains
 !#########################################################################
 subroutine m_init_refine_basegrid(pst)
   use ramses_commons, only: pst_t
+  use color_module, only: c_bold, c_green, c_mark, c_reset
   use flag_utils, only: m_flag_fine
 #ifdef GRAV
   use rho_fine_module, only: m_rho_fine
@@ -21,7 +22,7 @@ subroutine m_init_refine_basegrid(pst)
 
   if(r%verbose)write(*,*)'Entering init_refine_basegrid'
 
-  write(*,'(" Building initial base grid at level ",I0)')r%levelmin
+  write(*,'(1x,A,"Building initial base grid at level ",I0,A)')c_bold()//c_green()//c_mark(),r%levelmin,c_reset()
 
   ! Call recursive slave routine
   call r_init_refine_basegrid(pst,r%levelmin,1)

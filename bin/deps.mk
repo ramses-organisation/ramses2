@@ -1,7 +1,7 @@
 # Auto-generated Fortran module dependency rules for parallel make.
 # Regenerate: python3 utils/py/gen_deps.py > bin/deps.mk
 
-adaptive_loop.o: amr_step.o clump_finder.o init_amr.o init_cr.o init_hydro.o init_part.o init_refine_adaptive.o init_refine_basegrid.o init_refine_ramses.o init_refine_restart.o init_rt.o init_time.o init_xion.o input_part.o load_balance.o mdl.o ramses_commons.o read_params.o refine_utils.o turb_init.o update_time.o
+adaptive_loop.o: amr_step.o clump_finder.o color_module.o init_amr.o init_cr.o init_hydro.o init_part.o init_refine_adaptive.o init_refine_basegrid.o init_refine_ramses.o init_refine_restart.o init_rt.o init_time.o init_xion.o input_part.o load_balance.o mdl.o ramses_commons.o read_params.o refine_utils.o turb_init.o update_time.o
 amr_commons.o: amr_parameters.o cr_commons.o cr_parameters.o domain_hilbert.o hash.o hydro_commons.o hydro_parameters.o oct_commons.o rt_commons.o rt_parameters.o
 amr_step.o: clump_finder.o cooling_fine.o core_step.o core_to_star_formation.o cr_godunov_fine.o cr_step.o feedback.o flag_utils.o godunov_fine.o interpol_phi.o lightcone.o move_fine.o movie.o newdt_fine.o output_amr.o pm_parameters.o ramses_commons.o refine_utils.o rho_fine.o rt_godunov_fine.o rt_step.o sink_evolution.o sink_formation.o sink_mechanical.o sink_merger.o source_hydro_fine.o star_formation.o synchro_hydro_fine.o tree_formation.o turb_driving.o turb_hydro.o update_time.o upload.o
 boundana.o: amr_commons.o amr_parameters.o hydro_parameters.o
@@ -62,7 +62,7 @@ init_hydro.o: amr_commons.o amr_parameters.o mdl.o mdl_commons.o ramses_commons.
 init_neq_chem.o: amr_commons.o coolrates_module.o hydro_parameters.o
 init_part.o: amr_commons.o amr_parameters.o mdl.o mdl_commons.o pm_commons.o pm_parameters.o ramses_commons.o
 init_refine_adaptive.o: cr_upload.o flag_utils.o init_part.o input_hydro_grafic.o input_part.o input_part_zoom.o ramses_commons.o refine_utils.o rt_upload.o upload.o
-init_refine_basegrid.o: amr_parameters.o flag_utils.o hash.o hilbert.o input_hydro_grafic.o mdl.o mdl_commons.o ramses_commons.o
+init_refine_basegrid.o: amr_parameters.o color_module.o flag_utils.o hash.o hilbert.o input_hydro_grafic.o mdl.o mdl_commons.o ramses_commons.o
 init_refine_ramses.o: amr_parameters.o hash.o hilbert.o hydro_parameters.o init_refine_basegrid.o input_hydro_condinit.o load_balance.o mdl.o mdl_commons.o output_amr.o ramses_commons.o read_params.o
 init_refine_restart.o: amr_parameters.o cr_parameters.o hash.o hilbert.o hydro_parameters.o init_refine_basegrid.o load_balance.o mdl.o mdl_commons.o output_amr.o output_rt.o ramses_commons.o read_params.o rt_parameters.o
 init_rt.o: amr_commons.o amr_parameters.o mdl.o mdl_commons.o ramses_commons.o
@@ -109,7 +109,7 @@ poisson_flag.o: amr_commons.o amr_parameters.o hash.o hydro_parameters.o ramses_
 posix_io.o: amr_parameters.o
 ramses_commons.o: amr_commons.o amr_parameters.o clfind_commons.o cooling_module.o coolrates_module.o cr_parameters.o hydro_parameters.o mdl.o mdl_commons.o pm_commons.o rt_parameters.o rt_spectra.o turb_commons.o
 read_cr_params.o: amr_parameters.o constants.o cr_parameters.o hydro_parameters.o mdl.o movie.o ramses_commons.o
-read_params.o: amr_commons.o amr_parameters.o constants.o core_params.o cr_parameters.o hilbert.o hydro_parameters.o mdl.o mdl_commons.o movie.o ramses_commons.o read_cr_params.o read_rt_params.o rt_parameters.o
+read_params.o: amr_commons.o amr_parameters.o color_module.o constants.o core_params.o cr_parameters.o hilbert.o hydro_parameters.o mdl.o mdl_commons.o movie.o ramses_commons.o read_cr_params.o read_rt_params.o rt_parameters.o
 read_rt_params.o: amr_parameters.o constants.o hydro_parameters.o mdl.o movie.o ramses_commons.o rt_parameters.o
 refine_utils.o: amr_commons.o amr_parameters.o boundaries.o cache.o cache_commons.o call_back.o cr_parameters.o flag_utils.o hash.o hilbert.o hydro_parameters.o init_refine_basegrid.o load_balance.o marshal.o mdl.o mdl_commons.o nbors_utils.o oct_commons.o ramses_commons.o rt_parameters.o
 rho_ana.o: amr_parameters.o
@@ -141,7 +141,7 @@ star_formation_common.o: ramses_commons.o rt_spectra.o
 synchro_hydro_fine.o: amr_commons.o amr_parameters.o mdl.o mdl_commons.o ramses_commons.o
 task_manager.o: amr_commons.o amr_parameters.o cache.o cache_commons.o call_back.o clfind_commons.o clump_finder.o clump_merger.o cooling_fine.o core_clump_output.o core_evolution.o core_formation.o core_merger.o core_retirement.o core_to_star_formation.o courant_fine.o cr_godunov_fine.o cr_init_flow_fine.o cr_input_condinit.o cr_source_terms.o cr_upload.o feedback.o flag_utils.o godunov_fine.o hash.o hilbert.o init_amr.o init_cr.o init_hydro.o init_part.o init_refine_basegrid.o init_refine_ramses.o init_refine_restart.o init_rt.o init_time.o init_xion.o input_hydro_condinit.o input_hydro_gadget.o input_hydro_grafic.o input_part.o input_part_ascii.o input_part_gadget.o input_part_grafic.o input_part_ramses.o input_part_restart.o input_part_zoom.o interpol_phi.o lightcone.o load_balance.o mdl.o mdl_commons.o move_fine.o movie.o newdt_fine.o output_amr.o output_clump.o output_cr.o output_hydro.o output_part.o output_poisson.o output_rt.o ramses_commons.o read_params.o refine_utils.o rho_fine.o rt_godunov_fine.o rt_init_flow_fine.o rt_input_condinit.o rt_star_feedback.o rt_upload.o sink_evolution.o sink_formation.o sink_mechanical.o sink_merger.o smooth.o source_hydro_fine.o star_formation.o synchro_hydro_fine.o tree_formation.o turb_driving.o turb_hydro.o turb_init.o turb_update.o update_time.o upload.o
 test_cooling.o: amr_commons.o amr_parameters.o constants.o cooling_module.o coolrates_module.o hydro_parameters.o init_neq_chem.o neq_cooling_module.o rt_parameters.o
-timer.o: amr_parameters.o mdl.o
+timer.o: amr_parameters.o color_module.o mdl.o
 tree_formation.o: amr_commons.o amr_parameters.o cache.o cache_commons.o clfind_commons.o clump_finder.o clump_merger.o constants.o hydro_parameters.o mdl.o mdl_commons.o pm_commons.o ramses_commons.o rngstream.o
 turb_commons.o: amr_commons.o amr_parameters.o
 turb_driving.o: amr_commons.o amr_parameters.o mdl.o mdl_commons.o ramses_commons.o turb_commons.o
@@ -150,7 +150,7 @@ turb_init.o: amr_commons.o mdl.o mdl_commons.o ramses_commons.o turb_commons.o
 turb_update.o: amr_commons.o mdl.o mdl_commons.o ramses_commons.o turb_commons.o
 umuscl.o: amr_commons.o amr_parameters.o hydro_parameters.o
 units.o: amr_commons.o amr_parameters.o constants.o
-update_time.o: amr_parameters.o cr_init_flow_fine.o hash.o mdl.o mdl_commons.o ramses_commons.o rt_init_flow_fine.o turb_update.o
+update_time.o: amr_parameters.o color_module.o cr_init_flow_fine.o hash.o mdl.o mdl_commons.o ramses_commons.o rt_init_flow_fine.o turb_update.o
 upload.o: amr_commons.o amr_parameters.o cache.o cache_commons.o hydro_parameters.o mdl.o mdl_commons.o nbors_utils.o ramses_commons.o
 vecpotentialinit.o: amr_commons.o amr_parameters.o
 write_gitinfo.o: amr_parameters.o

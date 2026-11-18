@@ -16,6 +16,7 @@ subroutine m_read_params(pst)
   use rt_params_module
   use cr_params_module
   use constants
+  use color_module, only: init_color, c_bold, c_dim, c_cyan, c_reset
 #ifdef DO_RTZ
   use rtz_module, only: elements, n_elements !, initialize_elements
 #endif
@@ -786,16 +787,17 @@ subroutine m_read_params(pst)
   !--------------------------------------------------
   ! Advertise RAMSES
   !--------------------------------------------------
-  write(*,*)'_/_/_/       _/_/     _/    _/    _/_/_/   _/_/_/_/    _/_/_/  '
-  write(*,*)'_/    _/    _/  _/    _/_/_/_/   _/    _/  _/         _/    _/ '
-  write(*,*)'_/    _/   _/    _/   _/ _/ _/   _/        _/         _/       '
-  write(*,*)'_/_/_/     _/_/_/_/   _/    _/     _/_/    _/_/_/       _/_/   '
-  write(*,*)'_/    _/   _/    _/   _/    _/         _/  _/               _/ '
-  write(*,*)'_/    _/   _/    _/   _/    _/   _/    _/  _/         _/    _/ '
-  write(*,*)'_/    _/   _/    _/   _/    _/    _/_/_/   _/_/_/_/    _/_/_/  '
-  write(*,*)'                        Version 3.0                            '
-  write(*,*)'       written by Romain Teyssier (Princeton University)       '
-  write(*,*)'        (c) CEA 1999-2007, UZH 2008-2021, PU 2022-2026         '
+  call init_color()
+  write(*,'(1x,a)')c_bold()//c_cyan()//'_/_/_/       _/_/     _/    _/    _/_/_/   _/_/_/_/    _/_/_/  '//c_reset()
+  write(*,'(1x,a)')c_bold()//c_cyan()//'_/    _/    _/  _/    _/_/_/_/   _/    _/  _/         _/    _/ '//c_reset()
+  write(*,'(1x,a)')c_bold()//c_cyan()//'_/    _/   _/    _/   _/ _/ _/   _/        _/         _/       '//c_reset()
+  write(*,'(1x,a)')c_bold()//c_cyan()//'_/_/_/     _/_/_/_/   _/    _/     _/_/    _/_/_/       _/_/   '//c_reset()
+  write(*,'(1x,a)')c_bold()//c_cyan()//'_/    _/   _/    _/   _/    _/         _/  _/               _/ '//c_reset()
+  write(*,'(1x,a)')c_bold()//c_cyan()//'_/    _/   _/    _/   _/    _/   _/    _/  _/         _/    _/ '//c_reset()
+  write(*,'(1x,a)')c_bold()//c_cyan()//'_/    _/   _/    _/   _/    _/    _/_/_/   _/_/_/_/    _/_/_/  '//c_reset()
+  write(*,'(1x,a)')c_bold()//'                        Version 3.0                            '//c_reset()
+  write(*,'(1x,a)')c_dim()//'       written by Romain Teyssier (Princeton University)       '//c_reset()
+  write(*,'(1x,a)')c_dim()//'        (c) CEA 1999-2007, UZH 2008-2021, PU 2022-2026         '//c_reset()
   write(*,*)' '
 
   write(*,'(" Working with ndim = ",I0)')ndim

@@ -20,6 +20,7 @@ subroutine adaptive_loop(pst)
   use load_balance_module, only: r_balance_part
   use clump_finder_module, only: m_clump_finder
   use refine_utils, only: m_refine_fine
+  use color_module, only: c_bold, c_dim, c_green, c_mark, c_reset
 #ifdef _CUDA
   use gpu_manager, only: r_set_grid_device
   use nvtx
@@ -94,14 +95,14 @@ subroutine adaptive_loop(pst)
 
   ! Timing since startup
   tt2 = mdl_wtime(mdl)
-  print '(A,F0.7)',' Time elapsed since startup: ',tt2-tt1
+  print '(A,F0.7,A)',c_dim()//' Time elapsed since startup: ',tt2-tt1,c_reset()
 
   ! Output mesh structure
   do ilevel=r%levelmin,r%nlevelmax
-     if(pst%s%m%noct_tot(ilevel)>0)write(*,999)&
-          & ilevel,pst%s%m%noct_tot(ilevel),pst%s%m%noct_min(ilevel),pst%s%m%noct_max(ilevel),pst%s%m%noct_tot(ilevel)/mdl_threads(mdl)
+     if(pst%s%m%noct_tot(ilevel)>0)write(*,999)c_bold(),&
+          & ilevel,pst%s%m%noct_tot(ilevel),c_reset()//c_dim(),pst%s%m%noct_min(ilevel),pst%s%m%noct_max(ilevel),pst%s%m%noct_tot(ilevel)/mdl_threads(mdl),c_reset()
   end do
-999 format(' Level ',I0,' has ',I0,' grids (',I0,',',I0,',',I0,')')
+999 format(' ',A,'Level ',I0,' has ',I0,' grids ',A,'(',I0,',',I0,',',I0,')',A)
 
   g%nstep_coarse_old=g%nstep_coarse
   if(r%nrestart>0)g%nstep_coarse_old=g%nstep_coarse-1
@@ -129,7 +130,7 @@ subroutine adaptive_loop(pst)
   ! Static mesh runs never refine
   if(r%static_mesh)call m_refine_fine(pst,r%levelmin)
 
-  write(*,*)'Starting time integration'
+  write(*,'(1x,a)')c_bold()//c_green()//c_mark()//'Starting time integration'//c_reset()
 
   done = .false.
   do while(.not.done) ! Main time loop
@@ -166,7 +167,7 @@ subroutine adaptive_loop(pst)
      tt2 = mdl_wtime(mdl)
 #endif
      if(g%control_due)then
-        if(.not. done)print '(A,F0.7)',' Time elapsed since last coarse step: ',tt2-tt1
+        if(.not. done)print '(A,F0.7,A)',c_dim()//' Time elapsed since last coarse step: ',tt2-tt1,c_reset()
      endif
 
      call getmem(core_mem)
