@@ -10,6 +10,10 @@ module gpu_runner
   use cudafor
   use curand_device
   implicit none
+#if defined(GPU_SM) && GPU_SM == 100 && NDIM == 3 && NVAR == 5 && !defined(PAPER) \
+    && (NSUBGRID <= 2 || (!defined(MHD) && NSUBGRID == 4))
+#define B200_GODUNOV
+#endif
   integer, dimension(1:3), parameter::n_nbor = (/1,2,2/)
 
   !> Various parameters on the device
@@ -875,7 +879,7 @@ contains
 #ifndef PAPER
     use hydro_device, only: uct_face_kernel, uct_update_kernel, uct_update_amr_kernel, &
          & uct_ghost_list_kernel, uct_ghost_face_kernel, uct_ghost_bn_kernel, uct_threads, uct_ghost_threads, &
-         & uct_ghost_smem_t, uct_face_smem_t, uct_update_smem_t, uct_product_fields
+         & uct_update_threads, uct_ghost_smem_t, uct_face_smem_t, uct_update_smem_t, uct_product_fields
     use hydro_device, only: uct_riemann_d
     use hydro_parameters, only: solver_uct_hlld, solver_uct_llf, solver_uct_hll
 #endif
@@ -952,6 +956,9 @@ contains
     if(nsubgrid == 1)threads_per_block = 64
     if(nsubgrid == 2)threads_per_block = 256
 #ifdef MHD
+#if defined(B200_GODUNOV) && NPRE != 4 && NSUBGRID == 2
+    threads_per_block = 320
+#endif
     if(riemann == solver_uct_hlld .or. riemann == solver_uct_llf .or. riemann == solver_uct_hll)then
        uct_riemann_d = riemann
        call gpu_godunov_uct()
@@ -973,9 +980,20 @@ contains
          & switch_llf_dmin, switch_llf_pmin, induction, etamag, constant_gravity)
     call GPU_Error_Check(__FILE__, __LINE__)
 #else
+#ifdef B200_GODUNOV
+    if(nsubgrid == 1)threads_per_block = 32
+#endif
 #if defined(NPRE) && NPRE == 4
+#ifdef B200_GODUNOV
+    if(nsubgrid == 2)threads_per_block = 96
+#else
     if(nsubgrid == 2)threads_per_block = 128
+#endif
+#if defined(B200_GODUNOV) && defined(GPU_FASTMATH) && NSUBGRID == 4
+    threads_per_block = 608
+#else
     if(nsubgrid == 4)threads_per_block = 512
+#endif
 #else
     if(nsubgrid == 4)threads_per_block = 640
 #endif
@@ -998,6 +1016,13 @@ contains
     endif
 #ifdef HYDRO_PAIR
     if (slope == 3) then
+#if defined(B200_GODUNOV) && NSUBGRID == 4
+#if NPRE == 4
+       threads_per_block = 448
+#else
+       threads_per_block = 512
+#endif
+#endif
        call hydro_integrator_pair_kernel<<<num_blocks, threads_per_block, shmem_bytes>>>(grid, uold, unew, bold, bnew, &
             & f, father, nbor, &
             & head_idx, num_subgrids, sim%m%ngridmax, ilevel, sim%r%levelmin, sim%r%nlevelmax, &
@@ -1067,7 +1092,7 @@ contains
       if(sim%r%levelmin == sim%r%nlevelmax)then
          istat = cudaFuncSetAttribute(uct_update_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, shmem_bytes)
          call check_smem(istat, shmem_bytes)
-         call uct_update_kernel<<<num_blocks, uct_threads, shmem_bytes>>>(unew, bnew, nbor, uct_products, &
+         call uct_update_kernel<<<num_blocks, uct_update_threads, shmem_bytes>>>(unew, bnew, nbor, uct_products, &
               & head_idx, num_subgrids, dt, dx, slope_mag, etamag)
       else
          istat = cudaFuncSetAttribute(uct_update_amr_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, shmem_bytes)

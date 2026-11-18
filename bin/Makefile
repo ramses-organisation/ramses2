@@ -4,6 +4,7 @@
 # Compilation time parameters
 COMPILER = GNU
 CUDA_ARCH = sm_80
+FASTMATH = 0
 NSUBGRID = 1
 NDIM = 3
 MPI = 0
@@ -191,7 +192,7 @@ ifeq ($(COMPILER),INTEL)
    endif
 endif
 #############################################################################
-# NVHPC compiler (optional -gpu=$(CUDA_ARCH),fastmath in FFLAGS and LIBS)
+# NVHPC compiler
 ifeq ($(COMPILER),NVHPC)
    ifeq ($(PAPER),1)
       DEFINES += -DPAPER
@@ -213,8 +214,13 @@ ifeq ($(COMPILER),NVHPC)
    ifeq ($(TURB),1)
       CUDALIBS := $(CUDALIBS),cufft
    endif
-   FFLAGS = -cpp -gpu=$(CUDA_ARCH) -cuda -cudalib=$(CUDALIBS) $(DEFINES)
-   LIBS = -gpu=$(CUDA_ARCH) -cuda -cudalib=$(CUDALIBS) -lstdc++
+   GPU_TARGET = -gpu=$(CUDA_ARCH)
+   ifeq ($(FASTMATH),1)
+      GPU_TARGET := $(GPU_TARGET),fastmath
+      DEFINES += -DGPU_FASTMATH
+   endif
+   FFLAGS = -cpp $(GPU_TARGET) -cuda -cudalib=$(CUDALIBS) $(DEFINES)
+   LIBS = $(GPU_TARGET) -cuda -cudalib=$(CUDALIBS) -lstdc++
    GPU_PATH = ../gpu
    ifeq ($(CUDA_PROFILE),1)
       FFLAGS += -gpu=lineinfo,ptxinfo -Minstrument -traceback -gopt
