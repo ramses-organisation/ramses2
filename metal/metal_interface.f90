@@ -528,7 +528,7 @@ module metal_interface
     ! constant_gravity: 3-element array (all zeros for GRAV=0).
     subroutine mtl_godunov(head_idx, num_subgrids, ngridmax, &
         ilevel, levelmin, levelmax, &
-        gamma, smallr, smallc2, dt, dx, slope, &
+        gamma, smallr, smallc2, dt, dx, smax_cap, slope, &
 #ifdef MHD
         slope_mag, riemann, riemann2d, switch_llf_dmin, switch_llf_pmin, induction, etamag, &
 #else
@@ -539,7 +539,7 @@ module metal_interface
       import c_int, c_float
       integer(c_int), value :: head_idx, num_subgrids, ngridmax
       integer(c_int), value :: ilevel, levelmin, levelmax
-      real(c_float),  value :: gamma, smallr, smallc2, dt, dx
+      real(c_float),  value :: gamma, smallr, smallc2, dt, dx, smax_cap
 #ifdef MHD
       integer(c_int), value :: slope, slope_mag, riemann, riemann2d, induction
       real(c_float), value :: switch_llf_dmin, switch_llf_pmin, etamag

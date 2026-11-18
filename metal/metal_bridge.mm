@@ -742,7 +742,7 @@ static bool mtl_uct_face_reuse_enabled(int ilevel, int levelmin, int levelmax)
 extern "C" void mtl_godunov(int head_idx, int num_subgrids, int ngridmax,
                              int ilevel, int levelmin, int levelmax,
                              float gamma, float smallr, float smallc2,
-                             float dt, float dx, int slope,
+                             float dt, float dx, float smax_cap, int slope,
 #ifdef MHD
                              int slope_mag, int riemann, int riemann2d,
                              float switch_llf_dmin, float switch_llf_pmin,
@@ -826,6 +826,7 @@ extern "C" void mtl_godunov(int head_idx, int num_subgrids, int ngridmax,
         [enc setBytes:cg              length:3 * sizeof(float) atIndex:16];
         [enc setBuffer:s_f_grav       offset:0                 atIndex:17];
         [enc setBuffer:use_uct_face_reuse ? s_uct_face_product : s_uct_velocity offset:0 atIndex:18];
+        [enc setBytes:&smax_cap       length:sizeof(float)     atIndex:19];
         [enc dispatchThreadgroups:grid_size threadsPerThreadgroup:tg_size];
         [enc endEncoding];
         if (use_uct_face_reuse) {
@@ -882,6 +883,7 @@ extern "C" void mtl_godunov(int head_idx, int num_subgrids, int ngridmax,
     [enc setBytes:cg            length:3 * sizeof(float) atIndex:26];
     [enc setBuffer:s_f_grav     offset:0                 atIndex:27];
     [enc setBuffer:s_uct_velocity ? s_uct_velocity : s_uold offset:0 atIndex:28];
+    [enc setBytes:&smax_cap     length:sizeof(float)     atIndex:29];
 #else
     [enc setBuffer:s_nbor  offset:0 atIndex:3];
     [enc setBytes:&head_idx     length:sizeof(int)       atIndex:4];
@@ -900,6 +902,7 @@ extern "C" void mtl_godunov(int head_idx, int num_subgrids, int ngridmax,
     [enc setBytes:cg            length:3 * sizeof(float) atIndex:17];
     [enc setBuffer:s_father     offset:0               atIndex:18];
     [enc setBuffer:s_f_grav     offset:0               atIndex:19];
+    [enc setBytes:&smax_cap     length:sizeof(float)     atIndex:20];
 #endif
     [enc dispatchThreadgroups:grid_size threadsPerThreadgroup:tg_size];
     [enc endEncoding];
