@@ -1,3 +1,8 @@
+#if defined(GPU_SM) && GPU_SM == 100 && defined(MHD) && defined(WITHOUTMPI) && !defined(PAPER) \
+    && NDIM == 3 && NVAR == 5 && NSUBGRID == 2 && NPRE == 4
+#define UCT_COMPACT_UNIFORM
+#endif
+
 module gpu_runner
   use amr_parameters, only: ndim, twotondim, threetondim, dp, i8b
 #ifdef DO_RT
@@ -63,6 +68,13 @@ module gpu_runner
   !> Subgrids of an AMR level with a ghost oct in their stencil
   integer(kind=4), device, allocatable, dimension(:) :: uct_ghost_list
   integer(kind=4), device :: uct_ghost_count
+#ifdef UCT_COMPACT_UNIFORM
+  integer, parameter, private :: uct_chunk_count = 8
+  real(kind=dp), device, allocatable, private :: uct_compact_products(:,:,:)
+  integer, device, allocatable, private :: uct_product_nbor(:,:), uct_face_work(:,:)
+  integer, private :: uct_plan_head = 0, uct_plan_size = 0, uct_chunk_size, uct_boundary_count
+  integer, private :: uct_interior_count(uct_chunk_count)
+#endif
 #endif
 
   !> Arrays to hold Turbulent acceleration fields and spectra on the device,
@@ -877,6 +889,9 @@ contains
          & uct_ghost_list_kernel, uct_ghost_face_kernel, uct_ghost_bn_kernel, uct_threads, uct_ghost_threads, &
          & uct_ghost_smem_t, uct_face_smem_t, uct_update_smem_t, uct_product_fields
     use hydro_device, only: uct_riemann_d
+#ifdef UCT_COMPACT_UNIFORM
+    use hydro_device, only: uct_mark_boundary_kernel, uct_product_nbor_kernel, uct_plan_subgrids, uct_plan_threads
+#endif
     use hydro_parameters, only: solver_uct_hlld, solver_uct_llf, solver_uct_hll
 #endif
 #else
@@ -1025,6 +1040,14 @@ contains
     ! the update use the stored fluxes and records. Above levelmin, the faces owned by ghost octs
     ! (after ngridmax in the buffer) are solved by the subgrids next to them.
     subroutine gpu_godunov_uct()
+#ifdef UCT_COMPACT_UNIFORM
+      if (riemann == solver_uct_hlld .and. sim%r%levelmin == sim%r%nlevelmax .and. all(sim%r%periodic(1:ndim))) then
+         if (prepare_uct_compact()) then
+            call gpu_godunov_uct_compact()
+            return
+         endif
+      endif
+#endif
       nbuf = sim%m%ngridmax + sim%m%ncachemax
       if(.not. allocated(uct_products))then
          allocate(uct_products(1:twotondim,1:3*uct_product_fields,1:nbuf), stat=istat)
@@ -1078,6 +1101,152 @@ contains
       endif
       call GPU_Error_Check(__FILE__, __LINE__)
     end subroutine gpu_godunov_uct
+
+#ifdef UCT_COMPACT_UNIFORM
+    ! Uniform periodic topology is fixed after gpu_manager builds nbor. Keep every cross-chunk
+    ! owner for the whole step and reuse the remaining slots after each chunk's update.
+    logical function prepare_uct_compact() result(use_compact)
+      integer :: first_oct, last_oct, num_octs, base, n, j, s, chunk, slot, nslots, nproduct_octs
+      integer :: chunk_first, chunk_last, plan_blocks, invalid_idx, last_subgrid
+      integer(kind=8) :: bytes, full_bytes, product_bytes
+      integer, allocatable :: product_slot(:), work(:,:)
+      integer, device, allocatable :: product_slot_d(:)
+
+      use_compact = allocated(uct_compact_products)
+      if (uct_plan_head == head_idx .and. uct_plan_size == num_subgrids) return
+      if (use_compact) deallocate(uct_compact_products, uct_product_nbor, uct_face_work)
+      uct_plan_head = head_idx
+      uct_plan_size = num_subgrids
+      use_compact = .false.
+      if (num_subgrids <= 0) return
+      first_oct = sim%m%head(ilevel)
+      num_octs = sim%m%noct(ilevel)
+      if (mod(first_oct-1,nsubgridtondim) /= 0 .or. mod(num_octs,nsubgridtondim) /= 0) return
+      uct_chunk_size = (num_subgrids + uct_chunk_count - 1)/uct_chunk_count
+      last_oct = first_oct + (num_octs - 1)
+      invalid_idx = num_subgrids + 1
+      allocate(product_slot(invalid_idx), stat=istat)
+      if (istat /= 0) error stop 'Cannot allocate host slots for compact UCT planning'
+      allocate(product_slot_d(invalid_idx), stat=istat)
+      if (istat /= 0) error stop 'Cannot allocate device slots for compact UCT planning'
+      product_slot_d = 0
+
+      do chunk = 1, uct_chunk_count
+         base = (chunk-1)*uct_chunk_size + 1
+         n = min(uct_chunk_size,num_subgrids-base+1)
+         if (n <= 0) exit
+         chunk_first = first_oct + (base-1)*nsubgridtondim
+         chunk_last = chunk_first + (n*nsubgridtondim-1)
+         plan_blocks = (n + uct_plan_subgrids - 1)/uct_plan_subgrids
+         call uct_mark_boundary_kernel<<<plan_blocks, uct_plan_threads>>>(nbor, product_slot_d, first_oct, last_oct, &
+              & head_idx+base-1, n, chunk_first, chunk_last, invalid_idx)
+         istat = cudaGetLastError()
+         if (istat /= cudaSuccess) call uct_compact_error('launching boundary scan')
+      enddo
+      istat = cudaMemcpy(product_slot, product_slot_d, int(invalid_idx,8))
+      if (istat /= cudaSuccess) call uct_compact_error('reading boundary slots')
+      if (product_slot(invalid_idx) /= 0) return
+
+      uct_boundary_count = count(product_slot(:num_subgrids) < 0)
+      uct_interior_count = 0
+      do s = 1, num_subgrids
+         if (product_slot(s) /= 0) cycle
+         chunk = (s - 1)/uct_chunk_size + 1
+         uct_interior_count(chunk) = uct_interior_count(chunk) + 1
+      enddo
+      nslots = uct_boundary_count + maxval(uct_interior_count)
+      nproduct_octs = nslots*nsubgridtondim
+      product_bytes = int(twotondim*3*uct_product_fields,8)*storage_size(1.0_dp)/8
+      full_bytes = (int(sim%m%ngridmax,8) + sim%m%ncachemax)*product_bytes
+      last_subgrid = head_idx + (num_subgrids-1)
+      bytes = int(nproduct_octs,8)*product_bytes + (int(last_subgrid,8)*subgridsize + 2_8*num_subgrids)*storage_size(0)/8
+      if (bytes >= full_bytes) return
+
+      allocate(work(2,num_subgrids), stat=istat)
+      if (istat /= 0) error stop 'Cannot allocate the host compact UCT face work list'
+      allocate(uct_compact_products(twotondim,3*uct_product_fields,nproduct_octs), &
+           & uct_product_nbor(subgridsize,last_subgrid), uct_face_work(2,num_subgrids), stat=istat)
+      if (istat /= 0) then
+         write(*,*)'gpu_godunov: cannot allocate compact UCT workspace, ', bytes, ' bytes'
+         error stop
+      endif
+
+      ! Face work lists the native subgrid and the offset from native to workspace oct indices.
+      j = 0
+      do s = 1, num_subgrids
+         if (product_slot(s) == 0) cycle
+         j = j + 1
+         product_slot(s) = j
+         work(:,j) = [head_idx+s-1,(j-(head_idx+s-1))*nsubgridtondim]
+      enddo
+      do chunk = 1, uct_chunk_count
+         slot = uct_boundary_count
+         do s = (chunk-1)*uct_chunk_size+1, min(chunk*uct_chunk_size,num_subgrids)
+            if (product_slot(s) /= 0) cycle
+            slot = slot + 1
+            product_slot(s) = slot
+            j = j + 1
+            work(:,j) = [head_idx+s-1,(slot-(head_idx+s-1))*nsubgridtondim]
+         enddo
+      enddo
+      istat = cudaMemcpy(uct_face_work, work, 2*int(num_subgrids,8))
+      if (istat /= cudaSuccess) call uct_compact_error('copying face work')
+
+      istat = cudaMemcpy(product_slot_d, product_slot, int(num_subgrids,8))
+      if (istat /= cudaSuccess) call uct_compact_error('copying product slots')
+      plan_blocks = (num_subgrids + uct_plan_subgrids - 1)/uct_plan_subgrids
+      call uct_product_nbor_kernel<<<plan_blocks, uct_plan_threads>>>(nbor, product_slot_d, uct_product_nbor, &
+           & first_oct, head_idx, num_subgrids)
+      istat = cudaGetLastError()
+      if (istat /= cudaSuccess) call uct_compact_error('launching product neighbor map')
+      istat = cudaDeviceSynchronize()
+      if (istat /= cudaSuccess) call uct_compact_error('building product neighbor map')
+      use_compact = .true.
+      write(*,'(A,I0,A,I0,A,F8.3,A)') ' Compact UCT workspace: ', uct_boundary_count, ' boundary subgrids, ', &
+           & nproduct_octs, ' product octs, ', dble(bytes)/2.0d0**30, ' GiB'
+    end function prepare_uct_compact
+
+    subroutine uct_compact_error(action)
+      character(len=*), intent(in) :: action
+      write(*,*)'gpu_godunov: compact UCT ', action, ' failed: ', cudaGetErrorString(istat)
+      error stop
+    end subroutine uct_compact_error
+
+    subroutine gpu_godunov_uct_compact()
+      integer :: chunk, base, n, face_base, nface, update_shmem_bytes
+
+      shmem_bytes = storage_size(uct_face_smem_probe)/8
+      istat = cudaFuncSetAttribute(uct_face_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, shmem_bytes)
+      call check_smem(istat, shmem_bytes)
+      update_shmem_bytes = storage_size(uct_update_smem_probe)/8
+      istat = cudaFuncSetAttribute(uct_update_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, update_shmem_bytes)
+      call check_smem(istat, update_shmem_bytes)
+
+      if (uct_boundary_count > 0) then
+         call uct_face_kernel<<<uct_boundary_count, uct_threads, shmem_bytes>>>(grid, uold, bold, f, nbor, &
+              & uct_compact_products, 1, uct_boundary_count, gamma, smallr, smallc2, dt, dx, smax_cap, &
+              & slope, slope_mag, induction, constant_gravity, uct_face_work)
+         call GPU_Error_Check(__FILE__, __LINE__)
+      endif
+      face_base = uct_boundary_count + 1
+      do chunk = 1, uct_chunk_count
+         base = (chunk-1)*uct_chunk_size + 1
+         n = min(uct_chunk_size,num_subgrids-base+1)
+         if (n <= 0) exit
+         nface = uct_interior_count(chunk)
+         if (nface > 0) then
+            call uct_face_kernel<<<nface, uct_threads, shmem_bytes>>>(grid, uold, bold, f, nbor, &
+                 & uct_compact_products, face_base, nface, gamma, smallr, smallc2, dt, dx, smax_cap, &
+                 & slope, slope_mag, induction, constant_gravity, uct_face_work)
+            call GPU_Error_Check(__FILE__, __LINE__)
+         endif
+         call uct_update_kernel<<<n, uct_threads, update_shmem_bytes>>>(unew, bnew, uct_product_nbor, uct_compact_products, &
+              & head_idx+base-1, n, dt, dx, slope_mag, etamag)
+         call GPU_Error_Check(__FILE__, __LINE__)
+         face_base = face_base + nface
+      enddo
+    end subroutine gpu_godunov_uct_compact
+#endif
 
     subroutine check_smem(status, nbytes)
       integer, intent(in) :: status
