@@ -213,6 +213,7 @@ module hydro_device
   integer, parameter :: uct_product_record = 5+uct_product_nscalar
   integer, parameter :: uct_product_vt1 = uct_product_record+4, uct_product_bn = uct_product_record+6
 
+  ! The compact B200 build specializes the fast-math uniform update in the table below.
   ! UCT launch configuration: threads per block, and the resident blocks per SM in the launch bounds
   ! of each kernel. Measured on Orszag-Tang at 512^3 on an H200 and on an A100 (256^3 in double
   ! precision); the A100 (sm_80, GPU_SM from CUDA_ARCH) has its own values, other GPUs use the H200
@@ -244,6 +245,12 @@ module hydro_device
 #define UCT_GHOST_LB launch_bounds(UCT_GHOST_THREADS,2)
 #define UCT_UPDATE_LB launch_bounds(UCT_THREADS,4)
 #define UCT_AMR_UPDATE_LB launch_bounds(UCT_THREADS,4)
+#elif defined(UCT_COMPACT_UNIFORM) && defined(GPU_FASTMATH)
+#define UCT_FACE_LB launch_bounds(UCT_THREADS,7)
+#define UCT_GHOST_LB launch_bounds(UCT_GHOST_THREADS,3)
+#define UCT_UPDATE_THREADS 96
+#define UCT_UPDATE_LB launch_bounds(UCT_UPDATE_THREADS,12)
+#define UCT_AMR_UPDATE_LB launch_bounds(UCT_THREADS,7)
 #elif NPRE == 4 && NSUBGRID == 2
 #define UCT_FACE_LB launch_bounds(UCT_THREADS,7)
 #define UCT_GHOST_LB launch_bounds(UCT_GHOST_THREADS,3)
@@ -266,6 +273,11 @@ module hydro_device
 #define UCT_AMR_UPDATE_LB launch_bounds(UCT_THREADS,12)
 #endif
   integer, parameter :: uct_threads = UCT_THREADS, uct_ghost_threads = UCT_GHOST_THREADS
+#ifdef UCT_UPDATE_THREADS
+  integer, parameter :: uct_update_threads = UCT_UPDATE_THREADS
+#else
+  integer, parameter :: uct_update_threads = uct_threads
+#endif
 
   type, public :: uct_face_smem_t
      type(subgrid_6x6x6cell_primitive)  :: local_subgrid

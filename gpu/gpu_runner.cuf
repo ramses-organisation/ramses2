@@ -887,7 +887,7 @@ contains
 #ifndef PAPER
     use hydro_device, only: uct_face_kernel, uct_update_kernel, uct_update_amr_kernel, &
          & uct_ghost_list_kernel, uct_ghost_face_kernel, uct_ghost_bn_kernel, uct_threads, uct_ghost_threads, &
-         & uct_ghost_smem_t, uct_face_smem_t, uct_update_smem_t, uct_product_fields
+         & uct_update_threads, uct_ghost_smem_t, uct_face_smem_t, uct_update_smem_t, uct_product_fields
     use hydro_device, only: uct_riemann_d
 #ifdef UCT_COMPACT_UNIFORM
     use hydro_device, only: uct_mark_boundary_kernel, uct_product_nbor_kernel, uct_plan_subgrids, uct_plan_threads
@@ -1036,12 +1036,12 @@ contains
 #if defined(MHD) && !defined(PAPER)
   contains
 
-    ! UCT-HLLD: each face is solved by the subgrid that owns it (its low faces), and the edges and
+    ! Each UCT face is solved by the subgrid that owns it (its low faces), and the edges and
     ! the update use the stored fluxes and records. Above levelmin, the faces owned by ghost octs
     ! (after ngridmax in the buffer) are solved by the subgrids next to them.
     subroutine gpu_godunov_uct()
 #ifdef UCT_COMPACT_UNIFORM
-      if (riemann == solver_uct_hlld .and. sim%r%levelmin == sim%r%nlevelmax .and. all(sim%r%periodic(1:ndim))) then
+      if (sim%r%levelmin == sim%r%nlevelmax .and. all(sim%r%periodic(1:ndim))) then
          if (prepare_uct_compact()) then
             call gpu_godunov_uct_compact()
             return
@@ -1090,7 +1090,7 @@ contains
       if(sim%r%levelmin == sim%r%nlevelmax)then
          istat = cudaFuncSetAttribute(uct_update_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, shmem_bytes)
          call check_smem(istat, shmem_bytes)
-         call uct_update_kernel<<<num_blocks, uct_threads, shmem_bytes>>>(unew, bnew, nbor, uct_products, &
+         call uct_update_kernel<<<num_blocks, uct_update_threads, shmem_bytes>>>(unew, bnew, nbor, uct_products, &
               & head_idx, num_subgrids, dt, dx, slope_mag, etamag)
       else
          istat = cudaFuncSetAttribute(uct_update_amr_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, shmem_bytes)
@@ -1240,7 +1240,7 @@ contains
                  & slope, slope_mag, induction, constant_gravity, uct_face_work)
             call GPU_Error_Check(__FILE__, __LINE__)
          endif
-         call uct_update_kernel<<<n, uct_threads, update_shmem_bytes>>>(unew, bnew, uct_product_nbor, uct_compact_products, &
+         call uct_update_kernel<<<n, uct_update_threads, update_shmem_bytes>>>(unew, bnew, uct_product_nbor, uct_compact_products, &
               & head_idx+base-1, n, dt, dx, slope_mag, etamag)
          call GPU_Error_Check(__FILE__, __LINE__)
          face_base = face_base + nface
