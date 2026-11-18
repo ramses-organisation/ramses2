@@ -7953,7 +7953,7 @@ contains
 #elif defined(MHD) || (defined(NPRE) && NPRE == 4)
 #define HYDRO_LB
 #elif defined(B200_GODUNOV) && NSUBGRID <= 1
-#define HYDRO_LB launch_bounds(32,24)
+#define HYDRO_LB launch_bounds(32,16)
 #elif !defined(NSUBGRID) || NSUBGRID == 1
 #define HYDRO_LB launch_bounds(64,16)
 #elif NSUBGRID == 2
