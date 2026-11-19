@@ -15,11 +15,11 @@ Uniform periodic 3D Sedov blast at 512^3, `slope_type=2`. Each value is the medi
 
 | precision | `NSUBGRID` | A100 | H200 | B200 | Rubin |
 | --------- | ---------- | ---- | ---- | ---- | ----- |
-| double | 1 | 739 | 1298 | 1746 | |
-| double | 2 | 1510 | 2757 | 3578 | |
-| double | 4 | does not fit | 3435 | 4456 | |
-| single | 1 | 1648 | 2159 | 3725 | |
-| single | 2 | 3374 | 6657 | 8040 | |
+| double | 1 | 739 | 1298 | 1746 | 2050 |
+| double | 2 | 1510 | 2757 | 3578 | 4834 |
+| double | 4 | does not fit | 3435 | 4456 | 5767 |
+| single | 1 | 1648 | 2159 | 3725 | 4054 |
+| single | 2 | 3374 | 6657 | 8040 | 12317 |
 | single | 4 | 3341 | 7994 | 10093 | 15896 |
 
 In double precision at `NSUBGRID=4` the kernel needs 207 KB of shared memory per block, more than the A100 has.
