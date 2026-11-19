@@ -13,7 +13,7 @@ module color_module
   !--------------------------------------------------------------
   implicit none
   private
-  public :: init_color, c_bold, c_dim, c_under, c_cyan, c_green, c_yellow, c_reset, c_mark
+  public :: init_color, c_bold, c_dim, c_under, c_cyan, c_green, c_yellow, c_blue, c_reset, c_mark
 
   logical :: use_color = .false.
 
@@ -77,6 +77,10 @@ contains
     character(len=:), allocatable :: s
     s = esc('33')
   end function c_yellow
+  function c_blue() result(s)
+    character(len=:), allocatable :: s
+    s = esc('34')
+  end function c_blue
   function c_reset() result(s)
     character(len=:), allocatable :: s
     s = esc('0')

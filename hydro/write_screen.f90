@@ -2,6 +2,7 @@ subroutine write_screen(r,m)
   use amr_parameters, only: ndim
   use amr_commons, only: mesh_t, run_t
   use hydro_parameters, only: nener
+  use color_module, only: c_blue, c_reset
   implicit none
   type(run_t)::r
   type(mesh_t)::m
@@ -136,7 +137,7 @@ subroutine write_screen(r,m)
 
 #ifdef MHD
      write(*,*)'================================================'
-     write(*,114)nleaf
+     write(*,114)c_blue(),nleaf,c_reset()
      write(*,*)'lev      x           d          u          v          w          P          A          B          C'
      do i=1,nleaf
         write(*,115)      &
@@ -154,7 +155,7 @@ subroutine write_screen(r,m)
      write(*,*)'================================================'
 #elif NENER>0
      write(*,*)'================================================'
-     write(*,114)nleaf
+     write(*,114)c_blue(),nleaf,c_reset()
      write(*,*)'lev      x           d          u          P        P_rad'
      do i=1,nleaf
         write(*,116)      &
@@ -168,7 +169,7 @@ subroutine write_screen(r,m)
      write(*,*)'================================================'
 #elif NION>0 && !defined(DO_RTZ)
      write(*,*)'================================================'
-     write(*,114)nleaf
+     write(*,114)c_blue(),nleaf,c_reset()
      write(*,*)'lev      x           d          u          P'//trim(xhead)
      do i=1,nleaf
         write(*,117)      &
@@ -182,7 +183,7 @@ subroutine write_screen(r,m)
      write(*,*)'================================================'
 #else
      write(*,*)'================================================'
-     write(*,114)nleaf
+     write(*,114)c_blue(),nleaf,c_reset()
      write(*,*)'lev      x           d          u          P'
      do i=1,nleaf
         write(*,113)      &
@@ -217,7 +218,7 @@ subroutine write_screen(r,m)
   endif
 
 113 format(i3,1x,1pe12.5,1x,3(1pe10.3,1x))
-114 format(' Output ',i5,' cells')
+114 format(' ',a,'Output ',i5,' cells',a)
 115 format(i3,1x,1pe12.5,1x,8(1pe10.3,1x))
 116 format(i3,1x,1pe12.5,1x,4(1pe10.3,1x))
 117 format(i3,1x,1pe12.5,1x,6(1pe10.3,1x))
