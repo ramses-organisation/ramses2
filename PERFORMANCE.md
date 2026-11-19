@@ -7,20 +7,20 @@ Speeds are in millions of cell updates per second (Mcell/s) for the whole time s
 - "double" is `NPRE=8` with the default math.
 - "single" is `NPRE=4` with `FASTMATH=1` (`-gpu=fastmath`).
 
-The GPUs are an A100-PCIE-40GB (`CUDA_ARCH=sm_80`), an H200 NVL (`sm_90`) and a B200 (`sm_100`).
+The GPUs are an A100-PCIE-40GB (`CUDA_ARCH=sm_80`), an H200 NVL (`sm_90`), a B200 (`sm_100`) and a Rubin (`sm_107`).
 
 ### Hydro (`MHD=0`, `riemann='hllc'`) ###
 
 Uniform periodic 3D Sedov blast at 512^3, `slope_type=2`. Each value is the median coarse-step time over the last 16 of 32 steps, averaged over three runs.
 
-| precision | `NSUBGRID` | A100 | H200 | B200 |
-| --------- | ---------- | ---- | ---- | ---- |
-| double | 1 | 739 | 1298 | 1746 |
-| double | 2 | 1510 | 2757 | 3578 |
-| double | 4 | does not fit | 3435 | 4456 |
-| single | 1 | 1648 | 2159 | 3725 |
-| single | 2 | 3374 | 6657 | 8040 |
-| single | 4 | 3341 | 7994 | 10093 |
+| precision | `NSUBGRID` | A100 | H200 | B200 | Rubin |
+| --------- | ---------- | ---- | ---- | ---- | ----- |
+| double | 1 | 739 | 1298 | 1746 | |
+| double | 2 | 1510 | 2757 | 3578 | |
+| double | 4 | does not fit | 3435 | 4456 | |
+| single | 1 | 1648 | 2159 | 3725 | |
+| single | 2 | 3374 | 6657 | 8040 | |
+| single | 4 | 3341 | 7994 | 10093 | 15896 |
 
 In double precision at `NSUBGRID=4` the kernel needs 207 KB of shared memory per block, more than the A100 has.
 

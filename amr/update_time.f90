@@ -148,7 +148,7 @@ subroutine m_update_time(pst,ilevel,done)
            write(line,888)g%nstep,g%t,dt,g%aexp,real(100.0D0*dble(m%noct_used_max)/dble(m%ngridmax))
 #endif
         endif
-        write(*,'(a)')c_dim()//trim(line)//c_reset()
+        write(*,'(a)')trim(line)
         itest=1
      end if
      g%output_done=.false.
