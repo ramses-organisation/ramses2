@@ -6,9 +6,9 @@
 extern "C"
 {
 /** sorts keys and generates a permutation array.
- * @param[in] keys_in keys to sort (overwritten when compiled with OPT_MEM)
+ * @param[in] keys_in keys to sort (overwritten)
  * @param[out] keys_out array for the sorted keys
- * @param[in] idx_in an empty array of the same length as keys_in (overwritten when compiled with OPT_MEM)
+ * @param[in] idx_in an empty array of the same length as keys_in (overwritten)
  * @param[out] idx_out array for the sorted indices. this is the result
  * @param[in] head_idx the 1 based index into the keys
  * @param[in] num_elem the number of keys to sort

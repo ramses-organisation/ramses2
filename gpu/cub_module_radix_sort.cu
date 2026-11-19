@@ -48,18 +48,11 @@ void cub_module_radix_sort_allocate_workspace(int32_t num_elem)
 {
   // check if we have enough work space
   size_t work_size = 0;
-#if defined(OPT_MEM)
   // DoubleBuffer overload: CUB ping-pongs between the caller's buffers and
   // does not allocate its own copy of the keys and values
   cub::DoubleBuffer<int64_t> d_keys(nullptr, nullptr);
   cub::DoubleBuffer<int32_t> d_vals(nullptr, nullptr);
   CUDA_CHECK(cub::DeviceRadixSort::SortPairs(nullptr, work_size, d_keys, d_vals, num_elem))
-#else
-  CUDA_CHECK(cub::DeviceRadixSort::SortPairs(nullptr, work_size,
-                                             (int64_t*)nullptr, (int64_t*)nullptr,
-                                             (int32_t*)nullptr, (int32_t*)nullptr,
-                                             num_elem))
-#endif
   if (g_cub_module_radix_sort_work_size < work_size)
   {
     // free old work space
@@ -97,7 +90,6 @@ void cub_module_radix_sort(int64_t *keys_in, int64_t *keys_out,
   // allocate workspace
   cub_module_radix_sort_allocate_workspace(num_elem);
 
-#if defined(OPT_MEM)
   // in-place sort: keys_in and idx_in are overwritten
   cub::DoubleBuffer<int64_t> d_keys(keys_in, keys_out);
   cub::DoubleBuffer<int32_t> d_vals(idx_in, idx_out);
@@ -111,10 +103,4 @@ void cub_module_radix_sort(int64_t *keys_in, int64_t *keys_out,
   if (d_vals.Current() != idx_out)
     CUDA_CHECK(cudaMemcpyAsync(idx_out, d_vals.Current(), num_elem * sizeof(int32_t),
                                cudaMemcpyDeviceToDevice))
-#else
-  CUDA_CHECK(cub::DeviceRadixSort::SortPairs(g_cub_module_radix_sort_workspace,
-                                             g_cub_module_radix_sort_work_size,
-                                             keys_in, keys_out, idx_in, idx_out,
-                                             num_elem, start_bit, end_bit))
-#endif
 }
