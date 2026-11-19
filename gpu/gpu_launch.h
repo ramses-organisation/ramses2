@@ -4,7 +4,7 @@
 ! per SM (_MINB) of every tuned kernel. A kernel is compiled with launch_bounds(_THREADS,_MINB), or
 ! without a bound of its own when _MINB is 0, and launched with the _THREADS that hydro_device
 ! exports as parameters with the names of the macros in lower case. gpu_print_launch (gpu_runner.cuf)
-! writes the values of the kernels a run uses at startup.
+! writes the values of the kernels a run uses at startup, with debug=.true.
 !
 ! GPU_LAUNCH_TARGET is the GPU whose measured blocks a build uses (0: generic blocks). The B200
 ! blocks cover 3D builds without passive scalars, the H200 and A100 blocks cover MHD. Measured on
