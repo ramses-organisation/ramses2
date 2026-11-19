@@ -2233,7 +2233,9 @@ end subroutine nimhd_ghost_b_kernel
        grid(cache_idx)%ckey(idim) = ckey(idim)
     end do
     grid(cache_idx)%refined(1:twotondim) = .false.
+#ifndef OPT_MEM
     flag1(1:twotondim, cache_idx) = 0
+#endif
 
     ! Compute new oct Hilbert key
     hkey = hilbert_key(ckey, ilevel - 1)
@@ -2304,7 +2306,9 @@ end subroutine nimhd_ghost_b_kernel
        f(ind,2,cache_idx) = f(cell_idx,2,parent_idx)
        f(ind,3,cache_idx) = f(cell_idx,3,parent_idx)
        phi(ind,cache_idx) = phi(cell_idx,parent_idx)
+#ifndef OPT_MEM
        phi_old(ind,cache_idx) = phi_old(cell_idx,parent_idx)
+#endif
     end do
 #endif
 

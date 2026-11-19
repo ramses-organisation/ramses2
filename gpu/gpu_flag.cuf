@@ -158,12 +158,13 @@ contains
   ! =========================================================================
 
   ! =========================================================================
-  attributes(global) subroutine count_neighbors(flag2, flag1, nbor, head_idx, num_octs)
+  attributes(global) subroutine count_neighbors(flag2, flag1, nbor, head_idx, num_octs, ngridmax)
     integer(kind=4), device :: flag1(1:twotondim,*)
     integer(kind=4), device :: flag2(1:twotondim,*)
     integer(kind=4), device :: nbor(1:subgridsize,*)
     integer(kind=4), intent(in), value :: head_idx
     integer(kind=4), intent(in), value :: num_octs
+    integer(kind=4), intent(in), value :: ngridmax
 
     integer :: cell_idx, oct_idx, block_idx, source_idx, subgrid_idx, num_idx
     integer :: number_nbors, ind, icell, idir, ind_nbor
@@ -209,7 +210,8 @@ contains
        end if
        ind = 1 + (i + in) + nsubgridp2 * (j + jn)  + nsubgridp2sq * (k + kn)
        source_idx = nbor(ind, subgrid_idx)
-       if (source_idx > 0) then
+       ! Cache (ghost) octs are never flagged
+       if (source_idx > 0 .and. source_idx <= ngridmax) then
           number_nbors = number_nbors + flag1(icell, source_idx)
        end if
     end do

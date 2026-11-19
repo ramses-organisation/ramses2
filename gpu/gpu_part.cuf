@@ -1956,9 +1956,9 @@ attributes(global) subroutine cic_part_large_kernel(sortp_d, &
      & box_ckey_min_d, box_ckey_max_d, periodic_d, &
      & xp_d, mp_d, rho_d, nref_d, &
      & skip1, skip2, skip3, dx_loc, vol_loc, mass_sph, star, &
-     & m_refine_at_level, mass_cut_refine, ilevel, leading)
+     & m_refine_at_level, mass_cut_refine, ilevel, ngridmax, leading)
   logical, intent(in), value :: star
-  integer(kind=4), intent(in), value :: head_idx, num_parts, ilevel
+  integer(kind=4), intent(in), value :: head_idx, num_parts, ilevel, ngridmax
   integer(kind=8), intent(in), value :: leading
   integer(kind=4), device :: sortp_d(*)
   integer(kind=8), device :: hash_key_d(*)
@@ -2263,15 +2263,16 @@ attributes(global) subroutine cic_part_large_kernel(sortp_d, &
 
      ! ---------------------------------------------------------------
      ! Tail emission: one atomicAdd per segment per stencil offset.
-     ! The triple guard is sharp:
+     ! The guard is sharp:
      !   is_tail            -- exactly one lane per segment;
      !   valid_lane         -- skip OOD / OOB zero-segments;
-     !   dst_igrid_lane /= 0 -- skip off-rank destinations.
+     !   dst_igrid_lane /= 0 -- skip off-rank destinations;
+     !   dst_igrid_lane <= ngridmax -- skip cache (ghost) octs.
      ! The my_rho / my_nref != 0 checks save no-op atomics on segments
      ! whose total at this k is identically zero (e.g. an entire segment
      ! sitting on the wrong side of the stencil).
      ! ---------------------------------------------------------------
-     if (is_tail .and. valid_lane .and. dst_igrid_lane /= 0) then
+     if (is_tail .and. valid_lane .and. dst_igrid_lane /= 0 .and. dst_igrid_lane <= ngridmax) then
         if (my_rho /= 0.0_dp) then
            info = atomicadd(rho_d(dst_icell_lane, dst_igrid_lane), real(my_rho, kind=dp))
         endif
@@ -2378,7 +2379,7 @@ subroutine gpu_cic_part_large(sim, ilevel, rtype)
        & box_ckey_min, box_ckey_max, periodic, &
        & xp, mp, rho, nref, &
        & skip1, skip2, skip3, dx_loc, vol_loc, 1d0, .false., &
-       & sim%r%m_refine(ilevel), sim%r%mass_cut_refine, ilevel, int(sim%r%npartmax,8))
+       & sim%r%m_refine(ilevel), sim%r%mass_cut_refine, ilevel, sim%m%ngridmax, int(sim%r%npartmax,8))
   call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
@@ -2455,7 +2456,7 @@ subroutine gpu_cic_star_large(sim, ilevel, rtype)
        & box_ckey_min, box_ckey_max, periodic, &
        & star_xp, star_mp, rho, nref, &
        & skip1, skip2, skip3, dx_loc, vol_loc, mass_sph, .true., &
-       & sim%r%m_refine(ilevel), sim%r%mass_cut_refine, ilevel, int(sim%r%nstarmax,8))
+       & sim%r%m_refine(ilevel), sim%r%mass_cut_refine, ilevel, sim%m%ngridmax, int(sim%r%nstarmax,8))
   call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
@@ -2532,7 +2533,7 @@ subroutine gpu_cic_sink_large(sim, ilevel, rtype)
        & box_ckey_min, box_ckey_max, periodic, &
        & sink_xp, sink_mp, rho, nref, &
        & skip1, skip2, skip3, dx_loc, vol_loc, mass_sph, .true., &
-       & sim%r%m_refine(ilevel), sim%r%mass_cut_refine, ilevel, int(sim%r%nsinkmax,8))
+       & sim%r%m_refine(ilevel), sim%r%mass_cut_refine, ilevel, sim%m%ngridmax, int(sim%r%nsinkmax,8))
   call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
@@ -2598,7 +2599,7 @@ subroutine gpu_cic_core_large(sim, ilevel, rtype)
        & box_ckey_min, box_ckey_max, periodic, &
        & core_xp, core_mp, rho, nref, &
        & skip1, skip2, skip3, dx_loc, vol_loc, mass_sph, .true., &
-       & sim%r%m_refine(ilevel), sim%r%mass_cut_refine, ilevel, int(sim%r%ncoremax,8))
+       & sim%r%m_refine(ilevel), sim%r%mass_cut_refine, ilevel, sim%m%ngridmax, int(sim%r%ncoremax,8))
   call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
@@ -2631,9 +2632,9 @@ attributes(global) subroutine cic_part_medium_kernel(sortp_d, &
      & box_ckey_min_d, box_ckey_max_d, &
      & xp_d, mp_d, rho_d, nref_d, &
      & skip1, skip2, skip3, dx_loc, vol_loc, mass_sph, star, &
-     & m_refine_at_level, mass_cut_refine, ilevel, leading)
+     & m_refine_at_level, mass_cut_refine, ilevel, ngridmax, leading)
   logical, intent(in), value :: star
-  integer(kind=4), intent(in), value :: head_idx, num_parts, ilevel
+  integer(kind=4), intent(in), value :: head_idx, num_parts, ilevel, ngridmax
   integer(kind=8), intent(in), value :: leading
   integer(kind=4), device :: sortp_d(*)
   integer(kind=8), device :: hash_key_d(*)
@@ -2848,7 +2849,7 @@ attributes(global) subroutine cic_part_medium_kernel(sortp_d, &
      end do
 
      ! Tail emission: one atomicAdd per segment per offset (identical).
-     if (is_tail .and. valid_lane .and. dst_igrid_lane /= 0) then
+     if (is_tail .and. valid_lane .and. dst_igrid_lane /= 0 .and. dst_igrid_lane <= ngridmax) then
         if (my_rho /= 0.0_dp) then
            info = atomicadd(rho_d(dst_icell_lane, dst_igrid_lane), real(my_rho, kind=dp))
         endif
@@ -2921,7 +2922,7 @@ subroutine gpu_cic_part_medium(sim, ilevel, rtype)
        & box_ckey_min, box_ckey_max, &
        & xp, mp, rho, nref, &
        & skip1, skip2, skip3, dx_loc, vol_loc, 1d0, .false., &
-       & sim%r%m_refine(ilevel), sim%r%mass_cut_refine, ilevel, int(sim%r%npartmax,8))
+       & sim%r%m_refine(ilevel), sim%r%mass_cut_refine, ilevel, sim%m%ngridmax, int(sim%r%npartmax,8))
   call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
@@ -2985,7 +2986,7 @@ subroutine gpu_cic_star_medium(sim, ilevel, rtype)
        & box_ckey_min, box_ckey_max, &
        & star_xp, star_mp, rho, nref, &
        & skip1, skip2, skip3, dx_loc, vol_loc, mass_sph, .true., &
-       & sim%r%m_refine(ilevel), sim%r%mass_cut_refine, ilevel, int(sim%r%nstarmax,8))
+       & sim%r%m_refine(ilevel), sim%r%mass_cut_refine, ilevel, sim%m%ngridmax, int(sim%r%nstarmax,8))
   call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
@@ -3049,7 +3050,7 @@ subroutine gpu_cic_sink_medium(sim, ilevel, rtype)
        & box_ckey_min, box_ckey_max, &
        & sink_xp, sink_mp, rho, nref, &
        & skip1, skip2, skip3, dx_loc, vol_loc, mass_sph, .true., &
-       & sim%r%m_refine(ilevel), sim%r%mass_cut_refine, ilevel, int(sim%r%nsinkmax,8))
+       & sim%r%m_refine(ilevel), sim%r%mass_cut_refine, ilevel, sim%m%ngridmax, int(sim%r%nsinkmax,8))
   call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
@@ -3199,7 +3200,7 @@ attributes(global) subroutine deposit_runs_part_small(sortp_d, xp_d, contrib_d, 
      & prefix_sum_d, run_tail_d, &
      & hash_key_d, hash_val_d, hash_size_d, ckey_max_d, key_off_d, &
      & box_ckey_min_d, box_ckey_max_d, out_d, &
-     & skip1, skip2, skip3, dx_inv, k, ilevel, head_idx, num_parts, leading)
+     & skip1, skip2, skip3, dx_inv, k, ilevel, ngridmax, head_idx, num_parts, leading)
   integer(kind=4), device :: sortp_d(*)
   real(kind=dp),   device :: xp_d(*)
   real(kind=dp),   device :: contrib_d(*)
@@ -3214,7 +3215,7 @@ attributes(global) subroutine deposit_runs_part_small(sortp_d, xp_d, contrib_d, 
   integer(kind=4), device :: box_ckey_max_d(1:3, *)
   real(kind=dp),   device :: out_d(1:twotondim, *)
   real(kind=8), intent(in), value :: skip1, skip2, skip3, dx_inv
-  integer(kind=4), intent(in), value :: k, ilevel, head_idx, num_parts
+  integer(kind=4), intent(in), value :: k, ilevel, ngridmax, head_idx, num_parts
   integer(kind=8), intent(in), value :: leading
 
   integer :: thread_idx, block_idx, idx, g, ipart, idim, bit, kk, rid
@@ -3290,7 +3291,8 @@ attributes(global) subroutine deposit_runs_part_small(sortp_d, xp_d, contrib_d, 
   iz8 = int(father_ckey(3), kind=8)
   key = hkey_offset + ix8 + iy8*nx + iz8*nx*nx
   igrid = hash_get(hash_key_d, hash_val_d, hash_size_d, key)
-  if (igrid == 0) return
+  ! Skip absent and cache (ghost) octs: ghost densities are never read
+  if (igrid == 0 .or. igrid > ngridmax) return
 
   ! Race free: distinct runs (source cells) map to distinct target cells here.
   out_d(icell, igrid) = out_d(icell, igrid) + real(run_sum, kind=dp)
@@ -3384,7 +3386,7 @@ subroutine gpu_cic_part_small(sim, ilevel, rtype)
           & prefix_sum, isp_swap, &
           & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, &
           & box_ckey_min, box_ckey_max, rho, &
-          & skip1, skip2, skip3, dx_inv, k, ilevel, head_idx, num_parts, int(sim%r%npartmax,8))
+          & skip1, skip2, skip3, dx_inv, k, ilevel, sim%m%ngridmax, head_idx, num_parts, int(sim%r%npartmax,8))
      call GPU_Error_Check(__FILE__, __LINE__)
 
      ! nref contribution (w, gated), only when the refinement gate is active.
@@ -3398,7 +3400,7 @@ subroutine gpu_cic_part_small(sim, ilevel, rtype)
              & prefix_sum, isp_swap, &
              & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, &
              & box_ckey_min, box_ckey_max, nref, &
-             & skip1, skip2, skip3, dx_inv, k, ilevel, head_idx, num_parts, int(sim%r%npartmax,8))
+             & skip1, skip2, skip3, dx_inv, k, ilevel, sim%m%ngridmax, head_idx, num_parts, int(sim%r%npartmax,8))
         call GPU_Error_Check(__FILE__, __LINE__)
      endif
   end do
@@ -3483,7 +3485,7 @@ subroutine gpu_cic_star_small(sim, ilevel, rtype)
           & prefix_sum, isp_swap, &
           & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, &
           & box_ckey_min, box_ckey_max, rho, &
-          & skip1, skip2, skip3, dx_inv, k, ilevel, head_idx, num_parts, int(sim%r%nstarmax,8))
+          & skip1, skip2, skip3, dx_inv, k, ilevel, sim%m%ngridmax, head_idx, num_parts, int(sim%r%nstarmax,8))
      call GPU_Error_Check(__FILE__, __LINE__)
 
      ! nref contribution (w, gated), only when the refinement gate is active.
@@ -3497,7 +3499,7 @@ subroutine gpu_cic_star_small(sim, ilevel, rtype)
              & prefix_sum, isp_swap, &
              & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, &
              & box_ckey_min, box_ckey_max, nref, &
-             & skip1, skip2, skip3, dx_inv, k, ilevel, head_idx, num_parts, int(sim%r%nstarmax,8))
+             & skip1, skip2, skip3, dx_inv, k, ilevel, sim%m%ngridmax, head_idx, num_parts, int(sim%r%nstarmax,8))
         call GPU_Error_Check(__FILE__, __LINE__)
      endif
   end do
@@ -3582,7 +3584,7 @@ subroutine gpu_cic_sink_small(sim, ilevel, rtype)
           & prefix_sum, isp_swap, &
           & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, &
           & box_ckey_min, box_ckey_max, rho, &
-          & skip1, skip2, skip3, dx_inv, k, ilevel, head_idx, num_parts, int(sim%r%nsinkmax,8))
+          & skip1, skip2, skip3, dx_inv, k, ilevel, sim%m%ngridmax, head_idx, num_parts, int(sim%r%nsinkmax,8))
      call GPU_Error_Check(__FILE__, __LINE__)
 
      ! nref contribution (w, gated), only when the refinement gate is active.
@@ -3596,7 +3598,7 @@ subroutine gpu_cic_sink_small(sim, ilevel, rtype)
              & prefix_sum, isp_swap, &
              & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, &
              & box_ckey_min, box_ckey_max, nref, &
-             & skip1, skip2, skip3, dx_inv, k, ilevel, head_idx, num_parts, int(sim%r%nsinkmax,8))
+             & skip1, skip2, skip3, dx_inv, k, ilevel, sim%m%ngridmax, head_idx, num_parts, int(sim%r%nsinkmax,8))
         call GPU_Error_Check(__FILE__, __LINE__)
      endif
   end do
@@ -3624,9 +3626,9 @@ attributes(global) subroutine bspline_part_kernel(sortp_d, &
      & box_ckey_min_d, box_ckey_max_d, periodic_d, &
      & xp_d, mp_d, rho_d, nref_d, &
      & skip1, skip2, skip3, dx_loc, vol_loc, mass_sph, star, &
-     & m_refine_at_level, mass_cut_refine, order, ilevel, leading)
+     & m_refine_at_level, mass_cut_refine, order, ilevel, ngridmax, leading)
   logical, intent(in), value :: star
-  integer(kind=4), intent(in), value :: head_idx, num_parts, order, ilevel
+  integer(kind=4), intent(in), value :: head_idx, num_parts, order, ilevel, ngridmax
   integer(kind=8), intent(in), value :: leading
   integer(kind=4), device :: sortp_d(*)
   integer(kind=8), device :: hash_key_d(*)
@@ -3683,7 +3685,8 @@ attributes(global) subroutine bspline_part_kernel(sortp_d, &
      iz8 = int(father_ckey(3), kind=8)
      key = hkey_offset + ix8 + iy8*nx + iz8*nx*nx
      igrid = hash_get(hash_key_d, hash_val_d, hash_size_d, key)
-     if (igrid == 0) cycle
+     ! Skip absent and cache (ghost) octs: ghost densities are never read
+     if (igrid == 0 .or. igrid > ngridmax) cycle
 
      info = atomicadd(rho_d(icell, igrid), mp_i * w / vol_loc)
      if (m_refine_at_level >= 0.0_dp) then
@@ -3770,7 +3773,7 @@ subroutine gpu_bspline_part(sim, ilevel, rtype, order)
        & real(sim%m%skip(1),kind=dp), real(sim%m%skip(2),kind=dp), real(sim%m%skip(3),kind=dp), &
        & real(dx_loc,kind=dp), real(vol_loc,kind=dp), 1.0_dp, .false., &
        & real(sim%r%m_refine(ilevel),kind=dp), real(sim%r%mass_cut_refine,kind=dp), &
-       & order, ilevel, int(sim%r%npartmax,8))
+       & order, ilevel, sim%m%ngridmax, int(sim%r%npartmax,8))
   call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
@@ -3836,7 +3839,7 @@ subroutine gpu_bspline_star(sim, ilevel, rtype, order)
        & real(sim%m%skip(1),kind=dp), real(sim%m%skip(2),kind=dp), real(sim%m%skip(3),kind=dp), &
        & real(dx_loc,kind=dp), real(vol_loc,kind=dp), real(sim%r%mass_sph,kind=dp), .true., &
        & real(sim%r%m_refine(ilevel),kind=dp), real(sim%r%mass_cut_refine,kind=dp), &
-       & order, ilevel, int(sim%r%nstarmax,8))
+       & order, ilevel, sim%m%ngridmax, int(sim%r%nstarmax,8))
   call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
@@ -3902,7 +3905,7 @@ subroutine gpu_bspline_sink(sim, ilevel, rtype, order)
        & real(sim%m%skip(1),kind=dp), real(sim%m%skip(2),kind=dp), real(sim%m%skip(3),kind=dp), &
        & real(dx_loc,kind=dp), real(vol_loc,kind=dp), real(sim%r%mass_sph,kind=dp), .true., &
        & real(sim%r%m_refine(ilevel),kind=dp), real(sim%r%mass_cut_refine,kind=dp), &
-       & order, ilevel, int(sim%r%nsinkmax,8))
+       & order, ilevel, sim%m%ngridmax, int(sim%r%nsinkmax,8))
   call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
@@ -3968,7 +3971,7 @@ subroutine gpu_bspline_core(sim, ilevel, rtype, order)
        & real(sim%m%skip(1),kind=dp), real(sim%m%skip(2),kind=dp), real(sim%m%skip(3),kind=dp), &
        & real(dx_loc,kind=dp), real(vol_loc,kind=dp), real(sim%r%mass_sph,kind=dp), .true., &
        & real(sim%r%m_refine(ilevel),kind=dp), real(sim%r%mass_cut_refine,kind=dp), &
-       & order, ilevel, int(sim%r%ncoremax,8))
+       & order, ilevel, sim%m%ngridmax, int(sim%r%ncoremax,8))
   call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 

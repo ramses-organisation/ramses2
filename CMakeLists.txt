@@ -96,6 +96,7 @@ option(PAPER        "Enable PAPER timing mode (NVHPC only)"        OFF)
 option(CUB_SORT_PART   "Use CUB radix sort for particles (NVHPC)"  ON)
 option(CUB_SORT_REFINE "Use CUB radix sort for refine (NVHPC)"     ON)
 option(CUB_SCAN_REFINE "Use CUB inclusive scan for refine (NVHPC)" ON)
+option(OPT_MEM      "Memory-lean GPU build (NVHPC)"                OFF)
 
 set(CUDA_ARCH "sm_80" CACHE STRING "CUDA target architecture (e.g. sm_80, sm_90)")
 set(FFTW_DIR  ""      CACHE PATH   "FFTW3 install prefix (used when TURB=ON; empty = system search)")
@@ -283,6 +284,9 @@ elseif(CMAKE_Fortran_COMPILER_ID STREQUAL "NVHPC")
     endif()
     if(PAPER)
         list(APPEND defines PAPER)
+    endif()
+    if(OPT_MEM)
+        list(APPEND defines OPT_MEM)
     endif()
     set(nvhpc_cudalibs nvtx,curand)
     if(TURB)
@@ -619,6 +623,7 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "NVHPC")
     add_custom_command(
         OUTPUT  ${cub_c_radix}
         COMMAND nvcc -arch=${CUDA_ARCH} -O3 -lineinfo
+                $<$<BOOL:${OPT_MEM}>:-DOPT_MEM>
                 -c ${CMAKE_SOURCE_DIR}/gpu/cub_module_radix_sort.cu
                 -o ${cub_c_radix}
         DEPENDS ${CMAKE_SOURCE_DIR}/gpu/cub_module_radix_sort.cu

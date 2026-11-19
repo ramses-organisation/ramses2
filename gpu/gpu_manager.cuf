@@ -30,7 +30,11 @@ recursive subroutine r_set_grid_device(pst)
      call nvtxStartRange("Copy entire mesh from host to device", color=5)!red
      grid = pst%s%m%grid
      ! flag1 is only allocated/used for adaptive mesh refinement
+#ifdef OPT_MEM
+     if(pst%s%r%nlevelmax > pst%s%r%levelmin) flag1 = pst%s%m%flag1(:,1:pst%s%m%ngridmax)
+#else
      if(pst%s%r%nlevelmax > pst%s%r%levelmin) flag1 = pst%s%m%flag1
+#endif
 #ifdef HYDRO
      uold = pst%s%m%uold
 #ifdef MHD
@@ -43,7 +47,11 @@ recursive subroutine r_set_grid_device(pst)
 #ifdef GRAV
      f = pst%s%m%f
      phi = pst%s%m%phi
+#ifdef OPT_MEM
+     phi_old = pst%s%m%phi_old(:,1:pst%s%m%ngridmax)
+#else
      phi_old = pst%s%m%phi_old
+#endif
 #endif
      call GPU_Error_Check(__FILE__, __LINE__)
      call nvtxEndRange()
@@ -200,7 +208,11 @@ recursive subroutine r_transfer_grid_host(pst)
 #ifdef GRAV
      pst%s%m%f = f
      pst%s%m%phi = phi
+#ifdef OPT_MEM
+     pst%s%m%phi_old(:,1:pst%s%m%ngridmax) = phi_old
+#else
      pst%s%m%phi_old = phi_old
+#endif
 #endif
      call GPU_Error_Check(__FILE__, __LINE__)
      call nvtxEndRange()
@@ -558,8 +570,14 @@ subroutine gpu_allocate_amr(sim)
   allocate(grid(1:sim%m%ngridmax+sim%m%ncachemax))
   if(sim%r%nlevelmax > sim%r%levelmin .or. sim%r%clump_finder .or. sim%r%sink_form .or. &
        & sim%r%sink_merge .or. sim%r%star .or. sim%r%tree)then
+#ifdef OPT_MEM
+     ! No cache (ghost) octs: flags are only used on local octs
+     allocate(flag1(1:twotondim,1:sim%m%ngridmax))
+     allocate(flag2(1:twotondim,1:sim%m%ngridmax))
+#else
      allocate(flag1(1:twotondim,1:sim%m%ngridmax+sim%m%ncachemax))
      allocate(flag2(1:twotondim,1:sim%m%ngridmax+sim%m%ncachemax))
+#endif
      flag1=0
      flag2=0
   endif
@@ -577,8 +595,14 @@ subroutine gpu_allocate_amr(sim)
   hash_key=0
   hash_val=0
   ! Work buffers for GPU scan/sort/refine
+#ifdef OPT_MEM
+  ! swap_local is indexed by oct (sort) or by cache oct (cache construction)
+  allocate(swap_local(1:max(sim%m%ngridmax,sim%m%ncachemax)))
+  allocate(swap_global(1:max(sim%m%ngridmax,sim%m%ncachemax)))
+#else
   allocate(swap_local(1:sim%m%ngridmax+sim%m%ncachemax))
   allocate(swap_global(1:sim%m%ngridmax+sim%m%ncachemax))
+#endif
   scan_size = sim%m%ngridmax + sim%m%ncachemax
   call ensure_scan_capacity(scan_size, 0)
   swap_local=0
@@ -635,11 +659,20 @@ subroutine gpu_allocate_amr(sim)
   turb_mask_d=0
 #endif
 #ifdef GRAV
+#ifdef OPT_MEM
+  ! No cache (ghost) octs for rho, nref and phi_old (single GPU)
+  allocate(rho(1:twotondim,1:sim%m%ngridmax))
+  allocate(phi(1:twotondim,1:sim%m%ngridmax+sim%m%ncachemax))
+  allocate(nref(1:twotondim,1:sim%m%ngridmax))
+  allocate(f(1:twotondim,1:3,1:sim%m%ngridmax+sim%m%ncachemax))
+  allocate(phi_old(1:twotondim,1:sim%m%ngridmax))
+#else
   allocate(rho(1:twotondim,1:sim%m%ngridmax+sim%m%ncachemax))
   allocate(phi(1:twotondim,1:sim%m%ngridmax+sim%m%ncachemax))
   allocate(nref(1:twotondim,1:sim%m%ngridmax+sim%m%ncachemax))
   allocate(f(1:twotondim,1:3,1:sim%m%ngridmax+sim%m%ncachemax))
   allocate(phi_old(1:twotondim,1:sim%m%ngridmax+sim%m%ncachemax))
+#endif
   f=0d0
   rho=0d0
   phi=0d0

@@ -2260,11 +2260,20 @@ contains
 
       head_part = sim%star%npart + 1
 
+#ifdef OPT_MEM
+      ! swap_local and swap_global hold max(ngridmax,ncachemax) entries
+      if (head_part + npart_new - 1 > sim%r%nstarmax .or. &
+           & npart_new > max(sim%m%ngridmax, sim%m%ncachemax)) then
+         write(*,*)'Not enough memory for star particles on GPU'
+         write(*,*)'npart=',sim%star%npart,' npart_new=',npart_new,' nstarmax=',sim%r%nstarmax
+         write(*,*)'max(ngridmax,ncachemax)=',max(sim%m%ngridmax, sim%m%ncachemax)
+#else
       if (head_part + npart_new - 1 > sim%r%nstarmax .or. &
            & npart_new > sim%m%ngridmax + sim%m%ncachemax) then
          write(*,*)'Not enough memory for star particles on GPU'
          write(*,*)'npart=',sim%star%npart,' npart_new=',npart_new,' nstarmax=',sim%r%nstarmax
          write(*,*)'ngridmax+ncachemax=',sim%m%ngridmax+sim%m%ncachemax
+#endif
          write(*,*)'Increase nstarmax in the namelist'
          stop
       endif
@@ -2766,7 +2775,12 @@ contains
 #if defined(CUB_SORT_REFINE)
           ! repurpose flag2 bytes for our CUB radix sort
           ! note the first dimension is 1:twotondim which ensures required 8-byte alignment
+#ifdef OPT_MEM
+          ! flag2 has no cache octs
+          noct_max = sim%m%ngridmax
+#else
           noct_max = sim%m%ngridmax+sim%m%ncachemax
+#endif
           hkey_size = int(noct_max, kind=8) * int(twotondim, kind=8) / 2_8
           call c_f_pointer(c_loc(flag2(1,1)), hkeys_in, [hkey_size])
           call c_f_pointer(c_loc(flag2(1,noct_max/2)), hkeys_out, [hkey_size])
@@ -3336,7 +3350,7 @@ contains
        do idim = 1, ndim ! Loop over steps
           call nvtxStartRange("GPU smooth_flag", color=2)!yellow
           call count_neighbors<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(flag2, flag1, nbor, &
-               & head_idx, num_octs)
+               & head_idx, num_octs, sim%m%ngridmax)
           call GPU_Error_Check(__FILE__, __LINE__)
           call flag_count_kernel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(flag1, flag2, &
                & head_idx, num_octs, n_nbor(idim))

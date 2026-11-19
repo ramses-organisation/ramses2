@@ -44,6 +44,7 @@ PAPER = 0
 CUB_SORT_PART = 1
 CUB_SORT_REFINE = 1
 CUB_SCAN_REFINE = 1
+OPT_MEM = 0
 DEBUG = 0
 HDF5 = 0
 POSIXIO = 1
@@ -205,6 +206,9 @@ ifeq ($(COMPILER),NVHPC)
    endif
    ifneq ($(CUB_SCAN_REFINE),0)
       DEFINES += -DCUB_SCAN_REFINE
+   endif
+   ifneq ($(OPT_MEM),0)
+      DEFINES += -DOPT_MEM
    endif
    GPU_SM := $(shell echo '$(CUDA_ARCH)' | sed -nE 's/^sm_([0-9]+)[af]?$$/\1/p')
    ifneq ($(GPU_SM),)
@@ -397,7 +401,7 @@ cub_inclusive_scan_f.o: cub_inclusive_scan.cuf cub_inclusive_scan_c.o
 	nvfortran $(FFLAGS) -c cub_inclusive_scan_c.o $(GPU_PATH)/cub_inclusive_scan.cuf -o cub_inclusive_scan_f.o
 #############################################################################
 cub_module_radix_sort_c.o: cub_module_radix_sort.h cub_module_radix_sort.cu
-	nvcc -arch=$(CUDA_ARCH) -O3 -lineinfo -c $(GPU_PATH)/cub_module_radix_sort.cu -o cub_module_radix_sort_c.o
+	nvcc -arch=$(CUDA_ARCH) -O3 -lineinfo $(filter -DOPT_MEM,$(DEFINES)) -c $(GPU_PATH)/cub_module_radix_sort.cu -o cub_module_radix_sort_c.o
 #############################################################################
 cub_module_radix_sort_f.o: cub_module_radix_sort.cuf cub_module_radix_sort_c.o
 	nvfortran $(FFLAGS) -c cub_module_radix_sort_c.o $(GPU_PATH)/cub_module_radix_sort.cuf -o cub_module_radix_sort_f.o

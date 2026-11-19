@@ -322,10 +322,18 @@ contains
     endif
 
     ! Mesh fields: halo id (flag1), peak id (flag2) and smoothed density
+#ifdef OPT_MEM
+    m%flag1(:,1:m%ngridmax) = flag1
+    m%flag2(:,1:m%ngridmax) = flag2
+#ifdef GRAV
+    m%rho  (:,1:m%ngridmax) = rho
+#endif
+#else
     m%flag1 = flag1
     m%flag2 = flag2
 #ifdef GRAV
     m%rho   = rho
+#endif
 #endif
 
     ! Particle peak and halo ids (without halo merging, each clump is its own halo)
