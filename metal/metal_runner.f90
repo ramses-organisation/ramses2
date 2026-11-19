@@ -827,7 +827,7 @@ subroutine metal_allocate_grav(sim)
 
   call mtl_alloc_grav( &
        int(sim%r%ngridmax,  c_int), &
-       int(sim%r%ncachemax, c_int), &
+       int(sim%m%ncachemax, c_int), &
        int(ngridmax_mg,     c_int), &
        int(ncachemax_mg,    c_int), &
        int(hash_size_mg,    c_int))

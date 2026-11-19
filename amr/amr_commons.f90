@@ -71,7 +71,7 @@ module amr_commons
      integer::levelmin=1         ! Full refinement up to levelmin
      integer::nlevelmax=1        ! Maximum number of level
      integer::ngridmax=0         ! Maximum number of grids
-     integer::ncachemax=10000    ! Maximum number of cache lines
+     integer::ncachemax=0        ! Maximum number of cache lines (0: no GPU ghost octs)
      integer::npartmax=0         ! Maximum number of DM particles
      integer::nstarmax=0         ! Maximum number of star particles
      integer::nsinkmax=0         ! Maximum number of sink particles

@@ -104,7 +104,7 @@ subroutine m_read_params(pst)
   integer::levelmin=1         ! Full refinement up to levelmin
   integer::nlevelmax=1        ! Maximum number of level
   integer::ngridmax=0         ! Maximum number of grids
-  integer::ncachemax=10000    ! Maximum number of cache lines
+  integer::ncachemax=0        ! Maximum number of cache lines (0: no GPU ghost octs)
   real(kind=8)::boxlen=1.0D0      ! Cell sixe at level 0
 
   ! Output parameters
