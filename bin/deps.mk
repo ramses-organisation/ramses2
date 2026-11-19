@@ -224,7 +224,7 @@ gpu_sink.o: amr_parameters.o constants.o gpu_feedback.o gpu_runner.o gpu_utils.o
 gpu_star.o: amr_parameters.o gpu_utils.o hydro_parameters.o oct_commons.o
 gpu_turb.o: amr_parameters.o hydro_parameters.o oct_commons.o turb_commons.o
 gpu_utils.o: amr_parameters.o oct_commons.o
-init_amr.o: gpu_clump.o gpu_manager.o
+init_amr.o: gpu_clump.o gpu_manager.o gpu_runner.o
 init_part.o: gpu_manager.o gpu_phew.o
 interpol_phi.o: gpu_runner.o
 move_fine.o: gpu_part.o
