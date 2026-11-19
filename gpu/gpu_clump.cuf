@@ -105,13 +105,9 @@ contains
     do_profile = (sim%r%clump_finder .and. sim%r%saddle_threshold > 0 .and. &
          & sim%r%part .and. sim%r%rho_type_clump == 1)
 
-    ! Test cells are scanned with gpu_scan: use the size of the scan buffers,
-    ! i.e. the largest capacity requested by gpu_allocate_amr/part/star/sink/tree
-    ntestmax = sim%m%ngridmax + sim%m%ncachemax
-    if (sim%r%part) ntestmax = max(ntestmax, sim%r%npartmax)
-    if (sim%r%star) ntestmax = max(ntestmax, sim%r%nstarmax)
-    if (sim%r%sink) ntestmax = max(ntestmax, sim%r%nsinkmax)
-    if (sim%r%tree) ntestmax = max(ntestmax, sim%r%ntreemax)
+    ! Test cells are mesh cells: size to the mesh capacity, capped by the
+    ! scan capacity since is_peak_scan_d is scanned with gpu_scan
+    ntestmax = min(sim%m%ngridmax + sim%m%ncachemax, size(prefix_sum))
     nclumpmax = sim%m%ngridmax/10
 
     ! Allocate test cell arrays
