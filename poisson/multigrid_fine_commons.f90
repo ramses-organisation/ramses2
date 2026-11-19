@@ -781,7 +781,7 @@ recursive subroutine r_make_bc_rhs(pst,input,input_size)
      call mdl_get_reply(pst%s%mdl,rID,0)
   else
 #ifdef _CUDA
-     call gpu_make_rhs(pst%s,input%ilevel)
+     call gpu_make_rhs(pst%s,input%ilevel,input%icount)
 #elif defined(_METAL)
      call metal_make_rhs(pst%s,input%ilevel)
 #else

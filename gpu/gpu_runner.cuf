@@ -2260,20 +2260,11 @@ contains
 
       head_part = sim%star%npart + 1
 
-#ifdef OPT_MEM
-      ! swap_local and swap_global hold max(ngridmax,ncachemax) entries
-      if (head_part + npart_new - 1 > sim%r%nstarmax .or. &
-           & npart_new > max(sim%m%ngridmax, sim%m%ncachemax)) then
-         write(*,*)'Not enough memory for star particles on GPU'
-         write(*,*)'npart=',sim%star%npart,' npart_new=',npart_new,' nstarmax=',sim%r%nstarmax
-         write(*,*)'max(ngridmax,ncachemax)=',max(sim%m%ngridmax, sim%m%ncachemax)
-#else
       if (head_part + npart_new - 1 > sim%r%nstarmax .or. &
            & npart_new > sim%m%ngridmax + sim%m%ncachemax) then
          write(*,*)'Not enough memory for star particles on GPU'
          write(*,*)'npart=',sim%star%npart,' npart_new=',npart_new,' nstarmax=',sim%r%nstarmax
          write(*,*)'ngridmax+ncachemax=',sim%m%ngridmax+sim%m%ncachemax
-#endif
          write(*,*)'Increase nstarmax in the namelist'
          stop
       endif
@@ -2775,12 +2766,7 @@ contains
 #if defined(CUB_SORT_REFINE)
           ! repurpose flag2 bytes for our CUB radix sort
           ! note the first dimension is 1:twotondim which ensures required 8-byte alignment
-#ifdef OPT_MEM
-          ! flag2 has no cache octs
-          noct_max = sim%m%ngridmax
-#else
           noct_max = sim%m%ngridmax+sim%m%ncachemax
-#endif
           hkey_size = int(noct_max, kind=8) * int(twotondim, kind=8) / 2_8
           call c_f_pointer(c_loc(flag2(1,1)), hkeys_in, [hkey_size])
           call c_f_pointer(c_loc(flag2(1,noct_max/2)), hkeys_out, [hkey_size])
@@ -2938,6 +2924,7 @@ contains
 
     ! Update nbor index array level by level
     ! If nbor is absent, make a ghost oct in the cache and insert in hash table
+    ! (unless ncachemax=0: no ghost octs, the missing neighbor keeps nbor = 0)
 
     ! Compute new cache head
     new_head = sim%m%tail_cache(ilevel) + 1
@@ -2970,46 +2957,50 @@ contains
                   & head_idx, num_subgrids, ind, prefix_sum = prefix_sum)
              call GPU_Error_Check(__FILE__, __LINE__)
 
-             ! Compute prefix sum
+             ! No ghost octs when ncachemax=0: missing neighbors keep nbor = 0
+             if (sim%r%ncachemax > 0) then
+
+                ! Compute prefix sum
 #if defined(CUB_SCAN_REFINE)
-             call cub_inclusive_sum(c_loc(prefix_sum), head_idx, num_subgrids)
+                call cub_inclusive_sum(c_loc(prefix_sum), head_idx, num_subgrids)
 #else
-             call gpu_scan(prefix_sum, head_idx, num_subgrids, new_noct_d)
+                call gpu_scan(prefix_sum, head_idx, num_subgrids, new_noct_d)
 #endif
-             ! Compute cache swap table
-             ! Make new ghost octs in cache
-             ! Insert new octs in hash table
-             ! Increment ifree_cache on device
+                ! Compute cache swap table
+                ! Make new ghost octs in cache
+                ! Insert new octs in hash table
+                ! Increment ifree_cache on device
 #if defined(FUSE_CACHE)
-             call make_cache_insert_ghost_octs<<<num_blocks, num_threads>>>(grid, flag1, &
-                  & uold, bold, f, phi, phi_old, swap_local, prefix_sum, father, nbor, hash_key, &
-                  & hash_val, sim%m%hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, &
-                  & periodic, sim%m%ngridmax, sim%m%ncachemax, ifree_cache_d, cache_overflow_d, ind, &
-                  & head_idx, num_subgrids, interpol_var, interpol_type, smallr_d)
-             call GPU_Error_Check(__FILE__, __LINE__)
+                call make_cache_insert_ghost_octs<<<num_blocks, num_threads>>>(grid, flag1, &
+                     & uold, bold, f, phi, phi_old, swap_local, prefix_sum, father, nbor, hash_key, &
+                     & hash_val, sim%m%hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, &
+                     & periodic, sim%m%ngridmax, sim%m%ncachemax, ifree_cache_d, cache_overflow_d, ind, &
+                     & head_idx, num_subgrids, interpol_var, interpol_type, smallr_d)
+                call GPU_Error_Check(__FILE__, __LINE__)
 #else
 #if defined(CUB_SCAN_REFINE)
-             call get_total_sum<<<1,1>>>(prefix_sum, head_idx, num_subgrids, new_noct_d)
-             call GPU_Error_Check(__FILE__, __LINE__)
+                call get_total_sum<<<1,1>>>(prefix_sum, head_idx, num_subgrids, new_noct_d)
+                call GPU_Error_Check(__FILE__, __LINE__)
 #endif
-             call compute_cache_swap_table<<<num_blocks, num_threads>>>(swap_local, prefix_sum, &
-                  & head_idx, num_subgrids)
-             call GPU_Error_Check(__FILE__, __LINE__)
+                call compute_cache_swap_table<<<num_blocks, num_threads>>>(swap_local, prefix_sum, &
+                     & head_idx, num_subgrids)
+                call GPU_Error_Check(__FILE__, __LINE__)
 
-             call make_cache_octs<<<num_blocks, num_threads>>>(grid, flag1, &
-                  & uold, bold, f, phi, phi_old, swap_local, father, nbor, &
-                  & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
-                  & sim%m%ngridmax, sim%m%ncachemax, ifree_cache_d, cache_overflow_d, new_noct_d, ind, &
-                  & interpol_var, interpol_type, smallr_d)
-             call GPU_Error_Check(__FILE__, __LINE__)
+                call make_cache_octs<<<num_blocks, num_threads>>>(grid, flag1, &
+                     & uold, bold, f, phi, phi_old, swap_local, father, nbor, &
+                     & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
+                     & sim%m%ngridmax, sim%m%ncachemax, ifree_cache_d, cache_overflow_d, new_noct_d, ind, &
+                     & interpol_var, interpol_type, smallr_d)
+                call GPU_Error_Check(__FILE__, __LINE__)
 
-             call insert_hash_cache<<<num_blocks, num_threads>>>(grid, hash_key, hash_val, sim%m%hash_size, &
-                  & ckey_max, key_off, sim%m%ngridmax, ifree_cache_d, cache_overflow_d, new_noct_d)
-             call GPU_Error_Check(__FILE__, __LINE__)
+                call insert_hash_cache<<<num_blocks, num_threads>>>(grid, hash_key, hash_val, sim%m%hash_size, &
+                     & ckey_max, key_off, sim%m%ngridmax, ifree_cache_d, cache_overflow_d, new_noct_d)
+                call GPU_Error_Check(__FILE__, __LINE__)
 
-             call advance_ifree_cache<<<1,1>>>(ifree_cache_d, new_noct_d, cache_overflow_d)
-             call GPU_Error_Check(__FILE__, __LINE__)
+                call advance_ifree_cache<<<1,1>>>(ifree_cache_d, new_noct_d, cache_overflow_d)
+                call GPU_Error_Check(__FILE__, __LINE__)
 #endif
+             endif
              call nvtxEndRange()
 
           end do
@@ -4003,16 +3994,25 @@ contains
   !> Close to the domain boundary, modify the charge to account for the value of
   !> the potential at the boundary. The new problem is now phi=0 at the boundary.
   !>
-  subroutine gpu_make_rhs(sim, ilevel)
+  subroutine gpu_make_rhs(sim, ilevel, icount)
     use nvtx
     use mg_device, only: reset_rhs_kernel
     use ramses_commons, only: ramses_t
     type(ramses_t), intent(inout) :: sim
     integer, intent(in) :: ilevel
+    integer, intent(in) :: icount
 
     integer(kind=4) :: head_idx, num_octs
     integer :: threadsX_per_block, threadsY_per_block, num_threads, num_blocks
     real(kind=8) :: fourpi, offset, dx, oneoverdx2
+    real(kind=8) :: tfrac
+
+    ! Time fraction for missing neighbor octs (same as gpu_init_phi)
+    if (sim%g%dtold(ilevel-1)>0.0)then
+       tfrac = sim%g%dtnew(ilevel) / sim%g%dtold(ilevel-1) * (icount-1)
+    else
+       tfrac = 0.0
+    end if
 
     ! Modify the rhs to account for boundary conditions.
     ! From now on, boundary conditions are phi = 0.
@@ -4033,7 +4033,9 @@ contains
     if (num_octs > 0) then
        call nvtxStartRange("GPU make_rhs", color=1)!blue
        call reset_rhs_kernel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(phi, rho, f, nbor, &
-            & head_idx, num_octs, sim%m%ngridmax, fourpi, offset, oneoverdx2)
+            & head_idx, num_octs, sim%m%ngridmax, fourpi, offset, oneoverdx2, &
+            & sim%r%ncachemax == 0, grid, phi_old, tfrac, hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, &
+            & box_ckey_min, box_ckey_max, periodic)
        call GPU_Error_Check(__FILE__, __LINE__)
        call nvtxEndRange()
     end if
@@ -4624,20 +4626,29 @@ contains
   !> @param[in] sim : The simulation object
   !> @param[in] ilevel : The refinement level to update
   !>
-  subroutine gpu_gradient_phi(sim, ilevel)
+  subroutine gpu_gradient_phi(sim, ilevel, icount)
     use nvtx
     use mg_device
     use ramses_commons, only: ramses_t
     implicit none
     type(ramses_t), intent(inout) :: sim
     integer, intent(in) :: ilevel
+    integer, intent(in) :: icount
     !
     integer(kind=4) :: head_idx, head_mg, head_father
     integer(kind=4) :: num_octs, num_blocks, num_threads
     integer :: threadsX_per_block, threadsY_per_block
     real(kind=8) :: dx, dx2
+    real(kind=8) :: tfrac
 
     dx  = sim%r%boxlen/2**ilevel
+
+    ! Time fraction for missing neighbor octs (same as gpu_init_phi)
+    if (sim%g%dtold(ilevel-1)>0.0)then
+       tfrac = sim%g%dtnew(ilevel) / sim%g%dtold(ilevel-1) * (icount-1)
+    else
+       tfrac = 0.0
+    end if
 
     head_idx = sim%m%head(ilevel)
     num_octs = sim%m%noct(ilevel)
@@ -4647,7 +4658,9 @@ contains
     if (num_octs > 0) then
        call nvtxStartRange("GPU gradient_phi", color=1)!blue
        call gradient_phi<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(phi, f, nbor, &
-            & head_idx, num_octs, dx)
+            & head_idx, num_octs, dx, &
+            & sim%r%ncachemax == 0, grid, phi_old, tfrac, hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, &
+            & box_ckey_min, box_ckey_max, periodic, sim%m%ngridmax)
        call GPU_Error_Check(__FILE__, __LINE__)
        call nvtxEndRange()
     end if

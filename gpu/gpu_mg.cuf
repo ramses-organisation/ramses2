@@ -226,6 +226,103 @@ contains
   ! =========================================================================
 
   ! =========================================================================
+  !> @brief
+  !> Potential in cell icell of the missing neighbor oct (nbor = 0, no_ghost mode,
+  !> i.e. ncachemax = 0) of oct oct_idx across face iface (1..6).
+  !>
+  !> @detail
+  !> Same value as the ghost oct built by make_initial_phi: CIC interpolation and
+  !> time extrapolation from the father cell. If the father oct is also missing
+  !> (possible with nexpand=0), inject phi from the first existing ancestor cell.
+  !>
+  attributes(device) function phi_missing_nbor(grid, nbor, phi, phi_old, tfrac, &
+       & hash_key, hash_val, hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
+       & ngridmax, oct_idx, iface, icell)
+    implicit none
+    real(kind=dp) :: phi_missing_nbor
+    type(oct), device :: grid(*)
+    integer(kind=4), device :: nbor(1:subgridsize,*)
+    real(kind=dp), device :: phi(1:twotondim,*)
+    real(kind=dp), device :: phi_old(1:twotondim,*)
+    real(kind=8), value :: tfrac
+    integer(kind=8), device :: hash_key(*)
+    integer(kind=4), device :: hash_val(*)
+    integer(kind=4), value :: hash_size
+    integer(kind=4), device :: ckey_max(*)
+    integer(kind=8), device :: key_off(*)
+    integer(kind=4), device :: box_ckey_min(1:ndim,*)
+    integer(kind=4), device :: box_ckey_max(1:ndim,*)
+    logical, device :: periodic(1:3)
+    integer(kind=4), value :: ngridmax
+    integer(kind=4), value :: oct_idx, iface, icell
+
+    integer(kind=4) :: igrid_nbor(1:threetondim)
+    integer(kind=4) :: icell_nbor(1:threetondim)
+    integer(kind=4) :: ckey(1:ndim)
+    integer(kind=4) :: ilevel, ilev, idim, igrid, ind
+    integer(kind=4) :: ind_average, ind_father, igrid_nbr, ind_nbr
+    real(kind=dp) :: acc
+
+    ! Cartesian key of the missing oct
+    ilevel = grid(oct_idx)%lev
+    do idim = 1, ndim
+       ckey(idim) = grid(oct_idx)%ckey(idim)
+    end do
+    idim = (iface + 1) / 2
+    ckey(idim) = ckey(idim) - 1 + 2 * mod(iface + 1, 2)
+
+    ! Periodic boundary conditions
+    do idim = 1, ndim
+       if (periodic(idim)) then
+          if (ckey(idim) <  box_ckey_min(idim,ilevel)) ckey(idim) = box_ckey_max(idim,ilevel) - 1
+          if (ckey(idim) >= box_ckey_max(idim,ilevel)) ckey(idim) = box_ckey_min(idim,ilevel)
+       end if
+    end do
+
+    ! Father cell of the missing oct
+    call get_cell_by_key(hash_key, hash_val, hash_size, ckey_max, key_off, ilevel - 1, ckey, igrid, ind)
+
+    if (igrid > 0 .and. igrid <= ngridmax) then
+
+       ! Get 3x3x3 neighboring father cells
+       call nbor_cells(nbor, igrid, mod(ckey(1), 2), mod(ckey(2), 2), mod(ckey(3), 2), igrid_nbor, icell_nbor)
+
+       ! CIC interpolation + time extrapolation (as in make_initial_phi)
+       acc = 0d0
+       do ind_average = 1, twotondim
+          ind_father = ccc(ind_average, icell)
+          igrid_nbr  = igrid_nbor(ind_father)
+          ind_nbr    = icell_nbor(ind_father)
+          if (igrid_nbr <= 0 .or. igrid_nbr > ngridmax) then ! Should never happen
+             igrid_nbr = igrid
+             ind_nbr   = ind
+          end if
+          acc = acc + bbb(ind_average) * ( phi(ind_nbr, igrid_nbr) &
+               & + (phi(ind_nbr, igrid_nbr) - phi_old(ind_nbr, igrid_nbr)) * tfrac )
+       end do
+       phi_missing_nbor = acc
+       return
+
+    end if
+
+    ! Father oct also missing: inject phi from the first existing ancestor cell
+    do ilev = ilevel - 2, 1, -1
+       do idim = 1, ndim
+          ckey(idim) = ckey(idim) / 2
+       end do
+       call get_cell_by_key(hash_key, hash_val, hash_size, ckey_max, key_off, ilev, ckey, igrid, ind)
+       if (igrid > 0 .and. igrid <= ngridmax) then
+          phi_missing_nbor = phi(ind, igrid)
+          return
+       end if
+    end do
+
+    phi_missing_nbor = 0d0 ! Should never happen
+
+  end function phi_missing_nbor
+  ! =========================================================================
+
+  ! =========================================================================
   attributes(global) subroutine reset_mask_kernel(f, head_idx, num_octs, mask_val)
     real(kind=dp), device :: f(1:twotondim,1:ndim,*)
     integer(kind=4), intent(in), value :: head_idx
@@ -251,7 +348,8 @@ contains
   ! =========================================================================
 
   ! =========================================================================
-  attributes(global) subroutine reset_rhs_kernel(phi, rho, f, nbor, head_idx, num_octs, ngridmax, fourpi, offset, oneoverdx2)
+  attributes(global) subroutine reset_rhs_kernel(phi, rho, f, nbor, head_idx, num_octs, ngridmax, fourpi, offset, oneoverdx2, &
+       & no_ghost, grid, phi_old, tfrac, hash_key, hash_val, hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic)
     real(kind=dp), device :: phi(1:twotondim,*)
     real(kind=dp), device :: rho(1:twotondim,*)
     real(kind=dp), device :: f(1:twotondim,1:ndim,*)
@@ -260,6 +358,18 @@ contains
     integer(kind=4), intent(in), value :: num_octs
     integer(kind=4), intent(in), value :: ngridmax
     real(kind=8), intent(in), value :: fourpi, offset, oneoverdx2
+    logical, intent(in), value :: no_ghost
+    type(oct), device :: grid(*)
+    real(kind=dp), device :: phi_old(1:twotondim,*)
+    real(kind=8), intent(in), value :: tfrac
+    integer(kind=8), device :: hash_key(*)
+    integer(kind=4), device :: hash_val(*)
+    integer(kind=4), intent(in), value :: hash_size
+    integer(kind=4), device :: ckey_max(*)
+    integer(kind=8), device :: key_off(*)
+    integer(kind=4), device :: box_ckey_min(1:ndim,*)
+    integer(kind=4), device :: box_ckey_max(1:ndim,*)
+    logical, device :: periodic(1:3)
 
     real(kind=dp) :: phi_nbr, dis_nbr, w, phi_b
     integer :: cell_idx, oct_idx, block_idx, source_idx, subgrid_idx, num_idx
@@ -316,11 +426,8 @@ contains
           ! Compute neighboring cell index in parent octs
           cell_nbr_idx = hhh(cell_idx, 2*(idim-1) + inbor)
 
-          ! Get phi
-          phi_nbr = phi(cell_nbr_idx, oct_nbr_idx)
-
           ! Get distance function
-          if (oct_nbr_idx <= ngridmax) then
+          if (oct_nbr_idx > 0 .and. oct_nbr_idx <= ngridmax) then
              dis_nbr = f(cell_nbr_idx, 3, oct_nbr_idx)
           else
              dis_nbr = -1d0
@@ -329,6 +436,14 @@ contains
           ! If close to boundary and cell is not masked,
           ! then modify RHS using linear reconstruction
           if (dis_nbr <= 0.0 .and. f(cell_idx, 3, oct_idx) > 0) then
+             ! Get phi (no ghost octs: interpolate missing neighbor from coarser level)
+             if (oct_nbr_idx > 0 .or. .not. no_ghost) then
+                phi_nbr = phi(cell_nbr_idx, oct_nbr_idx)
+             else
+                phi_nbr = phi_missing_nbor(grid, nbor, phi, phi_old, tfrac, &
+                     & hash_key, hash_val, hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
+                     & ngridmax, oct_idx, 2*(idim-1) + inbor, cell_nbr_idx)
+             end if
              w = dis_nbr / (dis_nbr - f(cell_idx, 3, oct_idx))
              phi_b = ((1.0d0 - w) * phi_nbr + w * phi(cell_idx, oct_idx))
              f(cell_idx, 2, oct_idx) = f(cell_idx, 2, oct_idx) - 2.0d0 * oneoverdx2 * phi_b
@@ -1155,13 +1270,28 @@ contains
   ! =========================================================================
 
   ! =========================================================================
-  attributes(global) subroutine gradient_phi(phi, f, nbor, head_idx, num_octs, dx)
+  attributes(global) subroutine gradient_phi(phi, f, nbor, head_idx, num_octs, dx, &
+       & no_ghost, grid, phi_old, tfrac, hash_key, hash_val, hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
+       & ngridmax)
     real(kind=dp), device :: phi(1:twotondim,*)
     real(kind=dp), device :: f(1:twotondim,1:ndim,*)
     integer(kind=4), device :: nbor(1:subgridsize,*)
     integer(kind=4), intent(in), value :: head_idx
     integer(kind=4), intent(in), value :: num_octs
     real(kind=8), intent(in), value :: dx
+    logical, intent(in), value :: no_ghost
+    type(oct), device :: grid(*)
+    real(kind=dp), device :: phi_old(1:twotondim,*)
+    real(kind=8), intent(in), value :: tfrac
+    integer(kind=8), device :: hash_key(*)
+    integer(kind=4), device :: hash_val(*)
+    integer(kind=4), intent(in), value :: hash_size
+    integer(kind=4), device :: ckey_max(*)
+    integer(kind=8), device :: key_off(*)
+    integer(kind=4), device :: box_ckey_min(1:ndim,*)
+    integer(kind=4), device :: box_ckey_max(1:ndim,*)
+    logical, device :: periodic(1:3)
+    integer(kind=4), intent(in), value :: ngridmax
 
     real(kind=dp) :: phi1, phi2, phi3, phi4, a, b
     integer, dimension(0:twondim) :: nbor_idx
@@ -1236,11 +1366,35 @@ contains
        ind3_idx = hh3(cell_idx, idim)
        ind4_idx = hh4(cell_idx, idim)
 
-       ! Get phi in the 4 cells of the kernel
-       phi1 = phi(ind1_idx, oct1_idx)
-       phi2 = phi(ind2_idx, oct2_idx)
-       phi3 = phi(ind3_idx, oct3_idx)
-       phi4 = phi(ind4_idx, oct4_idx)
+       ! Get phi in the 4 cells of the kernel (no ghost octs: interpolate missing neighbors from coarser level)
+       if (oct1_idx > 0 .or. .not. no_ghost) then
+          phi1 = phi(ind1_idx, oct1_idx)
+       else
+          phi1 = phi_missing_nbor(grid, nbor, phi, phi_old, tfrac, &
+               & hash_key, hash_val, hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
+               & ngridmax, oct_idx, gg1(cell_idx, idim), ind1_idx)
+       end if
+       if (oct2_idx > 0 .or. .not. no_ghost) then
+          phi2 = phi(ind2_idx, oct2_idx)
+       else
+          phi2 = phi_missing_nbor(grid, nbor, phi, phi_old, tfrac, &
+               & hash_key, hash_val, hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
+               & ngridmax, oct_idx, gg2(cell_idx, idim), ind2_idx)
+       end if
+       if (oct3_idx > 0 .or. .not. no_ghost) then
+          phi3 = phi(ind3_idx, oct3_idx)
+       else
+          phi3 = phi_missing_nbor(grid, nbor, phi, phi_old, tfrac, &
+               & hash_key, hash_val, hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
+               & ngridmax, oct_idx, gg3(cell_idx, idim), ind3_idx)
+       end if
+       if (oct4_idx > 0 .or. .not. no_ghost) then
+          phi4 = phi(ind4_idx, oct4_idx)
+       else
+          phi4 = phi_missing_nbor(grid, nbor, phi, phi_old, tfrac, &
+               & hash_key, hash_val, hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
+               & ngridmax, oct_idx, gg4(cell_idx, idim), ind4_idx)
+       end if
 
        f(cell_idx, idim, oct_idx) = a * (phi1 - phi2) - b * (phi3 - phi4)
 
