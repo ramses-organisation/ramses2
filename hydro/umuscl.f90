@@ -1901,8 +1901,14 @@ subroutine uslope(q,dq, &
   real(kind=8)::dx,dt
   integer::iu1,iu2,ju1,ju2,ku1,ku2
   type(hydro_params_t)::params
+#ifdef CEPP
+  real(kind=8), intent(in) ::q(iu1:iu2,ju1:ju2,ku1:ku2,1:nprim)
+  real(kind=8), intent(out)::dq(iu1:iu2,ju1:ju2,ku1:ku2,1:nprim,1:ndim)
+#else
   real(kind=8),dimension(iu1:iu2,ju1:ju2,ku1:ku2,1:nprim)::q
   real(kind=8),dimension(iu1:iu2,ju1:ju2,ku1:ku2,1:nprim,1:ndim)::dq
+#endif
+
 #ifdef MHD
   real(kind=8),dimension(iu1:iu2+1,ju1:ju2+1,ku1:ku2+1,1:3)::bf
   real(kind=8),dimension(iu1:iu2+1,ju1:ju2+1,ku1:ku2+1,1:3,1:2)::dbf
@@ -2117,6 +2123,22 @@ subroutine uslope(q,dq, &
         do k = klo, khi
            do j = jlo, jhi
               do i = ilo, ihi
+#ifdef CEPP
+                 ! slopes in first coordinate direction
+                 dlft = q(i  ,j,k,n) - q(i-1,j,k,n)
+                 drgt = q(i+1,j,k,n) - q(i  ,j,k,n)
+                 dq(i,j,k,n,1) = 0.5 * (sign(1.0d0,dlft)+sign(1.0d0,drgt)) * min(abs(dlft),abs(drgt))
+
+                 ! slopes in second coordinate direction
+                 dlft = q(i,j  ,k,n) - q(i,j-1,k,n)
+                 drgt = q(i,j+1,k,n) - q(i,j  ,k,n)
+                 dq(i,j,k,n,2) = 0.5 * (sign(1.0d0,dlft)+sign(1.0d0,drgt)) * min(abs(dlft),abs(drgt))
+
+                 ! slopes in third coordinate direction
+                 dlft = q(i,j,k  ,n) - q(i,j,k-1,n)
+                 drgt = q(i,j,k+1,n) - q(i,j,k  ,n)
+                 dq(i,j,k,n,3) = 0.5 * (sign(1.0d0,dlft)+sign(1.0d0,drgt)) * min(abs(dlft),abs(drgt))
+#else
                  ! slopes in first coordinate direction
                  dlft = q(i  ,j,k,n) - q(i-1,j,k,n)
                  drgt = q(i+1,j,k,n) - q(i  ,j,k,n)
@@ -2147,6 +2169,7 @@ subroutine uslope(q,dq, &
                  else
                     dq(i,j,k,n,3) = max(dlft,drgt)
                  end if
+#endif
               end do
            end do
         end do

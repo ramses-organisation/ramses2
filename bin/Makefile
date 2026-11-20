@@ -48,6 +48,10 @@ MPIF90 = mpif90
 EXEC = ramses
 DEFINES =
 EXTRA_DEFINES =
+OPT_DSYMBOLS = 0
+OPT_MARCH = 0
+OPT_NOSIMD = 0
+OPT_CEPP = 0
 #############################################################################
 # Compute NVAR
 NHYDRO = 5
@@ -132,6 +136,9 @@ endif
 ifneq ($(UNITS),)
    DEFINES += -DUNITS=$(UNITS)
 endif
+ifeq ($(OPT_CEPP),1)
+   DEFINES += -DCEPP
+endif
 DEFINES := $(strip $(DEFINES))
 #############################################################################
 # GNU compiler (gfortran)
@@ -153,6 +160,18 @@ ifeq ($(COMPILER),GNU)
       F90 += -Wuninitialized -Wall
    else
       F90 += -O3
+   endif
+   ifeq ($(OPT_DSYMBOLS),1)
+      F90 += -g -fopt-info-vec-all -fopt-info-vec-missed -fopt-info-vec-optimized -fdump-tree-vect-details
+#      FFLAGS += -g
+   endif
+   ifeq ($(OPT_MARCH),1)
+      F90 += -march=native
+#      FFLAGS += -march=native
+   endif
+   ifeq ($(OPT_NOSIMD),1)
+      F90 += -fno-tree-vectorize -fno-tree-slp-vectorize
+#      FFLAGS += -fno-tree-vectorize -fno-tree-slp-vectorize
    endif
 endif
 #############################################################################
