@@ -12,6 +12,8 @@ parser.add_argument("paths", nargs="+", help="run directories containing output_
 parser.add_argument("--labels", nargs="+", help="legend labels, one per run")
 parser.add_argument("--nbin", help="number of bins per dex")
 parser.add_argument("--npart", help="minimum number of dark matter particles per halo (default 100)")
+parser.add_argument("--mass_min", nargs="?", type=int, const=100,
+                    help="draw the mass of N dark matter particles (default N=100) as a vertical line")
 parser.add_argument("--out", help="output a png image")
 args = parser.parse_args()
 no_display = set_backend()
@@ -30,6 +32,7 @@ npart_min = int(args.npart) if args.npart else 100
 # Halo masses in Msol and comoving box volume in Mpc^3 for each run
 masses = []
 vols = []
+mparts = []
 for path in args.paths:
     print("Reading output number ",nout," in ",path)
     i=ram.rd_info(nout,path=path+"/")
@@ -40,6 +43,8 @@ for path in args.paths:
     print("Halos with npart>=%d: N=%d" % (npart_min, np.count_nonzero(halo)))
     masses.append(c.mpatch[halo] * unit_m)
     vols.append((i.boxlen * i.unit_l / i.aexp / 3.08568e24)**3)
+    # Dark matter particle mass, assuming unigrid initial conditions at levelmin
+    mparts.append((1 - i.omega_b/i.omega_m) * i.boxlen**3 / 2**(3*i.levelmin) * unit_m)
 
 # Common logarithmic bins
 lmin = np.floor(np.log10(min([np.min(m) for m in masses]))*nbin)/nbin
@@ -69,11 +74,13 @@ for ib in range(len(centers)):
 
 fig, ax1 = plt.subplots(figsize=(8, 4.8))
 
-for label, h, vol in zip(labels, hists, vols):
+for label, h, vol, mp in zip(labels, hists, vols, mparts):
     # Differential mass function per unit comoving volume
     with np.errstate(divide='ignore'):
         logphi = np.where(h > 0, np.log10(h/bin_size/vol), np.nan)
-    ax1.step(centers, logphi, where='mid', label=label)
+    line, = ax1.step(centers, logphi, where='mid', label=label)
+    if args.mass_min:
+        ax1.axvline(np.log10(args.mass_min*mp), color=line.get_color(), ls=':', lw=0.8)
 
 ax1.yaxis.set_major_locator(MultipleLocator(0.6))
 ax1.set_ylabel(r'log$_{10}$ $\phi$ [Mpc$^{-3}$ dex$^{-1}$]')
