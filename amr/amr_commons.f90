@@ -167,6 +167,7 @@ module amr_commons
      real(kind=8)::smallc=1.d-10
      real(kind=8)::smallr=1.d-10
      integer ::niter_riemann=10
+     integer ::uct_chunk_octs=1048576
      integer ::slope_type=1
      integer ::slope_mag_type=1
      real(kind=8)::difmag=0.0d0                     ! Explicit diffusion of conservative variables

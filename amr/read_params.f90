@@ -315,6 +315,7 @@ subroutine m_read_params(pst)
 
   ! Hydro solver parameters
   integer ::niter_riemann=10
+  integer ::uct_chunk_octs=1048576
   integer ::slope_type=1
   integer ::slope_mag_type=-1
   real(kind=8)::gamma=1.4d0
@@ -678,7 +679,7 @@ subroutine m_read_params(pst)
   namelist/hydro_params/gamma,courant_factor,smallr,smallc &
        & ,slope_type,slope_mag_type,difmag,etamag,eta_ohm,eta_ad,nimhd_solver,nimhd_split,nimhd_courant,nimhd_alpha,gamma_rad &
        & ,dual_energy,T2_fix,induction,entropy,sgs_turb,equilibrium_sgs,riemann,riemann2d,constant_gravity &
-       & ,niter_riemann,scheme,switch_llf_dmin,switch_llf_pmin,smagorinsky_lilly_constant
+       & ,niter_riemann,scheme,switch_llf_dmin,switch_llf_pmin,smagorinsky_lilly_constant,uct_chunk_octs
   ! Grid refinement parameters
   namelist/refine_params/x_refine,y_refine,z_refine,r_refine &
        & ,a_refine,b_refine,exp_refine,jeans_refine,mass_cut_refine &
@@ -1524,6 +1525,11 @@ subroutine m_read_params(pst)
      write(*,*)'Error: a non-periodic box (periodic=.false. or nbound>0) is not supported on GPU'
      nml_ok=.false.
   endif
+  ! The CUDA UCT solvers need room for face products.
+  if(riemann(1:4)=='uct-'.and.uct_chunk_octs<1)then
+     write(*,*)'Error: uct_chunk_octs must be positive'
+     nml_ok=.false.
+  endif
   ! The UCT face products are not exchanged between ranks, and PAPER has no UCT kernel
   if(riemann(1:4)=='uct-'.and.s%g%ncpu>1)then
      write(*,*)'Error: riemann=',trim(riemann),' is supported on one MPI rank only on GPU'
@@ -1803,6 +1809,7 @@ subroutine m_read_params(pst)
   s%r%smallc=smallc
   s%r%smallr=smallr
   s%r%niter_riemann=niter_riemann
+  s%r%uct_chunk_octs=uct_chunk_octs
   s%r%slope_type=slope_type
   if(slope_mag_type<0)then
      s%r%slope_mag_type=slope_type
