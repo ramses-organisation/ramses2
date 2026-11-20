@@ -1529,7 +1529,7 @@ subroutine m_read_params(pst)
      nml_ok=.false.
   endif
   if(s%g%ncpu>1)then
-     if(.not.hydro.or.pic.or.poisson.or.cr.or.star.or.sink.or.trac.or.dust.or.merger_tree &
+     if(.not.hydro.or.pic.or.poisson.or.rt.or.cr.or.star.or.sink.or.trac.or.dust.or.merger_tree &
           & .or.clump_finder.or.clump_only.or.movie.or.lightcone.or.s%r%core)then
         write(*,*)'Error: on several ranks, the GPU supports hydro and ideal MHD only'
         nml_ok=.false.
