@@ -330,6 +330,8 @@ contains
     local_rank=-1
     call get_environment_variable('OMPI_COMM_WORLD_LOCAL_RANK',value)
     if(value==' ')call get_environment_variable('MPI_LOCALRANKID',value)
+    if(value==' ')call get_environment_variable('MV2_COMM_WORLD_LOCAL_RANK',value)
+    if(value==' ')call get_environment_variable('PALS_LOCAL_RANKID',value)
     if(value==' ')call get_environment_variable('SLURM_LOCALID',value)
     if(value/=' ')then
        read(value,*,iostat=info)local_rank
