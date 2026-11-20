@@ -6,11 +6,24 @@ module hydro_device
   use turb_commons, only: TURB_GS, turb_gs_real
   use cudafor
   implicit none
-#if defined(GPU_SM) && GPU_SM == 100 && NDIM == 3 && NVAR == 5 && !defined(PAPER) \
-    && (NSUBGRID <= 2 || (!defined(MHD) && NSUBGRID == 4))
-#define B200_GODUNOV
-#endif
+#include "gpu_launch.h"
   private :: mix64, fnv64, fnv32, hash_set, hash_get, get_cell_by_key, hash_update, hash_free
+
+  ! Launch configuration of the tuned kernels (gpu_launch.h): threads per block, with which gpu_runner.cuf
+  ! launches them, and minimum resident blocks per SM (0: no launch_bounds of their own)
+  integer, parameter :: gpu_launch_target = GPU_LAUNCH_TARGET
+  integer, parameter :: hydro_threads = HYDRO_THREADS, hydro_minb = HYDRO_MINB
+#ifdef HYDRO_PAIR
+  integer, parameter :: hydro_pair_threads = HYDRO_PAIR_THREADS, hydro_pair_minb = HYDRO_PAIR_MINB
+#endif
+#ifdef MHD
+  integer, parameter :: uct_face_threads = UCT_FACE_THREADS, uct_face_minb = UCT_FACE_MINB
+  integer, parameter :: uct_ghost_face_threads = UCT_GHOST_FACE_THREADS, uct_ghost_face_minb = UCT_GHOST_FACE_MINB
+  integer, parameter :: uct_update_threads = UCT_UPDATE_THREADS, uct_update_minb = UCT_UPDATE_MINB
+  integer, parameter :: uct_update_amr_threads = UCT_UPDATE_AMR_THREADS, uct_update_amr_minb = UCT_UPDATE_AMR_MINB
+  integer, parameter :: nimhd_dt_threads = NIMHD_DT_THREADS, nimhd_dt_minb = NIMHD_DT_MINB
+  integer, parameter :: nimhd_stage_threads = NIMHD_STAGE_THREADS, nimhd_stage_minb = NIMHD_STAGE_MINB
+#endif
 
   !> @brief
   !> Cell index and grid offset to access neighbors.
@@ -211,81 +224,6 @@ module hydro_device
   integer, parameter :: uct_product_fields = 11+uct_product_nscalar
   integer, parameter :: uct_product_record = 5+uct_product_nscalar
   integer, parameter :: uct_product_vt1 = uct_product_record+4, uct_product_bn = uct_product_record+6
-
-  ! UCT launch configuration: threads per block, and the resident blocks per SM in the launch bounds
-  ! of each kernel. Measured on 512^3 Orszag-Tang on B200 and H200, and on A100 (256^3 in double
-  ! precision). NVHPC propagates bounds to subsequent kernels. The double precision NSUBGRID=2
-  ! face kernel inherits the fused integrator's bound, which must admit its launch size.
-#if defined(B200_GODUNOV) && NSUBGRID != 2
-#define UCT_THREADS 32
-#define UCT_GHOST_THREADS 32
-#elif defined(GPU_SM) && GPU_SM == 80 && NSUBGRID == 2
-#define UCT_THREADS 192
-#define UCT_GHOST_THREADS 256
-#elif NSUBGRID == 2
-#define UCT_THREADS 128
-#define UCT_GHOST_THREADS 256
-#else
-#define UCT_THREADS 64
-#define UCT_GHOST_THREADS 64
-#endif
-#if defined(B200_GODUNOV) && NPRE == 4 && NSUBGRID != 2
-#define UCT_FACE_LB launch_bounds(UCT_THREADS,20)
-#define UCT_GHOST_LB launch_bounds(UCT_GHOST_THREADS,6)
-#define UCT_UPDATE_LB launch_bounds(UCT_THREADS,20)
-#define UCT_AMR_UPDATE_LB launch_bounds(UCT_THREADS,6)
-#elif defined(B200_GODUNOV) && NSUBGRID != 2
-#define UCT_FACE_LB launch_bounds(UCT_THREADS,12)
-#define UCT_GHOST_LB launch_bounds(UCT_GHOST_THREADS,6)
-#define UCT_UPDATE_LB launch_bounds(UCT_THREADS,20)
-#define UCT_AMR_UPDATE_LB launch_bounds(UCT_THREADS,16)
-#elif defined(GPU_SM) && GPU_SM == 80 && NPRE == 4 && NSUBGRID == 2
-#define UCT_FACE_LB launch_bounds(UCT_THREADS,4)
-#define UCT_GHOST_LB launch_bounds(UCT_GHOST_THREADS,3)
-#define UCT_UPDATE_LB launch_bounds(UCT_THREADS,8)
-#define UCT_AMR_UPDATE_LB launch_bounds(UCT_THREADS,7)
-#elif defined(GPU_SM) && GPU_SM == 80 && NPRE == 4
-#define UCT_FACE_LB launch_bounds(UCT_THREADS,12)
-#define UCT_GHOST_LB launch_bounds(UCT_GHOST_THREADS,4)
-#define UCT_UPDATE_LB launch_bounds(UCT_THREADS,24)
-#define UCT_AMR_UPDATE_LB launch_bounds(UCT_THREADS,4)
-#elif defined(GPU_SM) && GPU_SM == 80 && NPRE != 4 && NSUBGRID == 2
-#define UCT_FACE_LB
-#define UCT_GHOST_LB launch_bounds(UCT_GHOST_THREADS,2)
-#define UCT_UPDATE_LB launch_bounds(UCT_THREADS,4)
-#define UCT_AMR_UPDATE_LB launch_bounds(UCT_THREADS,4)
-#elif NPRE == 4 && NSUBGRID == 2
-#define UCT_FACE_LB launch_bounds(UCT_THREADS,7)
-#define UCT_GHOST_LB launch_bounds(UCT_GHOST_THREADS,3)
-#if defined(B200_GODUNOV) && defined(GPU_FASTMATH)
-#define UCT_UPDATE_THREADS 96
-#define UCT_UPDATE_LB launch_bounds(UCT_UPDATE_THREADS,12)
-#else
-#define UCT_UPDATE_LB launch_bounds(UCT_THREADS,9)
-#endif
-#define UCT_AMR_UPDATE_LB launch_bounds(UCT_THREADS,7)
-#elif NPRE == 4
-#define UCT_FACE_LB launch_bounds(UCT_THREADS,14)
-#define UCT_GHOST_LB launch_bounds(UCT_GHOST_THREADS,4)
-#define UCT_UPDATE_LB launch_bounds(UCT_THREADS,20)
-#define UCT_AMR_UPDATE_LB launch_bounds(UCT_THREADS,4)
-#elif NSUBGRID == 2
-#define UCT_FACE_LB
-#define UCT_GHOST_LB launch_bounds(UCT_GHOST_THREADS,2)
-#define UCT_UPDATE_LB launch_bounds(UCT_THREADS,6)
-#define UCT_AMR_UPDATE_LB launch_bounds(UCT_THREADS,6)
-#else
-#define UCT_FACE_LB launch_bounds(UCT_THREADS,8)
-#define UCT_GHOST_LB launch_bounds(UCT_GHOST_THREADS,4)
-#define UCT_UPDATE_LB launch_bounds(UCT_THREADS,16)
-#define UCT_AMR_UPDATE_LB launch_bounds(UCT_THREADS,12)
-#endif
-  integer, parameter :: uct_threads = UCT_THREADS, uct_ghost_threads = UCT_GHOST_THREADS
-#ifdef UCT_UPDATE_THREADS
-  integer, parameter :: uct_update_threads = UCT_UPDATE_THREADS
-#else
-  integer, parameter :: uct_update_threads = uct_threads
-#endif
 
   type, public :: uct_face_smem_t
      type(subgrid_6x6x6cell_primitive)  :: local_subgrid
@@ -595,11 +533,6 @@ contains
     sz = half*(slop*dfz)
   end subroutine slope_unsplit3d
 
-  ! Pure hydro without passive scalars traces pairs of cells at slope_type=3 (trace_3d), in its own kernel,
-  ! where it is faster: NSUBGRID=4, and NSUBGRID=2 in single precision.
-#if !defined(MHD) && !(NVAR>5+NENER) && defined(NSUBGRID) && (NSUBGRID == 4 || (NSUBGRID == 2 && defined(NPRE) && NPRE == 4))
-#define HYDRO_PAIR
-#endif
 #ifdef HYDRO_PAIR
   ! slope_unsplit3d of the cells (i,j,k) and (i,j,k+1) together: the 3x3 cells of each plane
   ! k-1..k+2 are loaded once for both. min and max are exact and commute with subtracting the
@@ -5717,7 +5650,7 @@ contains
     chi = eta_o + eta_a*(bx2 + by2 + bz2)
   end function nimhd_chi
 
-  attributes(global) subroutine nimhd_dt_kernel(grid, eta, bin, nbor, head_idx, num_subgrids, data_out, &
+  attributes(global) NIMHD_DT_LB subroutine nimhd_dt_kernel(grid, eta, bin, nbor, head_idx, num_subgrids, data_out, &
        & dx, nimhd_courant, coarse_fine)
     type(oct), device :: grid(*)
     real(kind=dp), device :: eta(1:twotondim,1:2,*)
@@ -7942,43 +7875,6 @@ contains
 #ifndef PAPER
   ! NVHPC applies a kernel's launch_bounds to every kernel that follows it in the module,
   ! so kernels without launch_bounds are defined before every kernel that has them.
-  ! Double precision is register-limited: cap the registers (threads per block set in gpu_runner.cuf).
-  ! MHD bounds were measured on Orszag-Tang at 512^3 on B200 and H200 and at 256^3 on A100.
-#if defined(B200_GODUNOV) && defined(GPU_FASTMATH) && NPRE == 4 && NSUBGRID != 2
-#if defined(MHD)
-#define HYDRO_LB launch_bounds(64,14)
-#elif NSUBGRID == 4
-#define HYDRO_LB launch_bounds(608,2)
-#else
-#define HYDRO_LB launch_bounds(32,32)
-#endif
-#elif defined(MHD) && (defined(B200_GODUNOV) || (defined(GPU_SM) && GPU_SM == 90))
-#if NPRE == 4 && NSUBGRID == 2
-#define HYDRO_LB launch_bounds(256,3)
-#elif NPRE == 4
-#define HYDRO_LB launch_bounds(64,12)
-#elif NSUBGRID != 2
-#define HYDRO_LB launch_bounds(64,5)
-#elif GPU_SM == 100
-#define HYDRO_LB launch_bounds(320,1)
-#else
-#define HYDRO_LB
-#endif
-#elif defined(MHD) && defined(GPU_SM) && GPU_SM == 80 && NPRE != 4 && NSUBGRID == 2
-#define HYDRO_LB launch_bounds(256,1)
-#elif defined(MHD) && defined(GPU_SM) && GPU_SM == 80 && NPRE != 4
-#define HYDRO_LB launch_bounds(64,6)
-#elif defined(MHD) || (defined(NPRE) && NPRE == 4)
-#define HYDRO_LB
-#elif defined(B200_GODUNOV) && NSUBGRID <= 1
-#define HYDRO_LB launch_bounds(32,16)
-#elif !defined(NSUBGRID) || NSUBGRID == 1
-#define HYDRO_LB launch_bounds(64,16)
-#elif NSUBGRID == 2
-#define HYDRO_LB launch_bounds(256,4)
-#else
-#define HYDRO_LB launch_bounds(640,1)
-#endif
 #ifdef HYDRO_PAIR
   attributes(device) subroutine hydro_integrator(grid, uold, unew, bold, bnew, &
        & f, father, nbor, &
@@ -8197,20 +8093,6 @@ contains
          & switch_llf_dmin, switch_llf_pmin, induction, etamag, constant_gravity, smem, .false.)
   end subroutine hydro_integrator_kernel
 
-  ! The slope_type=3 pair kernel has its own measured launch configuration.
-#if defined(B200_GODUNOV) && NSUBGRID == 2 && NPRE == 4
-#define HYDRO_PAIR_LB launch_bounds(96,8)
-#elif defined(B200_GODUNOV) && NSUBGRID == 4 && NPRE == 4
-#define HYDRO_PAIR_LB launch_bounds(448,2)
-#elif defined(B200_GODUNOV) && NSUBGRID == 4
-#define HYDRO_PAIR_LB launch_bounds(512,1)
-#elif defined(NPRE) && NPRE == 4 && NSUBGRID == 2
-#define HYDRO_PAIR_LB launch_bounds(128,8)
-#elif defined(NPRE) && NPRE == 4
-#define HYDRO_PAIR_LB launch_bounds(512,2)
-#else
-#define HYDRO_PAIR_LB HYDRO_LB
-#endif
   attributes(global) HYDRO_PAIR_LB subroutine hydro_integrator_pair_kernel(grid, uold, unew, bold, bnew, &
        & f, father, nbor, &
        & head_idx, num_subgrids, ngridmax, ilevel, levelmin, levelmax, &
@@ -8319,7 +8201,7 @@ contains
 
   ! AMR level: the faces a listed subgrid reads whose owner is a ghost oct. Every subgrid next to
   ! the ghost oct solves them from the same cells, so the values stored are identical.
-  attributes(global) UCT_GHOST_LB subroutine uct_ghost_face_kernel(grid, uold, bold, f, nbor, products, &
+  attributes(global) UCT_GHOST_FACE_LB subroutine uct_ghost_face_kernel(grid, uold, bold, f, nbor, products, &
        & ghost_list, head_idx, num_subgrids, gamma, smallr, smallc2, dt, dx, smax_cap, slope, slope_mag, &
        & induction, constant_gravity)
     type(oct), device :: grid(*)
@@ -8443,7 +8325,7 @@ contains
   ! As uct_update_kernel, when levelmax > levelmin: the faces owned by ghost octs keep their t^n
   ! field (uct_ghost_bn_kernel), the fluxes and EMFs next to refined cells are zeroed, and above
   ! levelmin the coarser cells are corrected.
-  attributes(global) UCT_AMR_UPDATE_LB subroutine uct_update_amr_kernel(grid, unew, bnew, father, nbor, &
+  attributes(global) UCT_UPDATE_AMR_LB subroutine uct_update_amr_kernel(grid, unew, bnew, father, nbor, &
        & products, head_idx, num_subgrids, ngridmax, ilevel, levelmin, levelmax, dt, dx, slope_mag, etamag)
     type(oct), device :: grid(*)
     integer, device :: father(*)
@@ -8523,7 +8405,7 @@ contains
   ! EMF of this stage between levels with weight bweight=1, while the energy keeps the stage weight.
   ! It is the last kernel of the module, because nvfortran also applies its launch_bounds to the
   ! kernels that follow it.
-  attributes(global) launch_bounds(256,5) subroutine nimhd_stage_kernel( &
+  attributes(global) NIMHD_STAGE_LB subroutine nimhd_stage_kernel( &
        & grid, eta, yjm1, yjm2, y0, bmy0, yj, energy, eacc, eacc0, &
        & coarse_u, coarse_b, heat, first, last, accumulate, cf, father, nbor, head_idx, num_subgrids, ngridmax, &
        & ilevel, levelmin, levelmax, dt, dx, mu, nu, mut, gt, mut1, weight, bweight)

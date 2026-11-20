@@ -10,10 +10,7 @@ module gpu_runner
   use cudafor
   use curand_device
   implicit none
-#if defined(GPU_SM) && GPU_SM == 100 && NDIM == 3 && NVAR == 5 && !defined(PAPER) \
-    && (NSUBGRID <= 2 || (!defined(MHD) && NSUBGRID == 4))
-#define B200_GODUNOV
-#endif
+#include "gpu_launch.h"
   integer, dimension(1:3), parameter::n_nbor = (/1,2,2/)
 
   !> Various parameters on the device
@@ -850,11 +847,6 @@ contains
 
   end subroutine gpu_source_hydro
 
-  ! The slope_type=3 pair kernel of hydro_device, with the same condition as in gpu_hydro.cuf
-#if !defined(MHD) && !(NVAR>5+NENER) && defined(NSUBGRID) && (NSUBGRID == 4 || (NSUBGRID == 2 && defined(NPRE) && NPRE == 4))
-#define HYDRO_PAIR
-#endif
-
   !> @brief
   !> Perform the hydro integration on a GPU
   !>
@@ -869,17 +861,18 @@ contains
 #ifdef PAPER
     use hydro_device, only: hydro_integrator_paper_kernel
 #else
-    use hydro_device, only: hydro_integrator_kernel
+    use hydro_device, only: hydro_integrator_kernel, hydro_threads
 #ifdef HYDRO_PAIR
-    use hydro_device, only: hydro_integrator_pair_kernel
+    use hydro_device, only: hydro_integrator_pair_kernel, hydro_pair_threads
 #endif
 #endif
 #ifdef MHD
     use hydro_device, only: mhd_smem_t
 #ifndef PAPER
     use hydro_device, only: uct_face_kernel, uct_update_kernel, uct_update_amr_kernel, &
-         & uct_ghost_list_kernel, uct_ghost_face_kernel, uct_ghost_bn_kernel, uct_threads, uct_ghost_threads, &
-         & uct_update_threads, uct_ghost_smem_t, uct_face_smem_t, uct_update_smem_t, uct_product_fields
+         & uct_ghost_list_kernel, uct_ghost_face_kernel, uct_ghost_bn_kernel, uct_face_threads, uct_ghost_face_threads, &
+         & uct_update_threads, uct_update_amr_threads, uct_ghost_smem_t, uct_face_smem_t, uct_update_smem_t, &
+         & uct_product_fields
     use hydro_device, only: uct_riemann_d
     use hydro_parameters, only: solver_uct_hlld, solver_uct_llf, solver_uct_hll
 #endif
@@ -894,7 +887,10 @@ contains
     integer, intent(in)::ilevel
     !
     integer(kind=4) :: head_idx, num_subgrids
-    integer :: threads_per_block, num_blocks
+    integer :: num_blocks
+#ifdef PAPER
+    integer :: threads_per_block
+#endif
     real(dp) :: dt, dx, smax_cap, gamma, smallr, smallc2, switch_llf_dmin, switch_llf_pmin, etamag
     integer :: slope, riemann, slope_mag, riemann2d
     logical :: induction
@@ -953,12 +949,7 @@ contains
          & gamma, dt, dx, smax_cap, slope, riemann, constant_gravity)
     call GPU_Error_Check(__FILE__, __LINE__)
 #else
-    if(nsubgrid == 1)threads_per_block = 64
-    if(nsubgrid == 2)threads_per_block = 256
 #ifdef MHD
-#if defined(B200_GODUNOV) && NPRE != 4 && NSUBGRID == 2
-    threads_per_block = 320
-#endif
     if(riemann == solver_uct_hlld .or. riemann == solver_uct_llf .or. riemann == solver_uct_hll)then
        uct_riemann_d = riemann
        call gpu_godunov_uct()
@@ -973,30 +964,13 @@ contains
             & ') failed: ',cudaGetErrorString(istat)
        error stop
     endif
-    call hydro_integrator_kernel<<<num_blocks, threads_per_block, shmem_bytes>>>(grid, uold, unew, bold, bnew, &
+    call hydro_integrator_kernel<<<num_blocks, hydro_threads, shmem_bytes>>>(grid, uold, unew, bold, bnew, &
          & f, father, nbor, &
          & head_idx, num_subgrids, sim%m%ngridmax, ilevel, sim%r%levelmin, sim%r%nlevelmax, &
          & gamma, smallr, smallc2, dt, dx, smax_cap, slope, slope_mag, riemann, riemann2d, &
          & switch_llf_dmin, switch_llf_pmin, induction, etamag, constant_gravity)
     call GPU_Error_Check(__FILE__, __LINE__)
 #else
-#ifdef B200_GODUNOV
-    if(nsubgrid == 1)threads_per_block = 32
-#endif
-#if defined(NPRE) && NPRE == 4
-#ifdef B200_GODUNOV
-    if(nsubgrid == 2)threads_per_block = 96
-#else
-    if(nsubgrid == 2)threads_per_block = 128
-#endif
-#if defined(B200_GODUNOV) && defined(GPU_FASTMATH) && NSUBGRID == 4
-    threads_per_block = 608
-#else
-    if(nsubgrid == 4)threads_per_block = 512
-#endif
-#else
-    if(nsubgrid == 4)threads_per_block = 640
-#endif
     shmem_bytes = storage_size(smem_probe) / 8
 #ifdef HYDRO_PAIR
     if (slope == 3) then
@@ -1016,21 +990,14 @@ contains
     endif
 #ifdef HYDRO_PAIR
     if (slope == 3) then
-#if defined(B200_GODUNOV) && NSUBGRID == 4
-#if NPRE == 4
-       threads_per_block = 448
-#else
-       threads_per_block = 512
-#endif
-#endif
-       call hydro_integrator_pair_kernel<<<num_blocks, threads_per_block, shmem_bytes>>>(grid, uold, unew, bold, bnew, &
+       call hydro_integrator_pair_kernel<<<num_blocks, hydro_pair_threads, shmem_bytes>>>(grid, uold, unew, bold, bnew, &
             & f, father, nbor, &
             & head_idx, num_subgrids, sim%m%ngridmax, ilevel, sim%r%levelmin, sim%r%nlevelmax, &
             & gamma, smallr, smallc2, dt, dx, smax_cap, slope, slope_mag, riemann, riemann2d, &
             & switch_llf_dmin, switch_llf_pmin, induction, etamag, constant_gravity)
     else
 #endif
-    call hydro_integrator_kernel<<<num_blocks, threads_per_block, shmem_bytes>>>(grid, uold, unew, bold, bnew, &
+    call hydro_integrator_kernel<<<num_blocks, hydro_threads, shmem_bytes>>>(grid, uold, unew, bold, bnew, &
          & f, father, nbor, &
          & head_idx, num_subgrids, sim%m%ngridmax, ilevel, sim%r%levelmin, sim%r%nlevelmax, &
          & gamma, smallr, smallc2, dt, dx, smax_cap, slope, slope_mag, riemann, riemann2d, &
@@ -1064,7 +1031,7 @@ contains
       shmem_bytes = storage_size(uct_face_smem_probe) / 8
       istat = cudaFuncSetAttribute(uct_face_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, shmem_bytes)
       call check_smem(istat, shmem_bytes)
-      call uct_face_kernel<<<num_blocks, uct_threads, shmem_bytes>>>(grid, uold, bold, f, nbor, &
+      call uct_face_kernel<<<num_blocks, uct_face_threads, shmem_bytes>>>(grid, uold, bold, f, nbor, &
            & uct_products, head_idx, num_subgrids, gamma, smallr, smallc2, dt, dx, smax_cap, &
            & slope, slope_mag, induction, constant_gravity)
       call GPU_Error_Check(__FILE__, __LINE__)
@@ -1079,7 +1046,7 @@ contains
             shmem_bytes = storage_size(uct_ghost_smem_probe) / 8
             istat = cudaFuncSetAttribute(uct_ghost_face_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, shmem_bytes)
             call check_smem(istat, shmem_bytes)
-            call uct_ghost_face_kernel<<<num_ghost, uct_ghost_threads, shmem_bytes>>>(grid, uold, bold, f, nbor, &
+            call uct_ghost_face_kernel<<<num_ghost, uct_ghost_face_threads, shmem_bytes>>>(grid, uold, bold, f, nbor, &
                  & uct_products, uct_ghost_list, head_idx, num_subgrids, gamma, smallr, smallc2, dt, dx, smax_cap, &
                  & slope, slope_mag, induction, constant_gravity)
             call GPU_Error_Check(__FILE__, __LINE__)
@@ -1097,7 +1064,7 @@ contains
       else
          istat = cudaFuncSetAttribute(uct_update_amr_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, shmem_bytes)
          call check_smem(istat, shmem_bytes)
-         call uct_update_amr_kernel<<<num_blocks, uct_threads, shmem_bytes>>>(grid, unew, bnew, father, &
+         call uct_update_amr_kernel<<<num_blocks, uct_update_amr_threads, shmem_bytes>>>(grid, unew, bnew, father, &
               & nbor, uct_products, head_idx, num_subgrids, sim%m%ngridmax, ilevel, sim%r%levelmin, &
               & sim%r%nlevelmax, dt, dx, slope_mag, etamag)
       endif
@@ -1116,6 +1083,111 @@ contains
 #endif
 
   end subroutine gpu_godunov
+
+  !> @brief
+  !> Print the launch configuration (gpu_launch.h) of the tuned kernels this run uses.
+  !>
+  !> @param[in] sim : The simulation object
+  !>
+  subroutine gpu_print_launch(sim)
+    use ramses_commons, only: ramses_t
+    use hydro_device, only: gpu_launch_target
+#ifndef PAPER
+    use hydro_device, only: hydro_integrator_kernel, hydro_threads, hydro_minb
+#ifdef HYDRO_PAIR
+    use hydro_device, only: hydro_integrator_pair_kernel, hydro_pair_threads, hydro_pair_minb
+#endif
+#ifdef MHD
+    use hydro_device, only: uct_face_kernel, uct_ghost_face_kernel, uct_update_kernel, uct_update_amr_kernel, &
+         & uct_face_threads, uct_face_minb, uct_ghost_face_threads, uct_ghost_face_minb, uct_update_threads, &
+         & uct_update_minb, uct_update_amr_threads, uct_update_amr_minb
+    use hydro_parameters, only: solver_uct_hlld, solver_uct_llf, solver_uct_hll
+#endif
+#endif
+#ifdef MHD
+    use hydro_device, only: nimhd_dt_kernel, nimhd_stage_kernel, nimhd_dt_threads, nimhd_dt_minb, &
+         & nimhd_stage_threads, nimhd_stage_minb
+#endif
+    type(ramses_t), intent(in) :: sim
+    type(cudaFuncAttributes) :: attr
+    character(len=30) :: label
+    integer :: istat, sm
+    logical :: fused
+
+    if (sim%g%myid /= 1 .or. .not. sim%r%hydro) return
+    sm = 0
+#ifdef GPU_SM
+    sm = GPU_SM
+#endif
+    if (gpu_launch_target > 0) then
+       write(*,'(" GPU launch configuration: build sm_",I0,", values measured on sm_",I0," (gpu_launch.h)")') &
+            & sm, gpu_launch_target
+    else
+       write(*,'(" GPU launch configuration: build sm_",I0,", generic values (gpu_launch.h)")') sm
+    endif
+    label = 'kernel'
+    write(*,'(3x,a,a8,a15,a13,a11)') label, 'threads', 'min blocks/SM', 'max threads', 'registers'
+#ifndef PAPER
+    if (.not. sim%r%static_gas) then
+       fused = .true.
+#ifdef HYDRO_PAIR
+       if (sim%r%slope_type == 3) then
+          istat = cudaFuncGetAttributes(attr, hydro_integrator_pair_kernel)
+          call print_kernel('hydro_integrator_pair_kernel', hydro_pair_threads, hydro_pair_minb)
+          fused = .false.
+       endif
+#endif
+#ifdef MHD
+       if (sim%r%riemann == solver_uct_hlld .or. sim%r%riemann == solver_uct_llf .or. sim%r%riemann == solver_uct_hll) then
+          istat = cudaFuncGetAttributes(attr, uct_face_kernel)
+          call print_kernel('uct_face_kernel', uct_face_threads, uct_face_minb)
+          if (sim%r%levelmin == sim%r%nlevelmax) then
+             istat = cudaFuncGetAttributes(attr, uct_update_kernel)
+             call print_kernel('uct_update_kernel', uct_update_threads, uct_update_minb)
+          else
+             istat = cudaFuncGetAttributes(attr, uct_ghost_face_kernel)
+             call print_kernel('uct_ghost_face_kernel', uct_ghost_face_threads, uct_ghost_face_minb)
+             istat = cudaFuncGetAttributes(attr, uct_update_amr_kernel)
+             call print_kernel('uct_update_amr_kernel', uct_update_amr_threads, uct_update_amr_minb)
+          endif
+          fused = .false.
+       endif
+#endif
+       if (fused) then
+          istat = cudaFuncGetAttributes(attr, hydro_integrator_kernel)
+          call print_kernel('hydro_integrator_kernel', hydro_threads, hydro_minb)
+       endif
+    endif
+#endif
+#ifdef MHD
+    if (sim%r%nimhd_solver /= 'unsplit') then
+       istat = cudaFuncGetAttributes(attr, nimhd_dt_kernel)
+       call print_kernel('nimhd_dt_kernel', nimhd_dt_threads, nimhd_dt_minb)
+       istat = cudaFuncGetAttributes(attr, nimhd_stage_kernel)
+       call print_kernel('nimhd_stage_kernel', nimhd_stage_threads, nimhd_stage_minb)
+    endif
+#endif
+    write(*,*)
+
+  contains
+
+    ! min blocks/SM is the launch_bounds minimum of the kernel, "-" without one of its own; max threads
+    ! and registers come from the binary (a kernel without a bound of its own keeps the bound of the
+    ! kernel compiled before it).
+    subroutine print_kernel(name, threads, minb)
+      character(len=*), intent(in) :: name
+      integer, intent(in) :: threads, minb
+      character(len=15) :: bound
+      label = name
+      bound = '-'
+      if (minb > 0) write(bound,'(i15)') minb
+      if (istat == cudaSuccess) then
+         write(*,'(3x,a,i8,a15,i13,i11)') label, threads, adjustr(bound), attr%maxThreadsPerBlock, attr%numRegs
+      else
+         write(*,'(3x,a,i8,a15,2x,a)') label, threads, adjustr(bound), trim(cudaGetErrorString(istat))
+      endif
+    end subroutine print_kernel
+  end subroutine gpu_print_launch
 
   !> @brief
   !> Range of the ghost octs of level ilevel in cache memory, and the launch size of one thread per oct.
@@ -1199,14 +1271,14 @@ contains
   !> explicit diffusion time step over the edges of the level, or with coarse_fine over the
   !> edges between leaf and refined cells only.
   function nimhd_dt_parab(sim, ilevel, coarse_fine) result(dt_parab)
-    use hydro_device, only: nimhd_coeff_kernel, nimhd_dt_kernel
+    use hydro_device, only: nimhd_coeff_kernel, nimhd_dt_kernel, nimhd_dt_threads
     use ramses_commons, only: ramses_t
     type(ramses_t), intent(inout) :: sim
     integer, intent(in) :: ilevel
     logical, intent(in) :: coarse_fine
     real(kind=8) :: dt_parab
     integer(kind=4) :: head_oct, num_octs, head_sg, num_sg, head_cache, num_cache
-    integer :: threads_per_block, num_threads, num_blocks
+    integer :: num_threads, num_blocks
     real(dp) :: dx
     real(kind=8), device, dimension(1) :: d_dtp
     real(kind=8), dimension(1) :: h_dtp
@@ -1218,8 +1290,6 @@ contains
     head_cache = sim%m%ngridmax + sim%m%head_cache(ilevel)
     num_cache = sim%m%noct_cache(ilevel)
     dx = sim%r%boxlen/2**ilevel
-    if(nsubgrid == 1)threads_per_block = 64
-    if(nsubgrid == 2)threads_per_block = 256
 
     num_threads = 256
     num_blocks = (num_octs + num_threads/twotondim - 1) / (num_threads/twotondim)
@@ -1233,7 +1303,7 @@ contains
        call GPU_Error_Check(__FILE__, __LINE__)
     endif
     d_dtp(1) = huge(0.0d0)
-    call nimhd_dt_kernel<<<num_sg, threads_per_block>>>(grid, eta_nimhd, bold, nbor, head_sg, num_sg, d_dtp, &
+    call nimhd_dt_kernel<<<num_sg, nimhd_dt_threads>>>(grid, eta_nimhd, bold, nbor, head_sg, num_sg, d_dtp, &
          & dx, real(sim%r%nimhd_courant,dp), coarse_fine)
     call GPU_Error_Check(__FILE__, __LINE__)
     h_dtp = d_dtp
@@ -1256,14 +1326,14 @@ contains
   subroutine gpu_nimhd_fine(sim, ilevel, ipass)
 #ifdef MHD
     use nvtx
-    use hydro_device, only: nimhd_stage_kernel
+    use hydro_device, only: nimhd_stage_kernel, nimhd_stage_threads
 #endif
     use ramses_commons, only: ramses_t
     type(ramses_t), intent(inout) :: sim
     integer, intent(in) :: ilevel, ipass
 #ifdef MHD
     integer(kind=4) :: head_oct, num_octs, head_sg, num_sg, head_cache, num_cache
-    integer :: threads_per_block, info, s, j
+    integer :: info, s, j
     real(kind=8) :: dt_parab, mut1
     real(kind=8), allocatable, dimension(:) :: mu, nu, mut, gt, q
     real(dp) :: dt, dx
@@ -1289,8 +1359,6 @@ contains
     num_sg = num_octs / nsubgridtondim
     head_cache = sim%m%ngridmax + sim%m%head_cache(ilevel)
     num_cache = sim%m%noct_cache(ilevel)
-    if(nsubgrid == 1)threads_per_block = 64
-    if(nsubgrid == 2)threads_per_block = 256
 
     call nvtxStartRange("GPU non-ideal MHD", color=1)
 
@@ -1352,7 +1420,7 @@ contains
       real(kind=dp), device :: yjm1(1:twotondim,1:6,*), yjm2(1:twotondim,1:6,*), yj(1:twotondim,1:6,*)
       real(kind=dp), device :: y0(1:twotondim,1:6,*)
       integer, intent(in) :: jstage
-      call nimhd_stage_kernel<<<num_sg, threads_per_block>>>(grid, eta_nimhd, yjm1, yjm2, y0, b_my0, yj, &
+      call nimhd_stage_kernel<<<num_sg, nimhd_stage_threads>>>(grid, eta_nimhd, yjm1, yjm2, y0, b_my0, yj, &
            & uold, e_acc, e_acc0, unew, bnew, heat, jstage == 1, jstage == s, pre, .false., father, nbor, &
            & head_sg, num_sg, sim%m%ngridmax, ilevel, sim%r%levelmin, sim%r%nlevelmax, dt, dx, &
            & real(mu(jstage),dp), real(nu(jstage),dp), real(mut(jstage),dp), &
@@ -1450,13 +1518,13 @@ contains
   !>
   subroutine gpu_nimhd_composite(sim, ilevel)
     use nvtx
-    use hydro_device, only: nimhd_stage_kernel, nimhd_restrict_b_kernel, nimhd_scratch_kernel
+    use hydro_device, only: nimhd_stage_kernel, nimhd_stage_threads, nimhd_restrict_b_kernel, nimhd_scratch_kernel
     use refine_device, only: nimhd_ghost_b_kernel
     use ramses_commons, only: ramses_t
     type(ramses_t), intent(inout) :: sim
     integer, intent(in) :: ilevel
     integer(kind=4) :: head_oct, num_octs, head_cache, num_cache
-    integer :: threads_per_block, num_threads, info, s, j, l, lmin, lf
+    integer :: num_threads, info, s, j, l, lmin, lf
     real(kind=8) :: dt_parab, mut1
     real(kind=8), allocatable, dimension(:) :: mu, nu, mut, gt, q
     real(dp) :: dt
@@ -1472,8 +1540,6 @@ contains
     dt = sim%g%dtnew(ilevel)
     if (sim%r%nimhd_split == 'strang') dt = 0.5_dp*dt
     heat = .not.(sim%r%isothermal .or. sim%r%induction)
-    if(nsubgrid == 1)threads_per_block = 64
-    if(nsubgrid == 2)threads_per_block = 256
     num_threads = 256
 
     call nvtxStartRange("GPU non-ideal MHD", color=1)
@@ -1575,7 +1641,7 @@ contains
          if (num_octs <= 0) cycle
          head_sg = (sim%m%head(l) - 1) / nsubgridtondim + 1
          num_sg = num_octs / nsubgridtondim
-         call nimhd_stage_kernel<<<num_sg, threads_per_block>>>(grid, eta_nimhd, yjm1, yjm2, bnew, b_my0, yj, &
+         call nimhd_stage_kernel<<<num_sg, nimhd_stage_threads>>>(grid, eta_nimhd, yjm1, yjm2, bnew, b_my0, yj, &
               & uold, e_acc, e_acc0, unew, b_cf, heat, jstage == 1, jstage == s, .false., .true., father, nbor, &
               & head_sg, num_sg, sim%m%ngridmax, l, lmin, sim%r%nlevelmax, dt, real(sim%r%boxlen/2**l,dp), &
               & real(mu(jstage),dp), real(nu(jstage),dp), real(mut(jstage),dp), &

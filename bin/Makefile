@@ -219,7 +219,7 @@ ifeq ($(COMPILER),NVHPC)
       GPU_TARGET := $(GPU_TARGET),fastmath
       DEFINES += -DGPU_FASTMATH
    endif
-   FFLAGS = -cpp $(GPU_TARGET) -cuda -cudalib=$(CUDALIBS) $(DEFINES)
+   FFLAGS = -cpp $(GPU_TARGET) -cuda -cudalib=$(CUDALIBS) $(DEFINES) -I$(GPU_PATH)
    LIBS = $(GPU_TARGET) -cuda -cudalib=$(CUDALIBS) -lstdc++
    GPU_PATH = ../gpu
    ifeq ($(CUDA_PROFILE),1)
@@ -401,6 +401,8 @@ cub_module_radix_sort_c.o: cub_module_radix_sort.h cub_module_radix_sort.cu
 #############################################################################
 cub_module_radix_sort_f.o: cub_module_radix_sort.cuf cub_module_radix_sort_c.o
 	nvfortran $(FFLAGS) -c cub_module_radix_sort_c.o $(GPU_PATH)/cub_module_radix_sort.cuf -o cub_module_radix_sort_f.o
+
+gpu_hydro.o gpu_runner.o: gpu_launch.h
 
 %.o:%.cuf
 	$(F90) $(FFLAGS) -c $< -o $@

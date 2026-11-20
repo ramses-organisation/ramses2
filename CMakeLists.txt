@@ -806,6 +806,8 @@ endif()
 # =============================================================================
 if(CMAKE_Fortran_COMPILER_ID STREQUAL "NVHPC")
     set(_gpu_obj_dir "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/${EXEC}.dir/gpu")
+    # gpu_launch.h, also for a gpu_hydro.cuf or gpu_runner.cuf taken from a patch directory
+    target_include_directories(${EXEC} PRIVATE ${CMAKE_SOURCE_DIR}/gpu)
 
     # Step 1: GPU module dependencies (using object files)
     set_source_files_properties(gpu/gpu_hydro.cuf gpu/gpu_cooling.cuf gpu/gpu_star.cuf gpu/gpu_feedback.cuf gpu/gpu_rho.cuf
