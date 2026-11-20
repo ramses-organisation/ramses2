@@ -550,6 +550,7 @@ subroutine gpu_allocate_amr(sim)
   allocate(grid(1:sim%m%ngridmax+sim%m%ncachemax))
   if(sim%g%ncpu > 1 .or. (sim%r%nlevelmax > sim%r%levelmin .and. sim%r%ncachemax > 0))then
      allocate(cache_source(sim%m%ngridmax+1:sim%m%ngridmax+sim%m%ncachemax))
+     cache_source=0
   endif
   if(sim%r%nlevelmax > sim%r%levelmin .or. sim%r%clump_finder .or. sim%r%sink_form .or. &
        & sim%r%sink_merge .or. sim%r%star .or. sim%r%tree)then
