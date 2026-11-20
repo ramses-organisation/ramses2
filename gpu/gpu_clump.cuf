@@ -8,7 +8,7 @@ module clump_device
   use gpu_runner, only: grid, father, flag1, flag2, rho, nref, gpu_scan, hash_key, hash_val, &
        uold, f, periodic, box_ckey_min, box_ckey_max, ckey_max, key_off, d_skip, &
        sink_xp, sink_levelp, sink_pid, sink_vp, sink_fp, sink_mp, sink_tp, sink_idp, swap_local, &
-       prefix_sum, box_size, xp, vp, mp, star_xp, star_vp, star_mp, &
+       prefix_sum, ensure_scan_capacity, box_size, xp, vp, mp, star_xp, star_vp, star_mp, &
        sink_jp, sink_tm, sink_idm, pid, hid, star_pid, star_hid, sink_hid
   use gpu_runner, only: tree_xp, tree_vp, tree_mp, tree_tp, tree_tm, tree_levelp, &
        tree_idp, tree_idm, tree_idt, tree_pid, tree_hid
@@ -105,10 +105,13 @@ contains
     do_profile = (sim%r%clump_finder .and. sim%r%saddle_threshold > 0 .and. &
          & sim%r%part .and. sim%r%rho_type_clump == 1)
 
-    ! Test cells are mesh cells: size to the mesh capacity, capped by the
-    ! scan capacity since is_peak_scan_d is scanned with gpu_scan
-    ntestmax = min(sim%m%ngridmax + sim%m%ncachemax, size(prefix_sum))
-    nclumpmax = sim%m%ngridmax/10
+    ! Test cells are mesh cells; is_peak_scan_d is scanned with gpu_scan,
+    ! so grow the scan buffers to ntestmax
+    ntestmax = sim%r%ntestmax
+    if (ntestmax <= 0) ntestmax = sim%m%ngridmax + sim%m%ngridmax/2
+    nclumpmax = sim%r%nclumpmax
+    if (nclumpmax <= 0) nclumpmax = sim%m%ngridmax/50
+    call ensure_scan_capacity(ntestmax, 0)
 
     ! Allocate test cell arrays
     if (.not. allocated(grid_d))           allocate(grid_d(1:ntestmax))

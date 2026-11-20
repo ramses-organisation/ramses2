@@ -405,6 +405,8 @@ module amr_commons
      logical::output_peak_dust=.false.
      integer::rho_type_clump=1
      integer::nstep_per_tree=1
+     integer::ntestmax=0          ! GPU: max cells above density threshold (0: 1.5*ngridmax)
+     integer::nclumpmax=0         ! GPU: max density peaks (0: ngridmax/50)
      real(kind=8)::relevance_threshold=2
      real(kind=8)::density_threshold=-1
      real(kind=8)::saddle_threshold=-1
