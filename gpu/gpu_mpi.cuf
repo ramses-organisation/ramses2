@@ -411,7 +411,7 @@ contains
   end subroutine abort_all
 #endif
 
-  ! Exchange the owner values for one or two fields, with host staging by default.
+  ! Exchange the owner values for one or two fields, from device buffers or through pinned host buffers.
   subroutine gpu_halo_update(ilevel, a, nc1, b, nc2)
     integer, intent(in) :: ilevel, nc1
     real(dp), device :: a(*)

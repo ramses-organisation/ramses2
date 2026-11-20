@@ -72,7 +72,7 @@ subroutine m_read_params(pst)
   integer::ncontrol=1         ! Write control variables
   integer::nremap=10          ! Particle load balancing frequency (0: never)
   real(kind=8)::da_over_a_max=0.1d0 ! Maximum relative change of aexp per time step
-  logical::mpi_device_buffers=.false. ! GPU halo exchanges pass device buffers to MPI
+  logical::mpi_device_buffers=.true. ! GPU halo exchanges pass device buffers to MPI
 
   ! Maximum number of allocatable particles
   integer::npartmax=0

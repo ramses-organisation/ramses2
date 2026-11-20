@@ -40,7 +40,7 @@ module amr_commons
      integer,dimension(1:MAXLEVEL)::nsubcycle=2 ! Subcycling at each level
      integer::nremap=10          ! Load balancing frequency (0: never)
      real(kind=8)::da_over_a_max=0.1d0 ! Maximum relative change of aexp per time step
-     logical::mpi_device_buffers=.false. ! GPU halo exchanges pass device buffers to MPI
+     logical::mpi_device_buffers=.true. ! GPU halo exchanges pass device buffers to MPI
      logical::static_mesh=.false.! Static mesh refinement mode activated
      logical::static_gas=.false. ! Turn off gas dynamics
      integer::geom    =1         ! 1: cartesian, 2: cylindrical, 3: spherical
