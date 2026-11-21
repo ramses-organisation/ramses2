@@ -6,7 +6,8 @@ Usage: viewclump.py [-a] <file|output_dir|output_number> [column] [prefix]
   file|output_dir  one table file, or an output directory whose
                    <prefix>.* files (one per rank) are merged
   output_number    shortcut for output_NNNNN in the current directory
-  column           column number (from 1) or header name (default: 5)
+  column           column number (from 1) or header name
+                   (default: mpatch, or column 5 if there is none)
   prefix           file prefix in an output directory (default: clump)
   -a               ascending order (default: descending)
   --halo ID        instead of sorting, list the properties of the clump
@@ -102,7 +103,7 @@ def main():
         sys.stderr.write(__doc__)
         return 1
     src = args[0]
-    col = args[1] if len(args) > 1 else "5"
+    col = args[1] if len(args) > 1 else None
     prefix = args[2] if len(args) > 2 else "clump"
 
     # A bare output number means output_NNNNN in the current directory
@@ -139,6 +140,8 @@ def main():
 
     # Turn a column name into its number
     names = header.split()
+    if col is None:
+        col = "mpatch" if "mpatch" in names else "5"
     if col.isdigit():
         icol = int(col)
         if not 1 <= icol <= len(names):
