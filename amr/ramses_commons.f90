@@ -129,7 +129,7 @@ subroutine open_file(s,filename,nskip,ilun)
 
      if(index(filename,'clump').NE.0)then
         open(unit=ilun,file=fileloc,form='formatted')
-        write(ilun,'(240A)')'     index       parent     halo      ncell      npart'//&
+        write(ilun,'(240A)')'     index     parent       halo      ncell      npart'//&
              & '    rho_min            rho_max            rho_sad            rho_ave    '//&
              & '        mpatch             mass               r200               rmax               c200   '//&
              & '            pos_x              pos_y              pos_z      '//&

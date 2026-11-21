@@ -260,7 +260,7 @@ subroutine open_core_clump_file(s,filename,ilun)
         close(ilun,status='delete')
      end if
      open(unit=ilun,file=fileloc,form='formatted')
-     write(ilun,'(A)')'     index       parent     halo      ncell'//&
+     write(ilun,'(A)')'     index     parent       halo      ncell'//&
           '    rho_min            rho_max            rho_sad            rho_ave    '//&
           '        mpatch             mass               r200               rmax               c200   '//&
           '            pos_x              pos_y              pos_z      '//&
