@@ -264,6 +264,9 @@ subroutine init_refine_basegrid(s,ilevel)
   hk=0
   ! New grid in current level
   igrid=istart-1
+  ! Head and tail are set even if no oct is built at this level
+  m%head(ilevel)=istart
+  m%tail(ilevel)=igrid
 
   ! Loop over the Cartesian grid in Hilbert order
   do ikey=m%domain(ilevel)%b(1,g%myid-1), m%domain(ilevel)%b(1,g%myid)-1

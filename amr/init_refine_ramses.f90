@@ -290,6 +290,17 @@ subroutine init_refine_ramses(s,ilevel,ncpu_file,levelmin_file,nlevelmax_file,no
 !!$     m%head_dirty(ilevel)=m%head_dirty(ilevel-1)+m%noct_dirty(ilevel-1)
   endif
 
+  ! Base grid levels built below the file levelmin are fully refined;
+  ! set flag1 to preserve these refinements, as for the levels read below
+  if(ilevel==levelmin_file)then
+     do i=r%levelmin,ilevel-1
+        do igrid=m%head(i),m%tail(i)
+           m%grid(igrid)%refined(1:twotondim)=.true.
+           m%flag1(1:twotondim,igrid)=1
+        end do
+     end do
+  endif
+
   ! Set grid at current level
   igrid=igrid_start-1
   ! Head and tail are set even if no oct is read at this level
