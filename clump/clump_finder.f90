@@ -4,7 +4,7 @@ contains
 subroutine m_clump_finder(pst,create_output,keep_alive)
   use output_clump_module
   use output_part_module, only: r_output_part
-  use output_amr_module, only: output_header
+  use output_amr_module, only: output_header, output_info
   use amr_parameters, only: flen
   use mdl_module, only: mdl_mkdir, mdl_wtime
   use ramses_commons, only: pst_t
@@ -25,7 +25,7 @@ subroutine m_clump_finder(pst,create_output,keep_alive)
   integer,dimension(1:flen/4)::input_array
   double precision::ttend, ttstart=0.0
   integer::dummy(1)
-  integer::no_halo
+  integer::no_halo,ic
 
 #if NDIM==3 && defined(GRAV)
 
@@ -52,10 +52,19 @@ subroutine m_clump_finder(pst,create_output,keep_alive)
      call title(g%ifout,nchar)
      filedir='output_'//TRIM(nchar)//'/'
      if(r%clump_only)then
-        call title(g%ifout-1,nchar)
-        filedir='catalog_output_'//TRIM(nchar)//'/'
+        ! Name the catalogue after the input folder
+        filedir=r%initfile(r%levelmin)
+        ic=LEN_TRIM(filedir)
+        if(filedir(ic:ic)=='/')filedir(ic:ic)=' '
+        ic=INDEX(TRIM(filedir),'/',back=.true.)
+        filedir='catalog/'//TRIM(filedir(ic+1:))//'/'
+        call mdl_mkdir(mdl,'catalog')
      endif
      call mdl_mkdir(mdl,filedir)
+     if(r%clump_only)then
+        filename=TRIM(filedir)//'info.txt'
+        call output_info(r,g,filename)
+     endif
      input_array=transfer(filedir,input_array)
      if(r%output_clump)then
         write(*,*)'Writing clump files'

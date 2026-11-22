@@ -59,11 +59,15 @@ module gpu_runner
 #endif
 
 #if defined(MHD) && !defined(PAPER)
-  !> UCT-HLLD face products (on AMR levels also the faces owned by ghost octs, after ngridmax)
+  !> Fixed-capacity UCT face products, including the current chunk's halo
   real(kind=dp), device, allocatable, dimension(:,:,:) :: uct_products
   !> Subgrids of an AMR level with a ghost oct in their stencil
   integer(kind=4), device, allocatable, dimension(:) :: uct_ghost_list
   integer(kind=4), device :: uct_ghost_count
+  !> Slot map and real halo owners for a chunk. The halo array also holds group costs during packing.
+  integer(kind=4), device, allocatable :: uct_slot(:), uct_halo(:)
+  !> Real halo and ghost counts, followed by the invalid-neighbor flag
+  integer(kind=4), device :: uct_halo_counts(3)
 #endif
 
   !> Arrays to hold Turbulent acceleration fields and spectra on the device,
@@ -861,6 +865,7 @@ contains
          & uct_update_threads, uct_update_amr_threads, uct_ghost_smem_t, uct_face_smem_t, uct_update_smem_t, &
          & uct_product_fields
     use hydro_device, only: uct_riemann_d
+    use hydro_device, only: uct_chunk_t, uct_chunk, uct_chunk_halo_kernel, uct_chunk_cost_kernel
     use hydro_parameters, only: solver_uct_hlld, solver_uct_llf, solver_uct_hll
 #endif
 #else
@@ -889,8 +894,7 @@ contains
     type(uct_ghost_smem_t) :: uct_ghost_smem_probe
     type(uct_face_smem_t) :: uct_face_smem_probe
     type(uct_update_smem_t) :: uct_update_smem_probe
-    integer(kind=4) :: num_ghost
-    integer :: nbuf
+    integer(kind=8), parameter :: product_bytes = int(twotondim,8)*3*uct_product_fields*(storage_size(1.0_dp)/8)
 #endif
 #else
 #ifndef PAPER
@@ -1001,63 +1005,139 @@ contains
 #if defined(MHD) && !defined(PAPER)
   contains
 
-    ! UCT-HLLD: each face is solved by the subgrid that owns it (its low faces), and the edges and
-    ! the update use the stored fluxes and records. Above levelmin, the faces owned by ghost octs
-    ! (after ngridmax in the buffer) are solved by the subgrids next to them.
+    ! The owner solves its low faces. Faces owned by ghost octs are solved by their readers.
     subroutine gpu_godunov_uct()
-      nbuf = sim%m%ngridmax + sim%m%ncachemax
-      if(.not. allocated(uct_products))then
-         allocate(uct_products(1:twotondim,1:3*uct_product_fields,1:nbuf), stat=istat)
-         if(istat /= 0)then
-            write(*,*)'gpu_godunov: cannot allocate the UCT face buffer, ', &
-                 & int(nbuf,8)*twotondim*3*uct_product_fields*storage_size(1.0_dp)/8,' bytes'
-            error stop 'Reduce ngridmax or ncachemax, or use riemann=hlld'
-         endif
-         ! The atomic stores of the ghost-owned faces read the old values.
+      type(uct_chunk_t) :: chunk
+      integer, parameter :: max_octs_per_subgrid = nsubgridtondim*(1+subgridsize-nsubgridtondim)
+      integer :: ncache, nslots, capacity, max_count, done, num_ghost, counts(3)
+      integer :: group_size, ngroups, group, accepted, group_end
+      integer, allocatable :: cost(:)
+      integer(kind=8) :: used
+      integer :: face_bytes, ghost_bytes, update_bytes, cache_threads, cache_blocks
+
+      if (num_subgrids == 0) return
+      chunk%first_oct = sim%m%head(ilevel)
+      chunk%last_oct = chunk%first_oct + (sim%m%noct(ilevel)-1)
+      call cache_oct_range(sim, ilevel, chunk%first_ghost, ncache, cache_threads, cache_blocks)
+      chunk%last_ghost = chunk%first_ghost-1 + ncache
+      capacity = int(min(int(sim%r%uct_chunk_octs,8), int(sim%m%ngridmax,8)+sim%m%ncachemax))
+      max_count = min(num_subgrids, capacity/nsubgridtondim)
+      if (max_count == 0) error stop 'Increase uct_chunk_octs to fit a subgrid, or use riemann=hlld'
+
+      if (.not. allocated(uct_products)) then
+         allocate(uct_products(twotondim,3*uct_product_fields,capacity), stat=istat)
+         call check_uct_allocation(istat, 'face products', capacity*product_bytes)
+         ! Ghost face atomic stores read the old values.
          uct_products = 0.0_dp
+         allocate(uct_halo(capacity/nsubgridtondim), uct_ghost_list(capacity/nsubgridtondim), stat=istat)
+         call check_uct_allocation(istat, 'halo and ghost lists', 8_8*(capacity/nsubgridtondim))
+         nslots = size(nbor,2) + sim%m%ncachemax
+         allocate(uct_slot(nslots), stat=istat)
+         call check_uct_allocation(istat, 'slot map', 4_8*nslots)
       endif
-      shmem_bytes = storage_size(uct_face_smem_probe) / 8
-      istat = cudaFuncSetAttribute(uct_face_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, shmem_bytes)
-      call check_smem(istat, shmem_bytes)
-      call uct_face_kernel<<<num_blocks, uct_face_threads, shmem_bytes>>>(grid, uold, bold, f, nbor, &
-           & uct_products, head_idx, num_subgrids, gamma, smallr, smallc2, dt, dx, smax_cap, &
-           & slope, slope_mag, induction, constant_gravity)
-      call GPU_Error_Check(__FILE__, __LINE__)
-      if(ilevel > sim%r%levelmin)then
-         if(.not. allocated(uct_ghost_list))allocate(uct_ghost_list(1:sim%m%ngridmax/nsubgridtondim+1))
-         uct_ghost_count = 0
-         call uct_ghost_list_kernel<<<(num_subgrids+127)/128, 128>>>(nbor, uct_ghost_list, uct_ghost_count, &
-              & head_idx, num_subgrids)
-         call GPU_Error_Check(__FILE__, __LINE__)
-         num_ghost = uct_ghost_count
-         if(num_ghost > 0)then
-            shmem_bytes = storage_size(uct_ghost_smem_probe) / 8
-            istat = cudaFuncSetAttribute(uct_ghost_face_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, shmem_bytes)
-            call check_smem(istat, shmem_bytes)
-            call uct_ghost_face_kernel<<<num_ghost, uct_ghost_face_threads, shmem_bytes>>>(grid, uold, bold, f, nbor, &
-                 & uct_products, uct_ghost_list, head_idx, num_subgrids, gamma, smallr, smallc2, dt, dx, smax_cap, &
-                 & slope, slope_mag, induction, constant_gravity)
-            call GPU_Error_Check(__FILE__, __LINE__)
-            call uct_ghost_bn_kernel<<<num_ghost, 128>>>(bold, nbor, uct_products, uct_ghost_list, &
-                 & head_idx, num_subgrids)
-            call GPU_Error_Check(__FILE__, __LINE__)
-         endif
+      nslots = num_subgrids + ncache
+      ! At least one group fits even with disjoint halos, unless one subgrid itself exceeds the cap.
+      group_size = max(1, min(256, capacity/max_octs_per_subgrid))
+      if (int(sim%m%noct(ilevel),8)+ncache > capacity) allocate(cost(1+(max_count-1)/group_size))
+
+      face_bytes = storage_size(uct_face_smem_probe)/8
+      istat = cudaFuncSetAttribute(uct_face_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, face_bytes)
+      call check_smem(istat, face_bytes)
+      if (ncache > 0) then
+         ghost_bytes = storage_size(uct_ghost_smem_probe)/8
+         istat = cudaFuncSetAttribute(uct_ghost_face_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, ghost_bytes)
+         call check_smem(istat, ghost_bytes)
       endif
-      shmem_bytes = storage_size(uct_update_smem_probe) / 8
-      if(sim%r%levelmin == sim%r%nlevelmax)then
-         istat = cudaFuncSetAttribute(uct_update_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, shmem_bytes)
-         call check_smem(istat, shmem_bytes)
-         call uct_update_kernel<<<num_blocks, uct_update_threads, shmem_bytes>>>(unew, bnew, nbor, uct_products, &
-              & head_idx, num_subgrids, dt, dx, slope_mag, etamag)
+      update_bytes = storage_size(uct_update_smem_probe)/8
+      if (sim%r%levelmin == sim%r%nlevelmax) then
+         istat = cudaFuncSetAttribute(uct_update_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, update_bytes)
       else
-         istat = cudaFuncSetAttribute(uct_update_amr_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, shmem_bytes)
-         call check_smem(istat, shmem_bytes)
-         call uct_update_amr_kernel<<<num_blocks, uct_update_amr_threads, shmem_bytes>>>(grid, unew, bnew, father, &
-              & nbor, uct_products, head_idx, num_subgrids, sim%m%ngridmax, ilevel, sim%r%levelmin, &
-              & sim%r%nlevelmax, dt, dx, slope_mag, etamag)
+         istat = cudaFuncSetAttribute(uct_update_amr_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, update_bytes)
       endif
-      call GPU_Error_Check(__FILE__, __LINE__)
+      call check_smem(istat, update_bytes)
+
+      done = 0
+      do while (done < num_subgrids)
+         chunk%first = head_idx + done
+         chunk%count = min(max_count, num_subgrids-done)
+         chunk%nface = chunk%count
+         if (allocated(cost)) then
+            ! Pack a prefix of complete groups, including every real or ghost owner it reads.
+            ngroups = 1 + (chunk%count-1)/group_size
+            uct_slot(1:nslots) = 0
+            uct_halo(1:ngroups) = 0
+            uct_chunk = chunk
+            call uct_chunk_cost_kernel<<<chunk%count, subgridsize>>>(nbor, uct_slot, uct_halo, group_size, ngroups)
+            call GPU_Error_Check(__FILE__, __LINE__)
+            cost(1:ngroups) = uct_halo(1:ngroups)
+            used = 0
+            accepted = 0
+            do group = 1, ngroups
+               group_end = accepted + min(group_size, chunk%count-accepted)
+               used = used + int(group_end-accepted,8)*nsubgridtondim + cost(group)
+               if (used > capacity) exit
+               accepted = group_end
+            enddo
+            if (accepted == 0) then
+               write(*,*)'gpu_godunov: first subgrid and its halo need ', used, ' UCT product octs'
+               error stop 'Increase uct_chunk_octs, or use riemann=hlld'
+            endif
+            chunk%count = accepted
+         endif
+
+         uct_slot(1:nslots) = 0
+         uct_halo_counts = 0
+         uct_chunk = chunk
+         call uct_chunk_halo_kernel<<<chunk%count, subgridsize>>>(nbor, uct_slot, uct_halo, uct_halo_counts)
+         call GPU_Error_Check(__FILE__, __LINE__)
+         counts = uct_halo_counts
+         if (counts(3) /= 0) then
+            write(*,*)'gpu_godunov: neighbor outside level and ghost ranges at level ', ilevel
+            error stop
+         endif
+         chunk%nface = chunk%count + counts(1)
+         if (int(chunk%nface,8)*nsubgridtondim+counts(2) > capacity) error stop 'UCT face buffer capacity exceeded'
+         uct_chunk = chunk
+         call uct_face_kernel<<<chunk%nface, uct_face_threads, face_bytes>>>(grid, uold, bold, f, nbor, &
+              & uct_products, uct_halo, gamma, smallr, smallc2, dt, dx, smax_cap, slope, slope_mag, &
+              & induction, constant_gravity)
+         call GPU_Error_Check(__FILE__, __LINE__)
+         if (ncache > 0) then
+            uct_ghost_count = 0
+            call uct_ghost_list_kernel<<<1+(chunk%count-1)/128, 128>>>(nbor, uct_ghost_list, uct_ghost_count)
+            call GPU_Error_Check(__FILE__, __LINE__)
+            num_ghost = uct_ghost_count
+            if (num_ghost > 0) then
+               call uct_ghost_face_kernel<<<num_ghost, uct_ghost_face_threads, ghost_bytes>>>(grid, uold, bold, f, nbor, &
+                    & uct_products, uct_ghost_list, uct_slot, gamma, smallr, smallc2, dt, dx, smax_cap, slope, slope_mag, &
+                    & induction, constant_gravity)
+               call GPU_Error_Check(__FILE__, __LINE__)
+               call uct_ghost_bn_kernel<<<num_ghost, 128>>>(bold, nbor, uct_products, uct_ghost_list, uct_slot)
+               call GPU_Error_Check(__FILE__, __LINE__)
+            endif
+         endif
+         if (sim%r%levelmin == sim%r%nlevelmax) then
+            call uct_update_kernel<<<chunk%count, uct_update_threads, update_bytes>>>(unew, bnew, nbor, uct_products, &
+                 & uct_slot, dt, dx, slope_mag, etamag)
+         else
+            call uct_update_amr_kernel<<<chunk%count, uct_update_amr_threads, update_bytes>>>(grid, unew, bnew, father, nbor, &
+                 & uct_products, uct_slot, sim%m%ngridmax, ilevel, sim%r%levelmin, sim%r%nlevelmax, &
+                 & dt, dx, slope_mag, etamag)
+         endif
+         call GPU_Error_Check(__FILE__, __LINE__)
+         done = done + chunk%count
+      enddo
     end subroutine gpu_godunov_uct
+
+    subroutine check_uct_allocation(status, name, nbytes)
+      integer, intent(in) :: status
+      character(len=*), intent(in) :: name
+      integer(kind=8), intent(in) :: nbytes
+      if (status /= 0) then
+         write(*,*)'gpu_godunov: cannot allocate UCT ', name, ', ', nbytes, ' bytes'
+         error stop 'Reduce uct_chunk_octs, ngridmax or ncachemax, or use riemann=hlld'
+      endif
+    end subroutine check_uct_allocation
 
     subroutine check_smem(status, nbytes)
       integer, intent(in) :: status
