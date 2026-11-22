@@ -122,33 +122,18 @@ attributes(device) subroutine nbor_father_cells_mg(grid, father, nbor, oct_idx, 
   implicit none
   type(oct), device :: grid(*)
   integer(kind=4), device :: father(*)
-  integer(kind=4), device :: nbor(1:subgridsize,*)
+  integer(kind=4), device :: nbor(1:threetondim,*)
   integer(kind=4), value :: oct_idx
   integer(kind=4), value :: mg_idx
   integer(kind=4), intent(out) :: igrid_nbor(1:threetondim)
   integer(kind=4), intent(out) :: icell_nbor(1:threetondim)
 
-  integer :: father_idx, subgrid_idx, num_idx
-  integer :: i_subgrid, j_subgrid, k_subgrid
+  integer :: father_idx
   integer :: i, j, k, inbor, ii, jj, kk, in, jn, kn
   integer :: ind_nbor, io, jo, ko, ic, jc, kc
 
   ! Compute parent oct idx
   father_idx = father(mg_idx)
-
-  ! Compute subgrid idx
-  subgrid_idx = (father_idx - 1) / nsubgridtondim + 1
-
-  ! Compute father rank within subgrid
-  num_idx = father_idx - (subgrid_idx - 1) * nsubgridtondim
-  num_idx = num_idx - 1
-  k_subgrid = num_idx / nsubgridsq
-  num_idx = num_idx - k_subgrid * nsubgridsq
-  j_subgrid = num_idx / nsubgrid
-  i_subgrid = num_idx - j_subgrid * nsubgrid
-  i_subgrid = i_subgrid + 1
-  j_subgrid = j_subgrid + 1
-  k_subgrid = k_subgrid + 1
 
   ! Compute parent cell coordinates inside oct
   i = grid(oct_idx)%ckey(1) - 2 * (grid(oct_idx)%ckey(1) / 2)
@@ -163,9 +148,9 @@ attributes(device) subroutine nbor_father_cells_mg(grid, father, nbor, oct_idx, 
            inbor = inbor + 1
 
            ! Index of nbor cells
-           in = i + ii + 2 * (i_subgrid - 1)
-           jn = j + jj + 2 * (j_subgrid - 1)
-           kn = k + kk + 2 * (k_subgrid - 1)
+           in = i + ii
+           jn = j + jj
+           kn = k + kk
 
            ! Index of parent octs
            io = floor_div2(in)
@@ -177,9 +162,9 @@ attributes(device) subroutine nbor_father_cells_mg(grid, father, nbor, oct_idx, 
            jc = jn - 2 * jo
            kc = kn - 2 * ko
 
-           ! Store results in output array
-           ind_nbor = 1 + (io + 1) + (jo + 1) * nsubgridp2 + (ko + 1) * nsubgridp2sq
-           igrid_nbor(inbor) = nbor(ind_nbor, subgrid_idx)
+           ! Store results in output array (one 3x3x3 nbor column per multigrid oct)
+           ind_nbor = 1 + (io + 1) + (jo + 1) * 3 + (ko + 1) * 9
+           igrid_nbor(inbor) = nbor(ind_nbor, father_idx)
            icell_nbor(inbor) = 1 + ic + jc * 2 + kc * 4
         end do
      end do

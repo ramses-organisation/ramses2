@@ -4555,11 +4555,11 @@ contains
     if (num_octs > 0) then
        call nvtxStartRange("GPU cmp_residual", color=1)!blue
        if (ifine == ilevel) then
-          call cmp_residual<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(phi, f, nbor, &
+          call cmp_residual<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(phi, f, nbor, subgridsize, &
                & head_idx, num_octs, fourpi, offset, oneoverdx2, sim%m%ngridmax)
           call GPU_Error_Check(__FILE__, __LINE__)
        else
-          call cmp_residual<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(phi_mg, f_mg, nbor_mg, &
+          call cmp_residual<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(phi_mg, f_mg, nbor_mg, threetondim, &
                & head_idx, num_octs, fourpi, offset, oneoverdx2, sim%m_mg%ngridmax)
           call GPU_Error_Check(__FILE__, __LINE__)
        endif
@@ -4608,11 +4608,11 @@ contains
     if (num_octs > 0) then
        call nvtxStartRange("GPU gauss_seidel", color=1)!blue
        if (ifine == ilevel) then
-          call gauss_seidel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(phi, f, nbor, &
+          call gauss_seidel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(phi, f, nbor, subgridsize, &
                & head_idx, num_octs, dx2, safe, redstep, sim%m%ngridmax)
           call GPU_Error_Check(__FILE__, __LINE__)
        else
-          call gauss_seidel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(phi_mg, f_mg, nbor_mg, &
+          call gauss_seidel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(phi_mg, f_mg, nbor_mg, threetondim, &
                & head_idx, num_octs, dx2, safe, redstep, sim%m_mg%ngridmax)
           call GPU_Error_Check(__FILE__, __LINE__)
        endif
