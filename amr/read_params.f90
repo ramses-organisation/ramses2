@@ -998,9 +998,9 @@ subroutine m_read_params(pst)
   if(pic.and.npartmax>0)part=.true.
 #ifdef HYDRO
   if(.not. hydro)then
-     write(*,*)'You are not using the hydro solver but'
-     write(*,*)'the code was compiled with HYDRO=1'
-     write(*,*)'This might not be optimal but I am still running.'
+     write(*,'(1x,a)')c_dim()//'You are not using the hydro solver but'//c_reset()
+     write(*,'(1x,a)')c_dim()//'the code was compiled with HYDRO=1'//c_reset()
+     write(*,'(1x,a)')c_dim()//'This might not be optimal but I am still running.'//c_reset()
   endif
 #else
   if(hydro)then
@@ -1012,9 +1012,9 @@ subroutine m_read_params(pst)
 #endif
 #ifdef GRAV
   if(.not. poisson)then
-     write(*,*)'You are not using the poisson solver but'
-     write(*,*)'the code was compiled with GRAV=1'
-     write(*,*)'This might not be optimal but I am still running.'
+     write(*,'(1x,a)')c_dim()//'You are not using the poisson solver but'//c_reset()
+     write(*,'(1x,a)')c_dim()//'the code was compiled with GRAV=1'//c_reset()
+     write(*,'(1x,a)')c_dim()//'This might not be optimal but I am still running.'//c_reset()
   endif
 #else
   if(poisson)then
