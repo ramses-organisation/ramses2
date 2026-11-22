@@ -60,7 +60,7 @@ subroutine close_cache(mdl)
   !
   integer::info,icache,igrid,icpu,ibuf,iskip,ipeak
   integer::send_flush_id,send_flush_id_clump,nflush
-  integer::dummy_int,close_tag=7,close_id
+  integer::close_id
   integer::i,ilevel,child,flush_guard,flush_clump_guard
   integer::local_peak_id
   integer(kind=8)::global_peak_id
@@ -152,25 +152,9 @@ subroutine close_cache(mdl)
      end do
   endif
 
-  ! CHECK-IN CHECK-OUT
-  if(mdl_self(mdl).NE.1)then
-     call MPI_ISEND(dummy_int,1,MPI_INTEGER,0,close_tag,MPI_COMM_WORLD,close_id,info)
-     call check_mail(mdl,close_id)
-     call MPI_IRECV(dummy_int,1,MPI_INTEGER,0,close_tag,MPI_COMM_WORLD,close_id,info)
-     call check_mail(mdl,close_id)
-  else
-     do icpu=2,mdl_threads(mdl)
-        call MPI_IRECV(dummy_int,1,MPI_INTEGER,MPI_ANY_SOURCE,close_tag,MPI_COMM_WORLD,close_id,info)
-        call check_mail(mdl,close_id)
-     end do
-     do icpu=2,mdl_threads(mdl)
-        call MPI_ISEND(dummy_int,1,MPI_INTEGER,icpu-1,close_tag,MPI_COMM_WORLD,close_id,info)
-        call check_mail(mdl,close_id)
-     end do
-  endif
-
-  ! Barrier to get the last flush message
-  call MPI_BARRIER(MPI_COMM_WORLD,info)
+  ! Wait for all ranks to complete their flush, serving their requests meanwhile
+  call MPI_IBARRIER(MPI_COMM_WORLD,close_id,info)
+  call check_mail(mdl,close_id)
   call check_mail(mdl,MPI_REQUEST_NULL)
 
   ! Finally CANCEL THE 2 GRID RECV
