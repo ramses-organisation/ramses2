@@ -40,7 +40,7 @@ attributes(device) subroutine nbor_father_cells(grid, father, nbor, oct_idx, igr
   k = grid(oct_idx)%ckey(3) - 2 * (grid(oct_idx)%ckey(3) / 2)
 
   ! Get 3x3x3 nbor cells of the parent cell
-  call nbor_cells(nbor, father_idx, i, j, k, igrid_nbor, icell_nbor)
+  call nbor_cells(grid, nbor, father_idx, i, j, k, igrid_nbor, icell_nbor)
 
 end subroutine nbor_father_cells
 ! =========================================================================
@@ -49,17 +49,19 @@ end subroutine nbor_father_cells
 !> @brief
 !> Find 3x3x3 nbor cells of cell (i,j,k) of input oct (i,j,k = 0 or 1)
 !>
-attributes(device) subroutine nbor_cells(nbor, oct_idx, i, j, k, igrid_nbor, icell_nbor)
+attributes(device) subroutine nbor_cells(grid, nbor, oct_idx, i, j, k, igrid_nbor, icell_nbor)
   use amr_parameters, only: dp, ndim, twotondim, threetondim
+  use oct_commons, only: oct
   use gpu_utils
   implicit none
+  type(oct), device :: grid(*)
   integer(kind=4), device :: nbor(1:subgridsize,*)
   integer(kind=4), value :: oct_idx
   integer(kind=4), value :: i, j, k
   integer(kind=4), intent(out) :: igrid_nbor(1:threetondim)
   integer(kind=4), intent(out) :: icell_nbor(1:threetondim)
 
-  integer :: subgrid_idx, num_idx
+  integer :: subgrid_idx
   integer :: i_subgrid, j_subgrid, k_subgrid
   integer :: inbor, ii, jj, kk, in, jn, kn
   integer :: ind_nbor, io, jo, ko, ic, jc, kc
@@ -67,16 +69,10 @@ attributes(device) subroutine nbor_cells(nbor, oct_idx, i, j, k, igrid_nbor, ice
   ! Compute subgrid idx
   subgrid_idx = (oct_idx - 1) / nsubgridtondim + 1
 
-  ! Compute oct rank within subgrid
-  num_idx = oct_idx - (subgrid_idx - 1) * nsubgridtondim
-  num_idx = num_idx - 1
-  k_subgrid = num_idx / nsubgridsq
-  num_idx = num_idx - k_subgrid * nsubgridsq
-  j_subgrid = num_idx / nsubgrid
-  i_subgrid = num_idx - j_subgrid * nsubgrid
-  i_subgrid = i_subgrid + 1
-  j_subgrid = j_subgrid + 1
-  k_subgrid = k_subgrid + 1
+  ! Compute oct position within subgrid
+  i_subgrid = subgrid_pos(grid(oct_idx)%ckey(1)) + 1
+  j_subgrid = subgrid_pos(grid(oct_idx)%ckey(2)) + 1
+  k_subgrid = subgrid_pos(grid(oct_idx)%ckey(3)) + 1
 
   ! Loop over 27 neighboring cells
   inbor = 0

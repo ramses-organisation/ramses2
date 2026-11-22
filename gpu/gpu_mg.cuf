@@ -90,6 +90,7 @@ contains
 
   include 'gpu_hash.cuf'
   include 'gpu_reduce.cuf'
+  include 'gpu_cell.cuf'
   include 'gpu_nbor.cuf'
 
   ! =========================================================================
@@ -285,7 +286,7 @@ contains
     if (igrid > 0 .and. igrid <= ngridmax) then
 
        ! Get 3x3x3 neighboring father cells
-       call nbor_cells(nbor, igrid, mod(ckey(1), 2), mod(ckey(2), 2), mod(ckey(3), 2), igrid_nbor, icell_nbor)
+       call nbor_cells(grid, nbor, igrid, mod(ckey(1), 2), mod(ckey(2), 2), mod(ckey(3), 2), igrid_nbor, icell_nbor)
 
        ! CIC interpolation + time extrapolation (as in make_initial_phi)
        acc = 0d0
