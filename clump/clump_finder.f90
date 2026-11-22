@@ -25,7 +25,7 @@ subroutine m_clump_finder(pst,create_output,keep_alive)
   integer,dimension(1:flen/4)::input_array
   double precision::ttend, ttstart=0.0
   integer::dummy(1)
-  integer::no_halo
+  integer::no_halo,ic
 
 #if NDIM==3 && defined(GRAV)
 
@@ -52,8 +52,12 @@ subroutine m_clump_finder(pst,create_output,keep_alive)
      call title(g%ifout,nchar)
      filedir='output_'//TRIM(nchar)//'/'
      if(r%clump_only)then
-        call title(g%ifout-1,nchar)
-        filedir='catalog_output_'//TRIM(nchar)//'/'
+        ! Name the catalogue after the input folder
+        filedir=r%initfile(r%levelmin)
+        ic=LEN_TRIM(filedir)
+        if(filedir(ic:ic)=='/')filedir(ic:ic)=' '
+        ic=INDEX(TRIM(filedir),'/',back=.true.)
+        filedir='catalog_'//TRIM(filedir(ic+1:))//'/'
      endif
      call mdl_mkdir(mdl,filedir)
      input_array=transfer(filedir,input_array)
