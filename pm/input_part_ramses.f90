@@ -36,7 +36,7 @@ subroutine m_input_part_ramses(pst)
      ! Read particle files header
      file_head=TRIM(pst%s%r%initfile(pst%s%r%levelmin))//'/part_header.txt'
      call input_header(pst%s%r,pst%s%g,file_head,npart_tot_file,ncpu_file)
-     write(*,'(" Output folder has ",I12," DM particles")')npart_tot_file
+     write(*,'(" Output folder has ",I0," DM particles")')npart_tot_file
 
      ! Allocate local array
      allocate(npart_file(0:ncpu_file))
@@ -72,7 +72,7 @@ subroutine m_input_part_ramses(pst)
      ! Read star particle files header
      file_head=TRIM(pst%s%r%initfile(pst%s%r%levelmin))//'/star_header.txt'
      call input_header(pst%s%r,pst%s%g,file_head,npart_tot_file,ncpu_file)
-     write(*,'(" Output folder has ",I12," star particles")')npart_tot_file
+     write(*,'(" Output folder has ",I0," star particles")')npart_tot_file
 
      ! Allocate local array
      allocate(npart_file(0:ncpu_file))
@@ -109,7 +109,7 @@ subroutine m_input_part_ramses(pst)
      ! Read star particle files header
      file_head=TRIM(pst%s%r%initfile(pst%s%r%levelmin))//'/sink_header.txt'
      call input_header(pst%s%r,pst%s%g,file_head,npart_tot_file,ncpu_file)
-     write(*,'(" Output folder has ",I12," sink particles")')npart_tot_file
+     write(*,'(" Output folder has ",I0," sink particles")')npart_tot_file
 
      ! Allocate local array
      allocate(npart_file(0:ncpu_file))
@@ -146,7 +146,7 @@ subroutine m_input_part_ramses(pst)
      ! Read core particle files header
      file_head=TRIM(pst%s%r%initfile(pst%s%r%levelmin))//'/core_header.txt'
      call input_header(pst%s%r,pst%s%g,file_head,npart_tot_file,ncpu_file)
-     write(*,'(" Output folder has ",I12," core particles")')npart_tot_file
+     write(*,'(" Output folder has ",I0," core particles")')npart_tot_file
 
      ! Allocate local array
      allocate(npart_file(0:ncpu_file))
