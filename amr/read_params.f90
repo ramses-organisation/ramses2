@@ -2237,9 +2237,63 @@ subroutine m_read_params(pst)
   ! Broadcast parameters to all CPUs.
   call m_broadcast_params(pst)
 
+  ! Announce where initial conditions come from
+  call print_ic_source(pst)
+
   end associate
 
 end subroutine m_read_params
+!#########################################################################
+!#########################################################################
+!#########################################################################
+!#########################################################################
+subroutine print_ic_source(pst)
+  use ramses_commons, only: pst_t
+  use color_module, only: c_bold, c_green, c_mark, c_reset
+  implicit none
+  type(pst_t)::pst
+  !--------------------------------------------------------------------
+  ! Print one milestone line describing where initial conditions come from
+  !--------------------------------------------------------------------
+  integer::ilevel,ilevel_max
+  character(len=5)::nchar
+  character(len=:),allocatable::msg
+
+  associate(r=>pst%s%r)
+
+  select case(TRIM(r%filetype))
+  case('restart')
+     call title(r%nrestart,nchar)
+     msg='Restarting from backup_'//TRIM(nchar)
+  case('ramses')
+     msg='Reading initial conditions from ramses output folder '//TRIM(r%initfile(r%levelmin))
+  case('grafic')
+     msg='Reading initial conditions from grafic files in '//TRIM(r%initfile(r%levelmin))
+  case('grafic_zoom')
+     ilevel_max=r%levelmin
+     do ilevel=r%levelmin+1,r%nlevelmax
+        if(r%initfile(ilevel)==' ')exit
+        ilevel_max=ilevel
+     end do
+     msg='Reading initial conditions from grafic_zoom files in '//TRIM(r%initfile(r%levelmin))
+     write(*,'(1x,A,A," (levels ",I0," to ",I0,")",A)')c_bold()//c_green()//c_mark(),msg,r%levelmin,ilevel_max,c_reset()
+     return
+  case('gadget')
+     msg='Reading initial conditions from gadget file '//TRIM(r%initfile(r%levelmin))
+  case('ascii')
+     if(r%initfile(r%levelmin)==' ')then
+        msg='Computing initial conditions from analytical model'
+     else
+        msg='Reading initial conditions from ascii files in '//TRIM(r%initfile(r%levelmin))
+     endif
+  case default
+     msg='Initial conditions from unknown filetype '//TRIM(r%filetype)
+  end select
+  write(*,'(1x,A)')c_bold()//c_green()//c_mark()//msg//c_reset()
+
+  end associate
+
+end subroutine print_ic_source
 !#########################################################################
 !#########################################################################
 !#########################################################################
