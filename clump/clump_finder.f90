@@ -57,7 +57,8 @@ subroutine m_clump_finder(pst,create_output,keep_alive)
         ic=LEN_TRIM(filedir)
         if(filedir(ic:ic)=='/')filedir(ic:ic)=' '
         ic=INDEX(TRIM(filedir),'/',back=.true.)
-        filedir='catalog_'//TRIM(filedir(ic+1:))//'/'
+        filedir='catalog/'//TRIM(filedir(ic+1:))//'/'
+        call mdl_mkdir(mdl,'catalog')
      endif
      call mdl_mkdir(mdl,filedir)
      if(r%clump_only)then
