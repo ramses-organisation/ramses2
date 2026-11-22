@@ -248,7 +248,8 @@ subroutine input_part_ramses(r,g,p,ncpu_file,npart_file,mpart_loc)
   ! output file and allocate particle-based arrays.
   !------------------------------------------------------------
   integer::ipart,ipart_old
-  integer::i,idim,icpu,ileft,iright,nrest,ipos,iskip
+  integer::i,idim,icpu,ileft,iright,nrest
+  integer(kind=8)::ipos,iskip
   integer::istart,iend
   integer(kind=8)::nleft,nright,npart_tot
   integer(kind=8),dimension(0:ncpu_file)::ncum_file
@@ -333,30 +334,30 @@ subroutine input_part_ramses(r,g,p,ncpu_file,npart_file,mpart_loc)
 
      ! Read positions
      do idim=1,ndim
-        ipos=iskip+4*(istart-1)
+        ipos=iskip+4_8*(istart-1)
         read(10,POS=ipos)xsp
         ipart=ipart_old
         do i=istart,iend
            ipart=ipart+1
            p%xp(ipart,idim)=xsp(i)
         end do
-        iskip=iskip+4*npart_file(icpu)
+        iskip=iskip+4_8*npart_file(icpu)
      end do
 
      ! Read velocities
      do idim=1,ndim
-        ipos=iskip+4*(istart-1)
+        ipos=iskip+4_8*(istart-1)
         read(10,POS=ipos)xsp
         ipart=ipart_old
         do i=istart,iend
            ipart=ipart+1
            p%vp(ipart,idim)=xsp(i)
         end do
-        iskip=iskip+4*npart_file(icpu)
+        iskip=iskip+4_8*npart_file(icpu)
      end do
 
      ! Read masses
-     ipos=iskip+4*(istart-1)
+     ipos=iskip+4_8*(istart-1)
      read(10,POS=ipos)xsp
      ipart=ipart_old
      do i=istart,iend
@@ -364,111 +365,111 @@ subroutine input_part_ramses(r,g,p,ncpu_file,npart_file,mpart_loc)
         p%mp(ipart)=xsp(i)
         mpart_loc=mpart_loc+xsp(i)
      end do
-     iskip=iskip+4*npart_file(icpu)
+     iskip=iskip+4_8*npart_file(icpu)
 
      ! Skip potential (diagnostic only, not read back)
      if(allocated(p%phip))then
-        iskip=iskip+4*npart_file(icpu)
+        iskip=iskip+4_8*npart_file(icpu)
      endif
 
      ! Read metallicity
      if(allocated(p%zp))then
-        ipos=iskip+4*(istart-1)
+        ipos=iskip+4_8*(istart-1)
         read(10,POS=ipos)xsp
         ipart=ipart_old
         do i=istart,iend
            ipart=ipart+1
            p%zp(ipart)=xsp(i)
         end do
-        iskip=iskip+4*npart_file(icpu)
+        iskip=iskip+4_8*npart_file(icpu)
      endif
 
      ! Read accelerations
      if(allocated(p%fp))then
         do idim=1,ndim
-           ipos=iskip+4*(istart-1)
+           ipos=iskip+4_8*(istart-1)
            read(10,POS=ipos)xsp
            ipart=ipart_old
            do i=istart,iend
               ipart=ipart+1
               p%fp(ipart,idim)=xsp(i)
            end do
-           iskip=iskip+4*npart_file(icpu)
+           iskip=iskip+4_8*npart_file(icpu)
         end do
      endif
 
      ! Read Angular momenta
      if(allocated(p%jp))then
         do idim=1,ndim
-           ipos=iskip+4*(istart-1)
+           ipos=iskip+4_8*(istart-1)
            read(10,POS=ipos)xsp
            ipart=ipart_old
            do i=istart,iend
               ipart=ipart+1
               p%jp(ipart,idim)=xsp(i)
            end do
-           iskip=iskip+4*npart_file(icpu)
+           iskip=iskip+4_8*npart_file(icpu)
         end do
      endif
 
      ! Read birth time
      if(allocated(p%tp))then
-        ipos=iskip+4*(istart-1)
+        ipos=iskip+4_8*(istart-1)
         read(10,POS=ipos)xsp
         ipart=ipart_old
         do i=istart,iend
            ipart=ipart+1
            p%tp(ipart)=xsp(i)
         end do
-        iskip=iskip+4*npart_file(icpu)
+        iskip=iskip+4_8*npart_file(icpu)
      endif
 
      ! Read merging time
      if(allocated(p%tm))then
-        ipos=iskip+4*(istart-1)
+        ipos=iskip+4_8*(istart-1)
         read(10,POS=ipos)xsp
         ipart=ipart_old
         do i=istart,iend
            ipart=ipart+1
            p%tm(ipart)=xsp(i)
         end do
-        iskip=iskip+4*npart_file(icpu)
+        iskip=iskip+4_8*npart_file(icpu)
      endif
 
      ! Read specific internal energy
      if(allocated(p%up))then
-        ipos=iskip+4*(istart-1)
+        ipos=iskip+4_8*(istart-1)
         read(10,POS=ipos)xsp
         ipart=ipart_old
         do i=istart,iend
            ipart=ipart+1
            p%up(ipart)=xsp(i)
         end do
-        iskip=iskip+4*npart_file(icpu)
+        iskip=iskip+4_8*npart_file(icpu)
      endif
 
      allocate(isp(istart:iend))
 
      ! Read level
-     ipos=iskip+4*(istart-1)
+     ipos=iskip+4_8*(istart-1)
      read(10,POS=ipos)isp
      ipart=ipart_old
      do i=istart,iend
         ipart=ipart+1
         p%levelp(ipart)=isp(i)
      end do
-     iskip=iskip+4*npart_file(icpu)
+     iskip=iskip+4_8*npart_file(icpu)
 
      ! Read last accretion step
      if(allocated(p%nacc))then
-        ipos=iskip+4*(istart-1)
+        ipos=iskip+4_8*(istart-1)
         read(10,POS=ipos)isp
         ipart=ipart_old
         do i=istart,iend
            ipart=ipart+1
            p%nacc(ipart)=isp(i)
         end do
-        iskip=iskip+4*npart_file(icpu)
+        iskip=iskip+4_8*npart_file(icpu)
      endif
 
      deallocate(isp)
@@ -477,9 +478,9 @@ subroutine input_part_ramses(r,g,p,ncpu_file,npart_file,mpart_loc)
 
      ! Read identity
 #ifndef LONGINT
-     ipos=iskip+4*(istart-1)
+     ipos=iskip+4_8*(istart-1)
 #else
-     ipos=iskip+8*(istart-1)
+     ipos=iskip+8_8*(istart-1)
 #endif
      read(10,POS=ipos)isp8
      ipart=ipart_old
@@ -488,17 +489,17 @@ subroutine input_part_ramses(r,g,p,ncpu_file,npart_file,mpart_loc)
         p%idp(ipart)=isp8(i)
      end do
 #ifndef LONGINT
-     iskip=iskip+4*npart_file(icpu)
+     iskip=iskip+4_8*npart_file(icpu)
 #else
-     iskip=iskip+8*npart_file(icpu)
+     iskip=iskip+8_8*npart_file(icpu)
 #endif
 
      ! Read merging identity
      if(allocated(p%idm))then
 #ifndef LONGINT
-        ipos=iskip+4*(istart-1)
+        ipos=iskip+4_8*(istart-1)
 #else
-        ipos=iskip+8*(istart-1)
+        ipos=iskip+8_8*(istart-1)
 #endif
         read(10,POS=ipos)isp8
         ipart=ipart_old
@@ -507,18 +508,18 @@ subroutine input_part_ramses(r,g,p,ncpu_file,npart_file,mpart_loc)
            p%idm(ipart)=isp8(i)
         end do
 #ifndef LONGINT
-        iskip=iskip+4*npart_file(icpu)
+        iskip=iskip+4_8*npart_file(icpu)
 #else
-        iskip=iskip+8*npart_file(icpu)
+        iskip=iskip+8_8*npart_file(icpu)
 #endif
      endif
 
      ! Read tracking identity
      if(allocated(p%idt))then
 #ifndef LONGINT
-        ipos=iskip+4*(istart-1)
+        ipos=iskip+4_8*(istart-1)
 #else
-        ipos=iskip+8*(istart-1)
+        ipos=iskip+8_8*(istart-1)
 #endif
         read(10,POS=ipos)isp8
         ipart=ipart_old
@@ -527,9 +528,9 @@ subroutine input_part_ramses(r,g,p,ncpu_file,npart_file,mpart_loc)
            p%idt(ipart)=isp8(i)
         end do
 #ifndef LONGINT
-        iskip=iskip+4*npart_file(icpu)
+        iskip=iskip+4_8*npart_file(icpu)
 #else
-        iskip=iskip+8*npart_file(icpu)
+        iskip=iskip+8_8*npart_file(icpu)
 #endif
      endif
 
@@ -537,26 +538,26 @@ subroutine input_part_ramses(r,g,p,ncpu_file,npart_file,mpart_loc)
 
      ! Read size
      if(allocated(p%size))then
-        ipos=iskip+4*(istart-1)
+        ipos=iskip+4_8*(istart-1)
         read(10,POS=ipos)xsp
         ipart=ipart_old
         do i=istart,iend
            ipart=ipart+1
            p%size(ipart)=xsp(i)
         end do
-        iskip=iskip+4*npart_file(icpu)
+        iskip=iskip+4_8*npart_file(icpu)
      endif
 
      ! Read charge
      if(allocated(p%charge))then
-        ipos=iskip+4*(istart-1)
+        ipos=iskip+4_8*(istart-1)
         read(10,POS=ipos)xsp
         ipart=ipart_old
         do i=istart,iend
            ipart=ipart+1
            p%charge(ipart)=xsp(i)
         end do
-        iskip=iskip+4*npart_file(icpu)
+        iskip=iskip+4_8*npart_file(icpu)
      endif
 
      deallocate(xsp)
