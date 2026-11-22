@@ -47,6 +47,11 @@ module posix_io
        import::c_int
        integer(c_int),value::fd
      end function c_close
+     ! Print the message, then the system error text of errno
+     subroutine c_perror(s) bind(C,name='perror')
+       import::c_char
+       character(kind=c_char),dimension(*)::s
+     end subroutine c_perror
   end interface
 #endif
 
@@ -72,6 +77,7 @@ subroutine pio_open(f,ilun)
   inquire(unit=ilun,name=fileloc)
   f%fd=c_open(TRIM(fileloc)//c_null_char,O_WRONLY)
   if(f%fd<0)then
+     call c_perror(' pio_open'//c_null_char)
      write(*,*)'pio_open: cannot open ',TRIM(fileloc)
      stop
   endif
@@ -95,6 +101,7 @@ subroutine pio_write(f,buf,nbyte,offset)
 #ifdef POSIXIO
   integer(c_long)::nw
   integer(kind=8)::ndone
+  character(LEN=flen)::fileloc
 #endif
 
   if(nbyte<=0)return
@@ -105,7 +112,10 @@ subroutine pio_write(f,buf,nbyte,offset)
   do while(ndone<nbyte)
      nw=c_pwrite(f%fd,c_loc(bytes(ndone+1)),int(nbyte-ndone,c_size_t),int(offset+ndone,c_long))
      if(nw<=0)then
-        write(*,*)'pio_write: pwrite failed at offset',offset+ndone
+        ! perror first, before any Fortran I/O can change errno
+        if(nw<0)call c_perror(' pio_write'//c_null_char)
+        inquire(unit=f%ilun,name=fileloc)
+        write(*,*)'pio_write: pwrite failed in ',TRIM(fileloc)
         stop
      endif
      ndone=ndone+nw
