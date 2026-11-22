@@ -4,7 +4,7 @@ contains
 subroutine m_clump_finder(pst,create_output,keep_alive)
   use output_clump_module
   use output_part_module, only: r_output_part
-  use output_amr_module, only: output_header
+  use output_amr_module, only: output_header, output_info
   use amr_parameters, only: flen
   use mdl_module, only: mdl_mkdir, mdl_wtime
   use ramses_commons, only: pst_t
@@ -60,6 +60,10 @@ subroutine m_clump_finder(pst,create_output,keep_alive)
         filedir='catalog_'//TRIM(filedir(ic+1:))//'/'
      endif
      call mdl_mkdir(mdl,filedir)
+     if(r%clump_only)then
+        filename=TRIM(filedir)//'info.txt'
+        call output_info(r,g,filename)
+     endif
      input_array=transfer(filedir,input_array)
      if(r%output_clump)then
         write(*,*)'Writing clump files'
