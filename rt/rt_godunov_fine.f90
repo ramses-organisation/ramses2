@@ -191,7 +191,7 @@ end subroutine r_set_rtuold
 !###########################################################
 subroutine set_rtuold(r, g, m, ilevel)
   use rt_parameters, only: nrtgrp, smallNp
-  use amr_parameters, only: ndim, twotondim
+  use amr_parameters, only: ndim, twotondim, dp
   use amr_commons, only: run_t, global_t, mesh_t
   implicit none
   type(run_t) :: r
@@ -232,7 +232,7 @@ subroutine set_rtuold(r, g, m, ilevel)
       do i = m%head(ilevel), m%tail(ilevel)
         do j = 1, twotondim
           ! No negative photon densities:
-          m%rtuold(j,iN,i) = max(m%rtuold(j,iN,i),smallNp)
+          m%rtuold(j,iN,i) = max(m%rtuold(j,iN,i),real(smallNp,kind=dp))
           Npc=m%rtuold(j,iN,i)*g%rt_c(ilevel)
           ! Reduced flux, should always be .le. 1
           fred = sqrt(sum((m%rtuold(j,iN+1:iN+ndim,i))**2))/Npc
