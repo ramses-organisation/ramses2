@@ -18,3 +18,18 @@ attributes(device) function parent_cell_idx(ckey, ckey_father) result(idx)
 
 end function parent_cell_idx
 ! =========================================================================
+
+! =========================================================================
+!> @brief
+!> Position (0 to nsubgrid-1) of an oct in its subgrid along one axis,
+!> from the Cartesian key of the oct
+!>
+attributes(device) function subgrid_pos(ckey) result(pos)
+  implicit none
+  integer(kind=4), intent(in) :: ckey
+  integer :: pos
+
+  pos = ckey - (ckey / nsubgrid) * nsubgrid
+
+end function subgrid_pos
+! =========================================================================
