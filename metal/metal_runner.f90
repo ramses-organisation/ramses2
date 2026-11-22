@@ -815,6 +815,7 @@ subroutine metal_allocate_grav(sim)
   integer :: ngridmax_mg, ncachemax_mg, hash_size_mg
 
   ngridmax_mg  = sim%r%ngridmax / 7
+  if (sim%r%ngridmax_mg > 0) ngridmax_mg = sim%r%ngridmax_mg
   ncachemax_mg = max(sim%r%ncachemax / 7, 10000)
   sim%m_mg%ngridmax  = ngridmax_mg
   sim%m_mg%ncachemax = ncachemax_mg
