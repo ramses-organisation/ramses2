@@ -14,6 +14,7 @@ Two different Poisson solvers are available in RAMSES: conjugate gradient (CG) a
 | `epsilon`           | `real`  | 1e-4  | Stopping criterion for the iterative Poisson solver: residual 2-norm should be lower than `epsilon` times the right hand side 2-norm. |
 | `nvcycle`           | `integer` | -1  | Desired number of Multigrid V-cycles (if set to `-1`, iterative solver cycles until residual satisfies `epsilon`). |
 | `mg_safe_mode_reset` | `integer` | 0  | Number of solves a level stays in Multigrid safe mode once it has switched to it, counting the solve that triggered the switch (`0` = never reset, `1` = only that solve). The state is saved in the restart files. |
+| `ngridmax_mg`       | `integer` | 0  | Maximum number of octs per MPI rank for the multigrid solver. 0 means `ngridmax`/7. |
 | `cg_levelmin`       | `integer`  | 999 | Minimum level from which the Conjugate Gradient solver is used in place of the Multigrid solver. |
 
 ## Particle mass deposition and force interpolation

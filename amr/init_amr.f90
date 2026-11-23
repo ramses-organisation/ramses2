@@ -121,6 +121,7 @@ subroutine init_amr(r,g,m,type)
   endif
   if(type=='mg')then
      m%ngridmax=r%ngridmax/7
+     if(r%ngridmax_mg>0)m%ngridmax=r%ngridmax_mg
      m%ncachemax=MAX(r%ncachemax/7,10000)
   endif
 
