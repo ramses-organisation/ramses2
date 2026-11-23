@@ -9,6 +9,7 @@ module rho_device
 contains
 
   include 'gpu_reduce.cuf'
+  include 'gpu_cell.cuf'
 
   ! =========================================================================
   attributes(device) function cic_weight(dl,dr)
@@ -387,8 +388,8 @@ contains
     real(kind=8) :: x_com(3), dg(3), dd(3), vol_cic(8)
     integer :: key_cic(3, 8), ig(3), id(3)
     integer :: oct_idx, cell_idx, idim, ind
-    integer :: sum_d, in_vec(3), tgt_cell_local(3)
-    integer :: ind_nbor, tgt_cell_idx, tgt_oct_idx
+    integer :: sum_d, in_vec(3), tgt_cell_local(3), pos(3)
+    integer :: subgrid_idx, ind_nbor, tgt_cell_idx, tgt_oct_idx
     integer :: info
 
     oct_idx = (blockIdx%x - 1) * blockDim%y + threadIdx%y - 1
@@ -437,6 +438,12 @@ contains
        vol_cic = cic_weight(dg, dd)
        key_cic = cic_index(ig, id)
 
+       ! Subgrid idx and oct position within subgrid
+       subgrid_idx = (oct_idx - 1) / nsubgridtondim + 1
+       do idim = 1, ndim
+          pos(idim) = subgrid_pos(grid(oct_idx)%ckey(idim))
+       end do
+
        do ind = 1, twotondim
           if (vol_cic(ind) == 0d0) cycle
 
@@ -451,8 +458,8 @@ contains
              tgt_cell_local(idim) = sum_d - 2*in_vec(idim)
           end do
 
-          ind_nbor = 1 + (1+in_vec(1)) + nsubgridp2*(1+in_vec(2)) + nsubgridp2sq*(1+in_vec(3))
-          tgt_oct_idx = nbor(ind_nbor, oct_idx)
+          ind_nbor = 1 + (1+pos(1)+in_vec(1)) + nsubgridp2*(1+pos(2)+in_vec(2)) + nsubgridp2sq*(1+pos(3)+in_vec(3))
+          tgt_oct_idx = nbor(ind_nbor, subgrid_idx)
           if (tgt_oct_idx > ngridmax) cycle
 
           tgt_cell_idx = 1 + tgt_cell_local(1) + 2*tgt_cell_local(2) + 4*tgt_cell_local(3)
