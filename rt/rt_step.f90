@@ -67,7 +67,11 @@ subroutine m_rt_step(pst,ilevel)
      call r_set_rtuold(pst,ilevel,1)
 
      ! Source terms for photo-chemistry
-     if(r%neq_chem)call r_cooling_fine(pst,ilevel,1)
+     if(r%neq_chem)then
+        call m_timer('rt - chemistry','start')
+        call r_cooling_fine(pst,ilevel,1)
+        call m_timer('radiative transfer','start')
+     endif
 
   end do
   ! End RT subcycle loop
