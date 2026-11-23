@@ -42,8 +42,14 @@ module neq_cooling_device
   !> Sub-step statistics (diagnostic): leaf cells, sub-steps, sum of warp max sub-steps, max sub-steps
   integer(kind=8), device :: neq_stat_d(1:3)
   integer(kind=4), device :: neq_stat_max_d
-  integer(kind=8), save :: neq_stat(1:3) = 0, neq_stat_ncall = 0
+  integer(kind=8), save :: neq_stat(1:3) = 0, neq_stat_ncall = 0, neq_stat_stiff = 0
   integer(kind=4), save :: neq_stat_max = 0
+
+  !> Sub-step cap of the first pass; the cells still unfinished are solved again from scratch in a second pass
+  integer, parameter :: neq_maxloop_first = 8
+  !> List of the unfinished cells of the first pass, as (oct - head)*twotondim + cell - 1
+  integer(kind=4), device, allocatable :: neq_list_d(:)
+  integer(kind=4), device :: neq_nlist_d
 
 contains
 
@@ -70,11 +76,13 @@ contains
 #ifdef DO_RT
        & Npc, Fpc, p_gasc, dNpdtc, dFpdtc, ilevel, &
 #endif
-       & one_over_T_FRAC, one_over_x_FRAC, dt, tleft, ddtc, loopcnt)
+       & one_over_T_FRAC, one_over_x_FRAC, dt, tleft, ddtc, loopcnt, maxloop, done)
     implicit none
     type(run_t):: r
     type(neq_cooling_t):: tables
     real(kind=8):: T2c, nHc, Zsolarc
+    integer:: maxloop
+    logical:: done
     real(kind=8),dimension(1:nion):: xionc
 #ifdef DO_RT
     real(kind=8),dimension(1:ndim):: p_gasc
@@ -136,6 +144,7 @@ contains
     loopcnt=0
     finished=.false.
     do while(.not. finished)
+       if(loopcnt .ge. maxloop) exit
        loopcnt=loopcnt+1
        call cool_step_cell(r, tables, T2c, xionc, nHc, Zsolarc, ddtc, &
 #ifdef DO_RT
@@ -159,6 +168,7 @@ contains
        finished = .not. (tleft .gt. 0.)            ! Done with this cell
        ddtc=min(dt_rec,tleft)          ! Use recommended dt from cool_step
     end do
+    done = finished
 
     end associate
 
@@ -1057,13 +1067,14 @@ contains
        & rtuold, rtunew, do_smooth, ilevel, scale_d, scale_v, scale_Np, scale_Fp, &
        & emissivity, do_emis, scale_t, &
 #endif
-       & loopcnt)
+       & loopcnt, maxloop, done)
     implicit none
     type(run_t)::r
     type(neq_cooling_t)::tables
     real(kind=dp) :: uold(1:twotondim,1:nvar,*)
     real(kind=dp) :: bold(1:twotondim,1:6,*)
-    integer :: icell, ioct, loopcnt
+    integer :: icell, ioct, loopcnt, maxloop
+    logical :: done
     real(kind=8) :: scale_nH, scale_T2, dtcool, nH_eos, X_cool
 #ifdef DO_RT
     real(kind=dp) :: rtuold(1:twotondim,1:nrtvar,*)
@@ -1207,7 +1218,10 @@ contains
 #ifdef DO_RT
          & Np, Fp, p_gas, dNpdt, dFpdt, ilevel, &
 #endif
-         & one_over_T_FRAC, one_over_x_FRAC, dtcool, tleft, ddt, loopcnt)
+         & one_over_T_FRAC, one_over_x_FRAC, dtcool, tleft, ddt, loopcnt, maxloop, done)
+
+    ! An unfinished cell is left untouched, to be solved again in the next pass
+    if (.not. done) return
 
     ! Compute rho in code units
     nH = nH/scale_nH
@@ -1259,7 +1273,35 @@ contains
 
   end subroutine neq_cool_cell
 
-  !> One thread per leaf cell of level ilevel, in the layout of cooling_kernel
+  !> Sub-step statistics of a warp: sums and max, one set of atomics per warp
+  attributes(device) subroutine neq_warp_stats(lane, active, loopcnt)
+    implicit none
+    integer :: lane, loopcnt
+    logical :: active
+    integer :: ncell, nsub, nmax, offset, info
+    integer(kind=8) :: info8
+
+    ncell = merge(1, 0, active)
+    nsub = loopcnt
+    nmax = loopcnt
+    offset = 16
+    do while (offset > 0)
+       ncell = ncell + __shfl_xor(ncell, offset)
+       nsub = nsub + __shfl_xor(nsub, offset)
+       nmax = max(nmax, __shfl_xor(nmax, offset))
+       offset = offset / 2
+    end do
+    if (lane == 0 .and. nsub > 0) then
+       info8 = atomicadd(neq_stat_d(1), int(ncell, kind=8))
+       info8 = atomicadd(neq_stat_d(2), int(nsub, kind=8))
+       info8 = atomicadd(neq_stat_d(3), int(nmax, kind=8))
+       info = atomicmax(neq_stat_max_d, nmax)
+    endif
+
+  end subroutine neq_warp_stats
+
+  !> First pass: one thread per leaf cell of level ilevel, in the layout of cooling_kernel,
+  !> at most neq_maxloop_first sub-steps; the unfinished cells are added to neq_list_d
   attributes(global) subroutine neq_cool_kernel(uold, bold, grid, head_idx, num_octs, &
        & scale_nH, scale_T2, dtcool, nH_eos, X_cool, &
 #ifdef DO_RT
@@ -1285,10 +1327,8 @@ contains
 #endif
     integer(kind=4), device :: runaway
 
-    integer :: cell_idx, oct_idx, block_idx, loopcnt
-    integer :: ncell, nsub, nmax, offset, lane, info
-    integer(kind=8) :: info8
-    logical :: active
+    integer :: cell_idx, oct_idx, block_idx, loopcnt, islot, lane
+    logical :: active, done
 
     block_idx = blockIdx%x - 1
 
@@ -1307,6 +1347,7 @@ contains
 
     ! Inactive threads stay for the warp reduction below
     loopcnt = 0
+    done = .true.
     if (active) then
        call neq_cool_cell(neq_run_d, neq_tables_d, uold, bold, cell_idx, oct_idx, &
             & scale_nH, scale_T2, dtcool, nH_eos, X_cool, &
@@ -1314,32 +1355,77 @@ contains
             & rtuold, rtunew, do_smooth, ilevel, scale_d, scale_v, scale_Np, scale_Fp, &
             & emissivity, do_emis, scale_t, &
 #endif
-            & loopcnt)
+            & loopcnt, neq_maxloop_first, done)
+    endif
+
+    ! Add an unfinished cell to the list of the second pass
+    if (.not. done) then
+       islot = atomicadd(neq_nlist_d, 1)
+       neq_list_d(islot + 1) = (oct_idx - head_idx) * twotondim + cell_idx - 1
     endif
 
     ! Flag a cell that stopped at the sub-step limit
     if (loopcnt > 100000) runaway = 1
 
-    ! Sub-step statistics: warp sums and max, one set of atomics per warp
-    ncell = merge(1, 0, active)
-    nsub = loopcnt
-    nmax = loopcnt
-    offset = 16
-    do while (offset > 0)
-       ncell = ncell + __shfl_xor(ncell, offset)
-       nsub = nsub + __shfl_xor(nsub, offset)
-       nmax = max(nmax, __shfl_xor(nmax, offset))
-       offset = offset / 2
-    end do
     lane = iand((threadIdx%y - 1) * blockDim%x + threadIdx%x - 1, 31)
-    if (lane == 0 .and. ncell > 0) then
-       info8 = atomicadd(neq_stat_d(1), int(ncell, kind=8))
-       info8 = atomicadd(neq_stat_d(2), int(nsub, kind=8))
-       info8 = atomicadd(neq_stat_d(3), int(nmax, kind=8))
-       info = atomicmax(neq_stat_max_d, nmax)
-    endif
+    call neq_warp_stats(lane, active .and. done, loopcnt)
 
   end subroutine neq_cool_kernel
+
+  !> Second pass: one thread per unfinished cell of neq_list_d, solved again from scratch without cap
+  attributes(global) subroutine neq_cool_list_kernel(uold, bold, head_idx, nlist, &
+       & scale_nH, scale_T2, dtcool, nH_eos, X_cool, &
+#ifdef DO_RT
+       & rtuold, rtunew, do_smooth, ilevel, scale_d, scale_v, scale_Np, scale_Fp, &
+       & emissivity, do_emis, scale_t, &
+#endif
+       & runaway)
+    implicit none
+    real(kind=dp), device :: uold(1:twotondim,1:nvar,*)
+    real(kind=dp), device :: bold(1:twotondim,1:6,*)
+    integer(kind=4), intent(in), value :: head_idx, nlist
+    real(kind=8), value :: scale_nH, scale_T2, dtcool, nH_eos, X_cool
+#ifdef DO_RT
+    real(kind=dp), device :: rtuold(1:twotondim,1:nrtvar,*)
+    real(kind=dp), device :: rtunew(1:twotondim,1:nrtvar,*)
+    logical, value :: do_smooth
+    integer(kind=4), value :: ilevel
+    real(kind=8), value :: scale_d, scale_v, scale_Np, scale_Fp
+    real(kind=dp), device :: emissivity(1:twotondim,1:nrtgrp,*)
+    logical, value :: do_emis
+    real(kind=8), value :: scale_t
+#endif
+    integer(kind=4), device :: runaway
+
+    integer :: i, islot, cell_idx, oct_idx, loopcnt, lane
+    logical :: active, done
+
+    ! Compute the list idx
+    i = (blockIdx%x - 1) * blockDim%x + threadIdx%x
+    active = i <= nlist
+
+    ! Inactive threads stay for the warp reduction below
+    loopcnt = 0
+    if (active) then
+       islot = neq_list_d(i)
+       oct_idx = head_idx + islot / twotondim
+       cell_idx = mod(islot, twotondim) + 1
+       call neq_cool_cell(neq_run_d, neq_tables_d, uold, bold, cell_idx, oct_idx, &
+            & scale_nH, scale_T2, dtcool, nH_eos, X_cool, &
+#ifdef DO_RT
+            & rtuold, rtunew, do_smooth, ilevel, scale_d, scale_v, scale_Np, scale_Fp, &
+            & emissivity, do_emis, scale_t, &
+#endif
+            & loopcnt, huge(0), done)
+    endif
+
+    ! Flag a cell that stopped at the sub-step limit
+    if (loopcnt > 100000) runaway = 1
+
+    lane = iand(threadIdx%x - 1, 31)
+    call neq_warp_stats(lane, active, loopcnt)
+
+  end subroutine neq_cool_list_kernel
 
   ! =========================================================================
   subroutine gpu_neq_cooling(sim, ilevel)
@@ -1365,6 +1451,7 @@ contains
     integer(kind=4) :: runaway
     integer(kind=8) :: stat(1:3)
     integer(kind=4) :: stat_max
+    integer(kind=4) :: nlist
     real(kind=8) :: scale_nH, scale_T2, scale_l, scale_d, scale_t, scale_v
     real(kind=8) :: dtcool, nH_eos, nCOM
 #ifdef DO_RT
@@ -1410,7 +1497,19 @@ contains
     num_blocks = (num_octs + threadsY_per_block - 1) / threadsY_per_block
 
     if (num_octs > 0) then
+
+       ! The list of unfinished cells can hold all the cells of the level
+       if (num_octs > huge(0) / twotondim) then
+          write(*,*)'Error: too many octs in the level for the GPU neq chemistry cell list'
+          error stop
+       endif
+       if (allocated(neq_list_d)) then
+          if (size(neq_list_d, kind=8) < int(num_octs, kind=8) * twotondim) deallocate(neq_list_d)
+       endif
+       if (.not. allocated(neq_list_d)) allocate(neq_list_d(1:int(num_octs, kind=8) * twotondim))
+
        runaway_d = 0
+       neq_nlist_d = 0
        neq_stat_d = 0
        neq_stat_max_d = 0
        call nvtxStartRange("GPU neq chemistry", color=0)!green
@@ -1423,6 +1522,20 @@ contains
 #endif
             & runaway_d)
        call GPU_Error_Check(__FILE__, __LINE__)
+
+       ! Second pass on the cells left unfinished by the first one
+       nlist = neq_nlist_d
+       if (nlist > 0) then
+          call neq_cool_list_kernel<<<(nlist + 127) / 128, 128>>>(                   &
+               & uold, bold, head_idx, nlist, scale_nH, scale_T2,                     &
+               & dtcool, nH_eos, sim%cool%X,                                          &
+#ifdef DO_RT
+               & rtuold, rtunew, do_smooth, ilevel, scale_d, scale_v, scale_Np, scale_Fp, &
+               & emissivity, do_emis, scale_t,                                        &
+#endif
+               & runaway_d)
+          call GPU_Error_Check(__FILE__, __LINE__)
+       endif
        call nvtxEndRange()
 
        ! A cell over the sub-step limit is flagged on the device, report it here
@@ -1436,6 +1549,7 @@ contains
        stat = neq_stat_d
        stat_max = neq_stat_max_d
        neq_stat_ncall = neq_stat_ncall + 1
+       neq_stat_stiff = neq_stat_stiff + nlist
        neq_stat = neq_stat + stat
        neq_stat_max = max(neq_stat_max, stat_max)
     end if
@@ -1443,9 +1557,9 @@ contains
     ! Print the cumulative statistics at each levelmin call
     if (ilevel == sim%r%levelmin .and. neq_stat(1) > 0) then
        write(*,'(" neq chem: calls=",I0," cells=",I0," sub-steps=",I0," per cell=",F0.2, &
-            & " max=",I0," warp max sum=",I0," lane efficiency=",F0.3)') &
+            & " max=",I0," warp max sum=",I0," lane efficiency=",F0.3," second pass=",I0)') &
             & neq_stat_ncall, neq_stat(1), neq_stat(2), dble(neq_stat(2))/dble(neq_stat(1)), &
-            & neq_stat_max, neq_stat(3), dble(neq_stat(2))/(32d0*dble(neq_stat(3)))
+            & neq_stat_max, neq_stat(3), dble(neq_stat(2))/(32d0*dble(neq_stat(3))), neq_stat_stiff
     end if
 
   end subroutine gpu_neq_cooling
