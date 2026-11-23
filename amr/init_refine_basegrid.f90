@@ -1,4 +1,9 @@
 module init_refine_basegrid_module
+  use amr_parameters, only: MAXLEVEL
+  type out_noct_stats_t
+     ! Total, min and max number of octs per level
+     integer(kind=8),dimension(1:MAXLEVEL)::noct_tot,noct_min,noct_max
+  end type out_noct_stats_t
 contains
 !#########################################################################
 !#########################################################################
@@ -149,6 +154,45 @@ recursive subroutine r_noct_max(pst,ilevel,input_size,noct_max,output_size)
   endif
 
 end subroutine r_noct_max
+!###############################################
+!###############################################
+!###############################################
+!###############################################
+recursive subroutine r_noct_stats(pst,ilevel,input_size,output,output_size)
+  use mdl_module
+  use ramses_commons, only: pst_t
+  use mdl_parameters
+  implicit none
+  type(pst_t)::pst
+  integer,VALUE::input_size
+  integer::output_size
+  integer::ilevel
+  type(out_noct_stats_t)::output
+  ! Total, min and max number of octs for each level finer than ilevel
+  type(out_noct_stats_t)::next_output
+  integer::rID,ilev
+
+  if(pst%nLower>0)then
+     rID = mdl_send_request(pst%s%mdl,MDL_NOCT_STATS,pst%iUpper+1,input_size,output_size,ilevel)
+     call r_noct_stats(pst%pLower,ilevel,input_size,output,output_size)
+     call mdl_get_reply(pst%s%mdl,rID,output_size,next_output)
+     do ilev=ilevel+1,pst%s%r%nlevelmax
+        output%noct_tot(ilev)=output%noct_tot(ilev)+next_output%noct_tot(ilev)
+        output%noct_min(ilev)=MIN(output%noct_min(ilev),next_output%noct_min(ilev))
+        output%noct_max(ilev)=MAX(output%noct_max(ilev),next_output%noct_max(ilev))
+     end do
+  else
+     output%noct_tot=0
+     output%noct_min=0
+     output%noct_max=0
+     do ilev=ilevel+1,pst%s%r%nlevelmax
+        output%noct_tot(ilev)=int(pst%s%m%noct(ilev),kind=8)
+        output%noct_min(ilev)=int(pst%s%m%noct(ilev),kind=8)
+        output%noct_max(ilev)=int(pst%s%m%noct(ilev),kind=8)
+     end do
+  endif
+
+end subroutine r_noct_stats
 !###############################################
 !###############################################
 !###############################################

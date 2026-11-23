@@ -31,6 +31,7 @@ module mdl_parameters
      enumerator::MDL_NOCT_TOT
      enumerator::MDL_NOCT_MIN
      enumerator::MDL_NOCT_MAX
+     enumerator::MDL_NOCT_STATS
      enumerator::MDL_NOCT_USED_MAX
      enumerator::MDL_GATHER_NOCT_MAX
      enumerator::MDL_INIT_REFINE_BASEGRID
