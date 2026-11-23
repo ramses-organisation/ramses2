@@ -1489,7 +1489,7 @@ contains
 
     ! Print and reset the statistics of the previous coarse step
     if (sim%g%nstep_coarse /= neq_stat_nstep) then
-       if (neq_stat_ncall > 0) call neq_print_stats()
+       if (neq_stat_ncall > 0) call neq_print_stats(sim%r%verbose)
        neq_stat = 0
        neq_stat_in = 0
        neq_stat_ncall = 0
@@ -1603,9 +1603,10 @@ contains
 
   end subroutine gpu_neq_cooling
 
-  !> Print the sub-step statistics of one coarse step (diagnostic)
-  subroutine neq_print_stats()
+  !> Print the sub-step statistics of one coarse step (diagnostic), per pass in verbose mode
+  subroutine neq_print_stats(verbose)
     implicit none
+    logical :: verbose
     integer :: ipass
     integer(kind=8) :: ncell, nsub, nwarp
 
@@ -1618,6 +1619,7 @@ contains
          & " max=",I0," warp max sum=",I0," lane efficiency=",F0.3)') &
          & neq_stat_nstep, neq_stat_ncall, ncell, nsub, dble(nsub)/dble(ncell), neq_stat_max, nwarp, &
          & dble(nsub)/(32d0*dble(nwarp))
+    if (.not. verbose) return
     do ipass = 1, neq_npass
        if (neq_stat(3,ipass) > 0) write(*,'("   pass ",I0,": cap=",I0," cells in=",I0, &
             & " sub-steps=",I0," warp max sum=",I0," lane efficiency=",F0.3)') &
