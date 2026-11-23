@@ -141,11 +141,8 @@ subroutine star_rt_feedback(s, p, ilevel)
 
      end if
 
-     if(.not. ok_level)then
-        write(*,*)"Something went wrong in star_rt_feedback"
-        write(*,*)"Current level grid and coarser grid both dont exist..."
-        stop
-     endif
+     ! No cell at either level: skip the star, as the supernova feedback does (to be investigated)
+     if(.not. ok_level)cycle
 
      ! Compute star particle properties
      if(r%metal) then

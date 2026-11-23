@@ -2172,12 +2172,8 @@ contains
     call GPU_Error_Check(__FILE__, __LINE__)
     call nvtxEndRange()
 
-    ! A star without a cell or bad SED weights are flagged on the device, report them here
+    ! Bad SED weights are flagged on the device, report them here
     fail = fail_d
-    if (fail == 1) then
-       write(*,*)'Error: a star has no cell at its level or the coarser level in the GPU stellar emission'
-       error stop
-    endif
     if (fail == 2) then
        write(*,*)'Error: bad SED interpolation weights in the GPU stellar emission'
        error stop
