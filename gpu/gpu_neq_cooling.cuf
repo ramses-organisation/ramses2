@@ -1,7 +1,7 @@
 !> Non-equilibrium chemistry on the GPU: the split update of neq_solve_cooling, one cell per thread.
 module neq_cooling_device
 #ifndef DO_RTZ
-  use amr_parameters, only: dp, ndim, twotondim
+  use amr_parameters, only: dp, ndim, twotondim, MAXLEVEL
   use hydro_parameters, only: nvar, nion, nener
 #ifdef DO_RT
   use rt_parameters, only: nrtgrp, nrtvar, smallnp
@@ -49,12 +49,25 @@ module neq_cooling_device
   integer(kind=4), device, allocatable :: neq_list1_d(:), neq_list2_d(:)
   integer(kind=4), device :: neq_nlist_d
 
-  !> Sub-step statistics per pass (diagnostic): finished cells, sub-steps, sum of warp max sub-steps
-  integer(kind=8), device :: neq_stat_d(1:3,1:neq_npass)
+  !> Tests that limit a sub-step (diagnostic); a cell done in one sub-step counts as limiter 0
+  integer, parameter :: neq_nlim = 6
+  integer, parameter :: ilim_Np = 1, ilim_Fp = 2, ilim_T = 3, ilim_xH = 4, ilim_xHe = 5, ilim_ne = 6
+  character(len=6), parameter, dimension(0:neq_nlim) :: neq_lim_name = &
+       & (/ '1-step', 'Np    ', 'Fp    ', 'T     ', 'xH    ', 'xHe   ', 'ne    ' /)
+
+  !> Sub-step statistics per pass (diagnostic): finished cells, sub-steps, sum of warp max sub-steps,
+  !> rejected sub-steps
+  integer(kind=8), device :: neq_stat_d(1:4,1:neq_npass)
   integer(kind=4), device :: neq_stat_max_d
+  !> Sub-steps of the finished cells by the limiter of their shortest sub-step (diagnostic)
+  integer(kind=8), device :: neq_lim_d(0:neq_nlim)
   !> Host sums over one coarse step, printed at the first call of the next one
-  integer(kind=8), save :: neq_stat(1:3,1:neq_npass) = 0, neq_stat_in(1:neq_npass) = 0, neq_stat_ncall = 0
+  integer(kind=8), save :: neq_stat(1:4,1:neq_npass) = 0, neq_stat_in(1:neq_npass) = 0, neq_stat_ncall = 0
   integer(kind=4), save :: neq_stat_max = 0, neq_stat_nstep = -1
+  integer(kind=8), save :: neq_lim(0:neq_nlim) = 0
+  !> Host sums per level: calls, finished cells, their sub-steps, sum of warp max sub-steps
+  integer(kind=8), save :: neq_lev(1:4,1:MAXLEVEL) = 0
+  integer(kind=4), save :: neq_lev_max(1:MAXLEVEL) = 0
 
 contains
 
@@ -81,7 +94,7 @@ contains
 #ifdef DO_RT
        & Npc, Fpc, p_gasc, dNpdtc, dFpdtc, ilevel, &
 #endif
-       & one_over_T_FRAC, one_over_x_FRAC, dt, tleft, ddtc, loopcnt, maxloop, done)
+       & one_over_T_FRAC, one_over_x_FRAC, dt, tleft, ddtc, loopcnt, maxloop, done, nrej, ilim_cell)
     implicit none
     type(run_t):: r
     type(neq_cooling_t):: tables
@@ -98,9 +111,11 @@ contains
     real(kind=8):: one_over_x_FRAC, one_over_T_FRAC
     real(kind=8)::dt, tleft, ddtc
     integer::loopcnt
+    integer::nrej, ilim_cell        ! Rejected sub-steps, limiter of the shortest one (diagnostic)
     !--------------------------------------------------------
     logical:: dt_ok, finished
-    real(kind=8):: dt_rec
+    real(kind=8):: dt_rec, ddt_lim
+    integer:: ilim
     real(kind=8):: dT2
     real(kind=8),dimension(nion):: dXion
 #ifdef DO_RT
@@ -147,6 +162,9 @@ contains
 
     ! Sub-step until the whole dt is done, with at least one attempt
     loopcnt=0
+    nrej=0
+    ilim_cell=0
+    ddt_lim=huge(dt)
     finished=.false.
     do while(.not. finished)
        if(loopcnt .ge. maxloop) exit
@@ -155,11 +173,17 @@ contains
 #ifdef DO_RT
             & Npc, Fpc, p_gasc, dNpdtc, dFpdtc, ilevel, dNp, dFp, dp_gas, &
 #endif
-            & one_over_T_FRAC, one_over_x_FRAC, dT2, dXion, dt_ok, dt_rec)
+            & one_over_T_FRAC, one_over_x_FRAC, dT2, dXion, dt_ok, dt_rec, ilim)
        if(loopcnt .gt. 100000) exit
        if(.not. dt_ok) then
+          nrej=nrej+1
           ddtc=ddtc/2.                         ! Try again with smaller dt
           cycle
+       endif
+       ! Limiter of the shortest accepted sub-step (diagnostic)
+       if(ddtc .lt. ddt_lim) then
+          ddt_lim=ddtc
+          ilim_cell=ilim
        endif
        ! Update the cell state (advance the time by ddtc):
        T2c = T2c + dT2
@@ -184,7 +208,7 @@ contains
 #ifdef DO_RT
        & Npc, Fpc, p_gasc, dNpdtc, dFpdtc, ilevel, dNp, dFp, dp_gas, &
 #endif
-       & one_over_T_FRAC, one_over_x_FRAC, dT2, dXion, dt_ok, dt_rec)
+       & one_over_T_FRAC, one_over_x_FRAC, dT2, dXion, dt_ok, dt_rec, ilim)
     implicit none
     type(run_t):: r
     type(neq_cooling_t):: tables
@@ -202,6 +226,7 @@ contains
     real(kind=8):: one_over_x_FRAC, one_over_T_FRAC
     logical:: dt_ok
     real(kind=8):: dt_rec
+    integer:: ilim                  ! Test with the largest change, or the failed one (diagnostic)
     real(kind=8):: dT2
     real(kind=8),dimension(nion):: dXion
     !-----------------------------------------------------------------------
@@ -235,6 +260,7 @@ contains
     associate(ixHI=>r%ixHi,ixHII=>r%ixHII,ixHeII=>r%ixHeII,ixHeIII=>r%ixHeIII)
 
     dt_ok=.false.
+    ilim=0
     nHe=0.25*nHc*r%Y_He/r%X_H             ! Helium number density
     ! U contains the original values, dU the updated ones
     dT2 = T2c ; dXion(:) = xionc(:)
@@ -378,8 +404,10 @@ contains
           dUU = ABS(dNp(igroup)-Npc(igroup))                             &
                 /(Npc(igroup)+Np_MIN) * one_over_Np_FRAC
           if(dUU .gt. 1d0) then
+             ilim=ilim_Np
              RETURN                                        ! ddtc too big
           endif
+          if(dUU .gt. fracMax) ilim=ilim_Np
           fracMax=MAX(fracMax,dUU)      ! To check if ddt can be increased
           ! IR scattering acts on the flux and the radiation force only
           if(r%rt_isIR .and. igroup.eq.iIR) phAbs(igroup) = phAbs(igroup) + phSc_IR
@@ -396,8 +424,10 @@ contains
                   / (ABS(Fpc(idim,igroup))+Np_MIN*rt_c_cgs)              &
                   * one_over_Fp_FRAC
              if(dUU .gt. 1d0) then
+                ilim=ilim_Fp
                 RETURN                                     ! ddtc too big
              endif
+             if(dUU .gt. fracMax) ilim=ilim_Fp
              fracMax=MAX(fracMax,dUU)   ! To check if ddt can be increased
           end do
 
@@ -513,8 +543,10 @@ contains
        dUU   = MAX(dUU, ABS(dT2-T2c)) / (T2c+T_MIN) &
                         *one_over_T_FRAC
        if(dUU .gt. 1.) then                                     ! 10% rule
+          ilim=ilim_T
           RETURN
        endif
+       if(dUU .gt. fracMax) ilim=ilim_T
        fracMax=MAX(fracMax,dUU)
        TK=dT2*mu
        idxT = get_rate_index(tables, TK)
@@ -547,14 +579,18 @@ contains
           dUU = ABS(dNp(iIR)-Npc(iIR)) / (Npc(iIR)+Np_MIN)               &
                                             * one_over_Np_FRAC
           if(dUU .gt. 1.) then
+             ilim=ilim_Np
              RETURN
           endif
+          if(dUU .gt. fracMax) ilim=ilim_Np
           fracMax=MAX(fracMax,dUU)
 
           dUU   = ABS(dT2-T2c) / (T2c+T_MIN) * one_over_T_FRAC
           if(dUU .gt. 1.) then                           ! 10% rule for T2
+             ilim=ilim_T
              RETURN
           endif
+          if(dUU .gt. fracMax) ilim=ilim_T
           fracMax=MAX(fracMax,dUU)
           TK=dT2*mu
           idxT = get_rate_index(tables, TK)
@@ -647,8 +683,10 @@ contains
          ,ABS(dXion(ixHII)-xionc(ixHII))/(xionc(ixHII)+x_FM))            &
         * one_over_x_FRAC
     if(dUU .gt. 1.) then
+       ilim=ilim_xH
        RETURN
     endif
+    if(dUU .gt. fracMax) ilim=ilim_xH
     fracMax=MAX(fracMax,dUU)
 
     ! HELIUM UPDATE*******************************************************
@@ -717,8 +755,10 @@ contains
                       /(xionc(ixHeIII)+x_FM)) &
            * one_over_x_FRAC
        if(dUU .gt. 1.) then
+          ilim=ilim_xHe
           RETURN
        endif
+       if(dUU .gt. fracMax) ilim=ilim_xHe
        fracMax=MAX(fracMax,dUU)
     endif !if(isHe) ! END HELIUM UPDATE***********************************
 
@@ -727,8 +767,10 @@ contains
     if(r%isHe) ne = ne + nHe*(dxion(ixHeII)+2.*dxion(ixHeIII))
     dUU=ABS((ne-neInit)) / (neInit+x_FM) * one_over_x_FRAC
     if(dUU .gt. 1.) then
+       ilim=ilim_ne
        RETURN
     endif
+    if(dUU .gt. fracMax) ilim=ilim_ne
     fracMax=MAX(fracMax,dUU)
 
     if(r%neq_isTconst)then
@@ -1072,13 +1114,13 @@ contains
        & rtuold, rtunew, do_smooth, ilevel, scale_d, scale_v, scale_Np, scale_Fp, &
        & emissivity, do_emis, scale_t, &
 #endif
-       & loopcnt, maxloop, done)
+       & loopcnt, maxloop, done, nrej, ilim)
     implicit none
     type(run_t)::r
     type(neq_cooling_t)::tables
     real(kind=dp) :: uold(1:twotondim,1:nvar,*)
     real(kind=dp) :: bold(1:twotondim,1:6,*)
-    integer :: icell, ioct, loopcnt, maxloop
+    integer :: icell, ioct, loopcnt, maxloop, nrej, ilim
     logical :: done
     real(kind=8) :: scale_nH, scale_T2, dtcool, nH_eos, X_cool
 #ifdef DO_RT
@@ -1223,7 +1265,7 @@ contains
 #ifdef DO_RT
          & Np, Fp, p_gas, dNpdt, dFpdt, ilevel, &
 #endif
-         & one_over_T_FRAC, one_over_x_FRAC, dtcool, tleft, ddt, loopcnt, maxloop, done)
+         & one_over_T_FRAC, one_over_x_FRAC, dtcool, tleft, ddt, loopcnt, maxloop, done, nrej, ilim)
 
     ! An unfinished cell is left untouched, to be solved again in the next pass
     if (.not. done) return
@@ -1279,29 +1321,45 @@ contains
   end subroutine neq_cool_cell
 
   !> Sub-step statistics of a warp: sums and max, one set of atomics per warp
-  attributes(device) subroutine neq_warp_stats(lane, active, loopcnt, ipass)
+  attributes(device) subroutine neq_warp_stats(lane, active, loopcnt, nrej, ilim, ipass)
     implicit none
-    integer :: lane, loopcnt, ipass
+    integer :: lane, loopcnt, nrej, ilim, ipass
     logical :: active
-    integer :: ncell, nsub, nmax, offset, info
+    integer :: ncell, nsub, nmax, nret, offset, info, icat, k, nk
     integer(kind=8) :: info8
 
     ncell = merge(1, 0, active)
     nsub = loopcnt
     nmax = loopcnt
+    nret = nrej
     offset = 16
     do while (offset > 0)
        ncell = ncell + __shfl_xor(ncell, offset)
        nsub = nsub + __shfl_xor(nsub, offset)
        nmax = max(nmax, __shfl_xor(nmax, offset))
+       nret = nret + __shfl_xor(nret, offset)
        offset = offset / 2
     end do
     if (lane == 0 .and. nsub > 0) then
        info8 = atomicadd(neq_stat_d(1,ipass), int(ncell, kind=8))
        info8 = atomicadd(neq_stat_d(2,ipass), int(nsub, kind=8))
        info8 = atomicadd(neq_stat_d(3,ipass), int(nmax, kind=8))
+       info8 = atomicadd(neq_stat_d(4,ipass), int(nret, kind=8))
        info = atomicmax(neq_stat_max_d, nmax)
     endif
+
+    ! Sub-steps of the finished cells by limiter, a cell done in one sub-step as limiter 0
+    icat = -1
+    if (active) icat = merge(0, ilim, loopcnt == 1)
+    do k = 0, neq_nlim
+       nk = merge(loopcnt, 0, icat == k)
+       offset = 16
+       do while (offset > 0)
+          nk = nk + __shfl_xor(nk, offset)
+          offset = offset / 2
+       end do
+       if (lane == 0 .and. nk > 0) info8 = atomicadd(neq_lim_d(k), int(nk, kind=8))
+    end do
 
   end subroutine neq_warp_stats
 
@@ -1333,7 +1391,7 @@ contains
 #endif
     integer(kind=4), device :: runaway
 
-    integer :: cell_idx, oct_idx, block_idx, loopcnt, islot, lane
+    integer :: cell_idx, oct_idx, block_idx, loopcnt, islot, lane, nrej, ilim
     logical :: active, done
 
     block_idx = blockIdx%x - 1
@@ -1353,6 +1411,8 @@ contains
 
     ! Inactive threads stay for the warp reduction below
     loopcnt = 0
+    nrej = 0
+    ilim = 0
     done = .true.
     if (active) then
        call neq_cool_cell(neq_run_d, neq_tables_d, uold, bold, cell_idx, oct_idx, &
@@ -1361,7 +1421,7 @@ contains
             & rtuold, rtunew, do_smooth, ilevel, scale_d, scale_v, scale_Np, scale_Fp, &
             & emissivity, do_emis, scale_t, &
 #endif
-            & loopcnt, maxloop, done)
+            & loopcnt, maxloop, done, nrej, ilim)
     endif
 
     ! Add a cell stopped at the cap to the list of the next pass
@@ -1374,7 +1434,7 @@ contains
     if (loopcnt > 100000) runaway = 1
 
     lane = iand((threadIdx%y - 1) * blockDim%x + threadIdx%x - 1, 31)
-    call neq_warp_stats(lane, active .and. done, loopcnt, 1)
+    call neq_warp_stats(lane, active .and. done, loopcnt, nrej, ilim, 1)
 
   end subroutine neq_cool_kernel
 
@@ -1406,7 +1466,7 @@ contains
 #endif
     integer(kind=4), device :: runaway
 
-    integer :: i, islot, cell_idx, oct_idx, loopcnt, lane, info
+    integer :: i, islot, cell_idx, oct_idx, loopcnt, lane, info, nrej, ilim
     logical :: active, done
 
     ! Compute the list idx
@@ -1415,6 +1475,8 @@ contains
 
     ! Inactive threads stay for the warp reduction below
     loopcnt = 0
+    nrej = 0
+    ilim = 0
     done = .true.
     if (active) then
        islot = list_in(i)
@@ -1426,7 +1488,7 @@ contains
             & rtuold, rtunew, do_smooth, ilevel, scale_d, scale_v, scale_Np, scale_Fp, &
             & emissivity, do_emis, scale_t, &
 #endif
-            & loopcnt, maxloop, done)
+            & loopcnt, maxloop, done, nrej, ilim)
     endif
 
     ! Add a cell stopped at the cap to the list of the next pass
@@ -1439,7 +1501,7 @@ contains
     if (loopcnt > 100000) runaway = 1
 
     lane = iand(threadIdx%x - 1, 31)
-    call neq_warp_stats(lane, active .and. done, loopcnt, ipass)
+    call neq_warp_stats(lane, active .and. done, loopcnt, nrej, ilim, ipass)
 
   end subroutine neq_cool_list_kernel
 
@@ -1465,7 +1527,8 @@ contains
     integer(kind=4) :: threadsX_per_block, threadsY_per_block, num_blocks
     integer(kind=4), device :: runaway_d
     integer(kind=4) :: runaway
-    integer(kind=8) :: stat(1:3,1:neq_npass)
+    integer(kind=8) :: stat(1:4,1:neq_npass)
+    integer(kind=8) :: lim(0:neq_nlim)
     integer(kind=4) :: stat_max
     integer(kind=4) :: nlist, ipass
     real(kind=8) :: scale_nH, scale_T2, scale_l, scale_d, scale_t, scale_v
@@ -1494,6 +1557,9 @@ contains
        neq_stat_in = 0
        neq_stat_ncall = 0
        neq_stat_max = 0
+       neq_lim = 0
+       neq_lev = 0
+       neq_lev_max = 0
        neq_stat_nstep = sim%g%nstep_coarse
     endif
 
@@ -1538,6 +1604,7 @@ contains
        neq_nlist_d = 0
        neq_stat_d = 0
        neq_stat_max_d = 0
+       neq_lim_d = 0
        call nvtxStartRange("GPU neq chemistry", color=0)!green
        call neq_cool_kernel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>( &
             & uold, bold, grid, head_idx, num_octs, neq_maxloop(1), neq_list1_d,       &
@@ -1596,35 +1663,62 @@ contains
        ! Accumulate the sub-step statistics since the start of the run
        stat = neq_stat_d
        stat_max = neq_stat_max_d
+       lim = neq_lim_d
        neq_stat_ncall = neq_stat_ncall + 1
        neq_stat = neq_stat + stat
        neq_stat_max = max(neq_stat_max, stat_max)
+       neq_lim = neq_lim + lim
+       neq_lev(1,ilevel) = neq_lev(1,ilevel) + 1
+       neq_lev(2,ilevel) = neq_lev(2,ilevel) + sum(stat(1,:))
+       neq_lev(3,ilevel) = neq_lev(3,ilevel) + sum(lim)
+       neq_lev(4,ilevel) = neq_lev(4,ilevel) + sum(stat(3,:))
+       neq_lev_max(ilevel) = max(neq_lev_max(ilevel), stat_max)
     end if
 
   end subroutine gpu_neq_cooling
 
-  !> Print the sub-step statistics of one coarse step (diagnostic), per pass in verbose mode
+  !> Print the sub-step statistics of one coarse step (diagnostic): the sub-steps per finished cell,
+  !> the share of the sub-steps redone in a later pass and of the rejected ones, the share of the
+  !> sub-steps of the finished cells by limiter, and per level the share of the warp cost;
+  !> per pass in verbose mode
   subroutine neq_print_stats(verbose)
     implicit none
     logical :: verbose
-    integer :: ipass
-    integer(kind=8) :: ncell, nsub, nwarp
+    integer :: ipass, k, ilev
+    integer(kind=8) :: ncell, nsub, nwarp, ndone
+    character(len=16) :: field
+    character(len=160) :: line
 
     ncell = sum(neq_stat(1,:))
     nsub = sum(neq_stat(2,:))
     nwarp = sum(neq_stat(3,:))
-    if (ncell == 0) return
+    ndone = sum(neq_lim)
+    if (ncell == 0 .or. ndone == 0) return
     neq_stat_in(1) = ncell
-    write(*,'(" neq chem step ",I0,": calls=",I0," cells=",I0," sub-steps=",I0," per cell=",F0.2, &
-         & " max=",I0," warp max sum=",I0," lane efficiency=",F0.3)') &
-         & neq_stat_nstep, neq_stat_ncall, ncell, nsub, dble(nsub)/dble(ncell), neq_stat_max, nwarp, &
-         & dble(nsub)/(32d0*dble(nwarp))
+    write(*,'(" neq chem step ",I0,": calls=",I0," per cell=",F0.2," max=",I0, &
+         & " lane efficiency=",F0.3," redone=",F0.1,"% rejected=",F0.1,"%")') &
+         & neq_stat_nstep, neq_stat_ncall, dble(ndone)/dble(ncell), neq_stat_max, &
+         & dble(nsub)/(32d0*dble(nwarp)), 100d0*dble(nsub-ndone)/dble(nsub), &
+         & 100d0*dble(sum(neq_stat(4,:)))/dble(nsub)
+    line = '   limiters:'
+    do k = 0, neq_nlim
+       write(field,'(1X,A,"=",F0.1,"%")') trim(neq_lim_name(k)), 100d0*dble(neq_lim(k))/dble(ndone)
+       line = trim(line)//trim(field)
+    end do
+    write(*,'(A)') trim(line)
+    do ilev = 1, MAXLEVEL
+       if (neq_lev(2,ilev) == 0) cycle
+       write(*,'("   level ",I2,": calls=",I4," cells/call=",I10," per cell=",F7.2," max=",I6, &
+            & " cost=",F5.1,"%")') ilev, neq_lev(1,ilev), neq_lev(2,ilev)/neq_lev(1,ilev), &
+            & dble(neq_lev(3,ilev))/dble(neq_lev(2,ilev)), neq_lev_max(ilev), &
+            & 100d0*dble(neq_lev(4,ilev))/dble(nwarp)
+    end do
     if (.not. verbose) return
     do ipass = 1, neq_npass
        if (neq_stat(3,ipass) > 0) write(*,'("   pass ",I0,": cap=",I0," cells in=",I0, &
-            & " sub-steps=",I0," warp max sum=",I0," lane efficiency=",F0.3)') &
-            & ipass, neq_maxloop(ipass), neq_stat_in(ipass), neq_stat(2,ipass), neq_stat(3,ipass), &
-            & dble(neq_stat(2,ipass))/(32d0*dble(neq_stat(3,ipass)))
+            & " sub-steps=",I0," rejected=",I0," warp max sum=",I0," lane efficiency=",F0.3)') &
+            & ipass, neq_maxloop(ipass), neq_stat_in(ipass), neq_stat(2,ipass), neq_stat(4,ipass), &
+            & neq_stat(3,ipass), dble(neq_stat(2,ipass))/(32d0*dble(neq_stat(3,ipass)))
     end do
 
   end subroutine neq_print_stats
