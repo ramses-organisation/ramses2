@@ -253,7 +253,7 @@ MODULE SED_module
   implicit none
 
   PUBLIC sed_table_t, init_SED_table, inp_SED_table &
-        ,update_SED_group_props, getNPhotonsEmitted
+        ,update_SED_group_props, getNPhotonsEmitted, write_SED_table
 #ifdef DO_RTZ
   PUBLIC initialize_cross_sections_from_blackbody &
         ,initialize_group_energies_from_blackbody
@@ -501,8 +501,6 @@ SUBROUTINE init_SED_table(r, g, SED)
   deallocate(ages) ; deallocate(rebAges)
   deallocate(zs)
   deallocate(Ls)
-
-  if (g%myid==1) call write_SED_table(SED)
 
 END SUBROUTINE init_SED_table
 
@@ -914,9 +912,9 @@ SUBROUTINE rebin_log(xint_log, yint_log,                         &
 END SUBROUTINE rebin_log
 
 !*************************************************************************
-SUBROUTINE write_SED_table(SED)
-  ! Write the SED properties to a file (this is just in debugging, to check
-  ! if the SEDs are being read correctly).
+SUBROUTINE write_SED_table(SED, filedir)
+  ! Write the SED properties of each photon group to SEDtableX.list in the
+  ! output directory filedir (to check the SEDs, see sed_utils.py groups).
   ! Photon group properties: age [Gyr], metal mass fraction,
   ! luminosity [photons s-1 Msun-1], cumulative luminosity [photons Msun-1],
   ! group energy [ergs], csn_HX [cm2], cse_HX [cm2], where HX=H2, HI, HeI,
@@ -927,8 +925,9 @@ SUBROUTINE write_SED_table(SED)
   use rtz_module, only: n_elements, elements
 #endif
   type(sed_table_t) :: SED
+  character(len=*) :: filedir
   !-------------------------------------------------------------------------
-  character(len=128) :: filename
+  character(len=len(filedir)+16) :: filename
   integer :: ip, i, j, k, nv
   !-------------------------------------------------------------------------
 
@@ -944,7 +943,7 @@ SUBROUTINE write_SED_table(SED)
 #endif
 
   do ip = 1, nrtgrp
-     write(filename,'(A, I1, A)') 'SEDtable', ip, '.list'
+     write(filename,'(A, A, I1, A)') TRIM(filedir), 'SEDtable', ip, '.list'
      open(10, file=filename, status='unknown')
      write(10,*) SED%nA, SED%nZ
 

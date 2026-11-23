@@ -38,6 +38,7 @@ to plot the radiation group properties, RAMSES must first be run on the
 (converted) SEDs.
 """
 
+import glob
 import numpy as np
 import os
 import sys
@@ -434,7 +435,7 @@ def plotRamsesSEDs(sedDir,iZ=1,iAge=None, pdf=None):
 def plotRamsesGroups(groupFiles=['SEDtable1.list'],isEgy=False, pdf=None):
     """Plot photon group properties and stellar luminosities, as generated
        by ramses-rt from SED tables, and found in SEDtableX.list files
-       in the ramses run directory.
+       in the ramses output directories.
        The format of each (ascii) file is
        age (Gyr), Z, luminosity, time-integrated luminosity, group energy
        (eV), cross sections (cm2). The luminosity is in units of
@@ -654,8 +655,10 @@ if __name__ == '__main__':
     pp.add_argument('--pdf', default=None, help='save to this PDF file')
 
     pg = sub.add_parser('groups',
-                        help='plot SEDtableX.list files written by RAMSES')
-    pg.add_argument('files', nargs='+')
+                        help='plot SEDtableX.list files written by RAMSES, '
+                        'or those of an output directory')
+    pg.add_argument('files', nargs='+',
+                    help='SEDtableX.list files, or one output directory')
     pg.add_argument('--pdf', default=None, help='save to this PDF file')
 
     args = parser.parse_args()
@@ -669,4 +672,7 @@ if __name__ == '__main__':
     elif args.cmd == 'plot':
         plotRamsesSEDs(args.seddir, iZ=args.iZ, pdf=args.pdf)
     elif args.cmd == 'groups':
-        plotRamsesGroups(groupFiles=args.files, pdf=args.pdf)
+        files = args.files
+        if len(files) == 1 and os.path.isdir(files[0]):
+            files = sorted(glob.glob(os.path.join(files[0], 'SEDtable*.list')))
+        plotRamsesGroups(groupFiles=files, pdf=args.pdf)
