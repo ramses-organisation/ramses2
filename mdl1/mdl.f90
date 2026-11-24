@@ -109,6 +109,8 @@ contains
 #ifndef WITHOUTMPI
     include 'mpif.h'
     integer::info
+    ! MPI_ABORT does not flush the error message of the caller
+    flush(6)
     ! Abort with error code 1
     call MPI_ABORT(MPI_COMM_WORLD,1,info)
 #else

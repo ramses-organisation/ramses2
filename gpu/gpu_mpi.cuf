@@ -225,6 +225,7 @@ contains
 
     if (info == cudaSuccess) return
     write(*,*) 'gpu_mpi: CUDA error: ', trim(cudaGetErrorString(info))
+    flush(6)
     call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
   end subroutine check_cuda
 #endif
