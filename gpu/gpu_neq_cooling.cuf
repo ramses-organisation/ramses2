@@ -42,12 +42,14 @@ module neq_cooling_device
   !> Sub-step caps of the passes; the cells still unfinished at the cap of a pass
   !> are solved again from scratch in the next pass, the last pass has no cap
   integer, parameter :: neq_npass = 3
-  integer, parameter, dimension(1:neq_npass) :: neq_maxloop = (/ 8, 64, huge(0) /)
+  !> Host arrays, not parameters: nvfortran puts module parameter arrays in the device image,
+  !> which does not work in this file compiled with -gpu=nordc
+  integer, save, dimension(1:neq_npass) :: neq_maxloop = (/ 8, 64, huge(0) /)
 
   !> Tests that limit a sub-step (diagnostic); a cell done in one sub-step counts as limiter 0
   integer, parameter :: neq_nlim = 6
   integer, parameter :: ilim_Np = 1, ilim_Fp = 2, ilim_T = 3, ilim_xH = 4, ilim_xHe = 5, ilim_ne = 6
-  character(len=6), parameter, dimension(0:neq_nlim) :: neq_lim_name = &
+  character(len=6), save, dimension(0:neq_nlim) :: neq_lim_name = &
        & (/ '1-step', 'Np    ', 'Fp    ', 'T     ', 'xH    ', 'xHe   ', 'ne    ' /)
 
   !> Host sums over one coarse step, printed at the first call of the next one
