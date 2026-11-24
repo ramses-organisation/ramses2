@@ -403,7 +403,7 @@ cub_module_radix_sort_f.o: cub_module_radix_sort.cuf cub_module_radix_sort_c.o
 	nvfortran $(FFLAGS) -c cub_module_radix_sort_c.o $(GPU_PATH)/cub_module_radix_sort.cuf -o cub_module_radix_sort_f.o
 
 gpu_hydro.o gpu_runner.o: gpu_launch.h
-gpu_mpi.o: gpu_hash.cuf gpu_hilbert.cuf
+gpu_mpi.o: gpu_hash.cuf
 
 %.o:%.cuf
 	$(F90) $(FFLAGS) -c $< -o $@

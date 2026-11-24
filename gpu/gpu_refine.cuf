@@ -1885,9 +1885,7 @@ end subroutine nimhd_ghost_b_kernel
   ! =========================================================================
   attributes(global) subroutine update_nbor_array(nbor, grid, hash_key, hash_val, hash_size, &
        & ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, head_idx, num_subgrids, &
-       & input_ind, request_missing, prefix_sum)
-    use gpu_mpi, only: gpu_mpi_request
-    logical, value :: request_missing
+       & input_ind, prefix_sum)
     logical, device :: periodic(1:3)
     type(oct), device :: grid(*)
     integer(kind=4), device :: nbor(1:subgridsize,*)
@@ -1947,10 +1945,9 @@ end subroutine nimhd_ghost_b_kernel
     offset = key_off(ilevel)
     key = offset + ix + iy * nx + iz * nx * nx
 
-    ! Look up the same-level oct after wrapping at the physical box faces.
+    ! Get parent oct index in memory
     nbor_idx = hash_get(hash_key, hash_val, hash_size, key)
     nbor(input_ind, subgrid_idx) = nbor_idx
-    if (request_missing .and. nbor_idx == 0) call gpu_mpi_request(ckey, key, ilevel)
 
     ! If nbor index is zero set prefix_sum to one
     if (present(prefix_sum)) then
@@ -2047,7 +2044,7 @@ end subroutine nimhd_ghost_b_kernel
        & uold, bold, f, phi, phi_old, swap_local, prefix_sum, father, nbor, hash_key, &
        & hash_val, hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, &
        & periodic, ngridmax, ncachemax, ifree_cache, cache_overflow, input_ind, head_idx, &
-       & num_subgrids, interpol_var, interpol_type, smallr)
+       & num_subgrids, interpol_var, interpol_type, smallr, source)
 
     use cooperative_groups
 
@@ -2078,6 +2075,7 @@ end subroutine nimhd_ghost_b_kernel
     integer(kind=4), intent(in), value :: num_subgrids
     integer(kind=4), intent(in), value :: interpol_var, interpol_type
     real(kind=dp), intent(in), value :: smallr
+    integer(kind=1), intent(in), value :: source
     integer(kind=4) :: num_octs
 
     type(grid_group) :: gg
@@ -2093,7 +2091,7 @@ end subroutine nimhd_ghost_b_kernel
     ! Make new ghost octs in cache
     call make_cache_octs_impl(grid, flag1, uold, bold, f, phi, phi_old, swap_local, father, nbor, &
         & hash_key, hash_val, hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
-        & ngridmax, ncachemax, ifree_cache, cache_overflow, num_octs, input_ind, interpol_var, interpol_type, smallr)
+        & ngridmax, ncachemax, ifree_cache, cache_overflow, num_octs, input_ind, interpol_var, interpol_type, smallr, source)
     call syncthreads(gg)
 
     ! Insert new octs in hash table
@@ -2112,7 +2110,7 @@ end subroutine nimhd_ghost_b_kernel
   ! =========================================================================
   attributes(global) subroutine make_cache_octs(grid, flag1, uold, bold, f, phi, phi_old, swap_local, father, nbor, &
        & hash_key, hash_val, hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
-       & ngridmax, ncachemax, ifree_cache, cache_overflow, num_octs, input_ind, interpol_var, interpol_type, smallr)
+       & ngridmax, ncachemax, ifree_cache, cache_overflow, num_octs, input_ind, interpol_var, interpol_type, smallr, source)
     type(oct), device :: grid(*)
     real(kind=dp), device :: f(1:twotondim,1:ndim,*)
     real(kind=dp), device :: phi(1:twotondim,*)
@@ -2136,17 +2134,18 @@ end subroutine nimhd_ghost_b_kernel
     integer(kind=4), intent(in), value :: input_ind
     integer(kind=4), intent(in), value :: interpol_var, interpol_type
     real(kind=dp), intent(in), value :: smallr
+    integer(kind=1), intent(in), value :: source
 
     call make_cache_octs_impl(grid, flag1, uold, bold, f, phi, phi_old, swap_local, father, nbor, &
         & hash_key, hash_val, hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
-        & ngridmax, ncachemax, ifree_cache, cache_overflow, num_octs, input_ind, interpol_var, interpol_type, smallr)
+        & ngridmax, ncachemax, ifree_cache, cache_overflow, num_octs, input_ind, interpol_var, interpol_type, smallr, source)
 
   end subroutine make_cache_octs
 
   ! =========================================================================
   attributes(device) subroutine make_cache_octs_impl(grid, flag1, uold, bold, f, phi, phi_old, swap_local, father, nbor, &
        & hash_key, hash_val, hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
-       & ngridmax, ncachemax, ifree_cache, cache_overflow, num_octs, input_ind, interpol_var, interpol_type, smallr)
+       & ngridmax, ncachemax, ifree_cache, cache_overflow, num_octs, input_ind, interpol_var, interpol_type, smallr, source)
     type(oct), device :: grid(*)
     real(kind=dp), device :: f(1:twotondim,1:ndim,*)
     real(kind=dp), device :: phi(1:twotondim,*)
@@ -2170,6 +2169,7 @@ end subroutine nimhd_ghost_b_kernel
     integer(kind=4), intent(in), value :: input_ind
     integer(kind=4), intent(in), value :: interpol_var, interpol_type
     real(kind=dp), intent(in), value :: smallr
+    integer(kind=1), intent(in), value :: source
 
     integer(kind=8) :: hkey, parent_key, offset, ix, iy, iz, nx
     integer :: oct_idx, subgrid_idx, thread_idx, block_idx, cache_idx, parent_idx, cell_idx
@@ -2208,7 +2208,7 @@ end subroutine nimhd_ghost_b_kernel
 
     ! Get proper idx for cache grid
     cache_idx = ngridmax + ifree_cache + cache_idx
-    cache_source(cache_idx) = cache_interpolated
+    cache_source(cache_idx) = source
 
     ! Update nbor index (no race condition)
     nbor(input_ind, subgrid_idx) = cache_idx
@@ -2240,11 +2240,14 @@ end subroutine nimhd_ghost_b_kernel
        grid(cache_idx)%ckey(idim) = ckey(idim)
     end do
     grid(cache_idx)%refined(1:twotondim) = .false.
-    flag1(1:twotondim, cache_idx) = 0
 
     ! Compute new oct Hilbert key
     hkey = hilbert_key(ckey, ilevel - 1)
     grid(cache_idx)%hkey(1) = hkey
+
+    ! A remote oct has no parent here: its owner sends its values (gpu_halo_update)
+    if (source == cache_remote) return
+    flag1(1:twotondim, cache_idx) = 0
 
     ! Compute parent oct hash table key
     ilevel = ilevel - 1

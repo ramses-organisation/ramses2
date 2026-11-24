@@ -3,14 +3,14 @@ module gpu_mpi
   use amr_parameters, only: ndim, twotondim, dp
   use oct_commons, only: oct
   use ramses_commons, only: ramses_t
+  use mdl_module, only: mdl_abort
   use cudafor
 #ifndef WITHOUTMPI
   use mpi
-  use, intrinsic :: iso_fortran_env, only: error_unit
 #endif
   implicit none
   private
-  public :: gpu_mpi_begin, gpu_mpi_request, gpu_mpi_retry, gpu_mpi_finish, gpu_halo_update
+  public :: gpu_halo_build, gpu_halo_update
 
 #ifndef WITHOUTMPI
 #if defined(NPRE) && NPRE == 4
@@ -20,16 +20,10 @@ module gpu_mpi
 #endif
   integer, parameter :: halo_tag = 703
   integer(kind=cuda_stream_kind), parameter :: default_stream = 0
-  integer :: gpu_comm = MPI_COMM_NULL
-  integer :: ncpu = 1, myid = 1, levelmin = 0
+  integer :: ncpu = 1, levelmin = 0
   logical :: device_buffers
 
-  ! Device discovery scratch. The hash table has twice as many slots as the request list.
-  integer(kind=8), device, allocatable :: bound_key(:), seen_key(:)
-  integer, device, allocatable :: cand(:,:)
-  integer, device :: ncand_d, capacity_d, mask_d, overflow_d
-
-  ! One send and receive range per peer, ordered as in the discovery exchange.
+  ! One send and receive range per rank, in rank order.
   integer, allocatable :: peers(:), soff(:), roff(:), requests(:)
   integer, device, allocatable :: isend(:), irecv(:)
   real(dp), device, allocatable :: sbuf(:), rbuf(:)
@@ -40,137 +34,34 @@ contains
 
 #ifndef WITHOUTMPI
   include 'gpu_hash.cuf'
-  include 'gpu_hilbert.cuf'
-#endif
 
-  ! Start local discovery on every rank, including ranks that own no subgrids.
-  subroutine gpu_mpi_begin(sim)
-    type(ramses_t), intent(in) :: sim
-#ifndef WITHOUTMPI
-    integer :: info
-    integer(kind=8) :: cuts(0:sim%g%ncpu)
-    integer(kind=8) :: expected
+  ! Owner rank of each remote oct, from its Hilbert key and the cuts of the level, and its Cartesian key.
+  attributes(global) subroutine owner_kernel(grid, first, n, cuts, ncuts, owner, keys)
+    type(oct), device :: grid(*)
+    integer(kind=8), device :: cuts(0:*)
+    integer, device :: owner(*), keys(1:ndim,*)
+    integer, value :: first, n, ncuts
+    integer :: k, lo, hi, mid
+    integer(kind=8) :: hkey
 
-    ncpu = sim%g%ncpu
-    myid = sim%g%myid
-    if (ncpu <= 1) return
-    levelmin = sim%r%levelmin
-    if (myid == 1) then
-       expected = int(sim%m%nx,8)*sim%m%ny*sim%m%nz
-       if (sim%m%noct_tot(levelmin) /= expected) then
-          write(error_unit,'(a,i0,a,i0)') 'gpu_mpi: base mesh contains ', sim%m%noct_tot(levelmin), &
-               & ' octs, expected ', expected
-          call abort_all()
-       endif
-    endif
-    device_buffers = sim%r%mpi_device_buffers
-    if (gpu_comm == MPI_COMM_NULL) then
-       call MPI_COMM_DUP(MPI_COMM_WORLD, gpu_comm, info)
-       call check_mpi(info)
-       call MPI_COMM_SET_ERRHANDLER(gpu_comm, MPI_ERRORS_RETURN, info)
-       call check_mpi(info)
-       allocate(soff(0:ncpu), roff(0:ncpu), requests(2*ncpu))
-    endif
-    cuts = sim%m%domain(levelmin)%b(1,0:ncpu)
-    allocate(bound_key(0:ncpu))
-    bound_key = cuts
-    call allocate_candidates(1024)
-    call reset_candidates()
-#endif
-  end subroutine gpu_mpi_begin
-
-  ! Record a missing canonical key once, including a miss in the local domain.
-  attributes(device) subroutine gpu_mpi_request(ckey, key, ilevel)
-    integer, intent(in) :: ckey(1:ndim), ilevel
-    integer(kind=8), intent(in) :: key
-#ifndef WITHOUTMPI
-    integer(kind=8) :: prev, hkey
-    integer :: bucket, old, n, lo, hi, mid, probe
-
-    if (overflow_d /= 0) return
-    bucket = int(iand(mix64(key), int(mask_d,8))) + 1
-    do probe = 1, mask_d+1
-       prev = atomiccas(seen_key(bucket), 0_8, key)
-       if (prev == key) return
-       if (prev == 0) exit
-       bucket = iand(bucket, mask_d) + 1
-    end do
-    if (prev /= 0) then
-       old = atomicexch(overflow_d, 1)
-       return
-    endif
-    n = atomicadd(ncand_d, 1) + 1
-    if (n > capacity_d) then
-       old = atomicexch(overflow_d, 1)
-       return
-    endif
-
-    hkey = hilbert_key(ckey, ilevel-1)
+    k = (blockIdx%x-1)*blockDim%x + threadIdx%x
+    if (k > n) return
+    hkey = grid(first+k-1)%hkey(1)
     lo = 1
-    hi = size(bound_key)-1
+    hi = ncuts
     do while (lo < hi)
        mid = lo + (hi-lo)/2
-       if (hkey < bound_key(mid)) then
+       if (hkey < cuts(mid)) then
           hi = mid
        else
           lo = mid + 1
        endif
     end do
-    cand(1:ndim,n) = ckey
-    cand(ndim+1,n) = lo
-#endif
-  end subroutine gpu_mpi_request
+    owner(k) = lo
+    keys(:,k) = grid(first+k-1)%ckey
+  end subroutine owner_kernel
 
-  ! On overflow, repeat all the neighbor passes against the larger empty table.
-  logical function gpu_mpi_retry()
-#ifndef WITHOUTMPI
-    integer :: overflow, capacity
-
-    gpu_mpi_retry = .false.
-    if (ncpu <= 1) return
-    call check_cuda(cudaStreamSynchronize(default_stream))
-    overflow = overflow_d
-    gpu_mpi_retry = (overflow /= 0)
-    if (.not. gpu_mpi_retry) return
-    capacity = size(cand,2)
-    if (int(capacity,8)*2*ndim > huge(1)-127) then
-       write(error_unit,'(a,i0,a)') 'gpu_mpi: rank ', myid, ' exceeded the request table size limit'
-       call abort_all()
-    endif
-    deallocate(cand, seen_key)
-    call allocate_candidates(2*capacity)
-    call reset_candidates()
-#else
-    gpu_mpi_retry = .false.
-#endif
-  end function gpu_mpi_retry
-
-#ifndef WITHOUTMPI
-  subroutine allocate_candidates(capacity)
-    integer, intent(in) :: capacity
-
-    allocate(cand(1:ndim+1,1:capacity), seen_key(1:2*capacity))
-    capacity_d = capacity
-    mask_d = 2*capacity-1
-  end subroutine allocate_candidates
-
-  subroutine reset_candidates()
-    seen_key = 0
-    ncand_d = 0
-    overflow_d = 0
-  end subroutine reset_candidates
-
-  attributes(device) integer(kind=8) function oct_key(ckey, ilevel, ckey_max, key_off)
-    integer, intent(in) :: ckey(1:ndim), ilevel
-    integer, device :: ckey_max(*)
-    integer(kind=8), device :: key_off(*)
-    integer(kind=8) :: nx
-
-    nx = int(ckey_max(ilevel),8)
-    oct_key = key_off(ilevel) + int(ckey(1),8) + int(ckey(2),8)*nx + int(ckey(3),8)*nx*nx
-  end function oct_key
-
-  ! Resolve requests against owned octs. A zero reply means the owner lacks the oct.
+  ! Index of each requested oct among the owned octs, or zero if this rank does not own it.
   attributes(global) subroutine probe_kernel(grid, hash_key, hash_val, hash_size, ckey_max, key_off, &
        & ilevel, ngridmax, keys, n, idx)
     type(oct), device :: grid(*)
@@ -178,157 +69,118 @@ contains
     integer, device :: hash_val(*), ckey_max(*), keys(1:ndim,*), idx(*)
     integer, value :: hash_size, ilevel, ngridmax, n
     integer :: k, o, ckey(1:ndim)
-    integer(kind=8) :: key
+    integer(kind=8) :: key, nx
 
     k = (blockIdx%x-1)*blockDim%x + threadIdx%x
     if (k > n) return
     ckey = keys(:,k)
-    key = oct_key(ckey, ilevel, ckey_max, key_off)
+    nx = int(ckey_max(ilevel),8)
+    key = key_off(ilevel) + int(ckey(1),8) + int(ckey(2),8)*nx + int(ckey(3),8)*nx*nx
     o = hash_get(hash_key, hash_val, hash_size, key)
     idx(k) = 0
     if (o <= 0 .or. o > ngridmax) return
     if (grid(o)%lev == ilevel .and. all(grid(o)%ckey == ckey)) idx(k) = o
   end subroutine probe_kernel
-
-  attributes(global) subroutine make_kernel(grid, hash_key, hash_val, hash_size, ckey_max, key_off, &
-       & ilevel, first, keys, n)
-    type(oct), device :: grid(*)
-    integer(kind=8), device :: hash_key(*), key_off(*)
-    integer, device :: hash_val(*), ckey_max(*), keys(1:ndim,*)
-    integer, value :: hash_size, ilevel, first, n
-    integer :: k, o, ckey(1:ndim)
-    integer(kind=8) :: key
-
-    k = (blockIdx%x-1)*blockDim%x + threadIdx%x
-    if (k > n) return
-    o = first + k - 1
-    irecv(k) = o
-    ckey = keys(:,k)
-    grid(o)%lev = ilevel
-    grid(o)%ckey = ckey
-    grid(o)%hkey(1) = hilbert_key(ckey, ilevel-1)
-    grid(o)%refined = .false.
-    key = oct_key(ckey, ilevel, ckey_max, key_off)
-    call hash_set(hash_key, hash_val, hash_size, key, o)
-  end subroutine make_kernel
 #endif
 
-  ! Confirm every request before writing any halo slots or hash entries.
-  subroutine gpu_mpi_finish(sim, ilevel, grid, hash_key, hash_val, ckey_max, key_off)
-    type(ramses_t), intent(inout) :: sim
+  ! The remote octs of the level are the cache octs made by gpu_build_level_cache. Each rank sorts
+  ! them by owner and sends their keys to the owners, which look them up: this gives the octs to
+  ! receive from and to send to each rank at every gpu_halo_update.
+  subroutine gpu_halo_build(sim, ilevel, grid, hash_key, hash_val, ckey_max, key_off)
+    type(ramses_t), intent(in) :: sim
     integer, intent(in) :: ilevel
     type(oct), device :: grid(*)
     integer(kind=8), device :: hash_key(*), key_off(*)
     integer, device :: hash_val(*), ckey_max(*)
 #ifndef WITHOUTMPI
-    integer, allocatable :: hcand(:,:), keys(:,:), keys_in(:,:), idx(:), found(:)
-    integer, device, allocatable :: keys_d(:,:), idx_d(:)
-    integer :: nreq(ncpu), nin(ncpu), local(2), largest(2)
-    integer :: ncand, nkeys, first, k, r, i, info
+    integer(kind=8) :: cuts(0:sim%g%ncpu)
+    integer(kind=8), device, allocatable :: cuts_d(:)
+    integer, device, allocatable :: owner_d(:), keys_d(:,:), idx_d(:)
+    integer, allocatable :: owner(:), keys(:,:), keys_out(:,:), keys_in(:,:), list(:), idx(:)
+    integer :: nreq(sim%g%ncpu), nin(sim%g%ncpu), next(sim%g%ncpu)
+    integer :: first, n, nkeys, k, r, info
 
-    if (ncpu <= 1) return
-    ncand = ncand_d
-    allocate(hcand(1:ndim+1,1:ncand), keys(1:ndim,1:max(ncand,1)), found(1:max(ncand,1)))
-    if (ncand > 0) hcand = cand(:,1:ncand)
-    deallocate(cand, seen_key, bound_key)
+    ncpu = sim%g%ncpu
+    levelmin = ilevel
+    device_buffers = sim%r%mpi_device_buffers
+    if (.not. allocated(soff)) allocate(soff(0:ncpu), roff(0:ncpu), requests(2*ncpu))
+    first = sim%m%ngridmax + sim%m%head_cache(ilevel)
+    n = sim%m%ifree_cache - sim%m%head_cache(ilevel)
+
+    allocate(owner(1:max(n,1)), keys(1:ndim,1:max(n,1)), list(1:max(n,1)), keys_out(1:ndim,1:max(n,1)))
+    if (n > 0) then
+       cuts = sim%m%domain(ilevel)%b(1,0:ncpu)
+       allocate(cuts_d(0:ncpu), owner_d(1:n), keys_d(1:ndim,1:n))
+       cuts_d = cuts
+       call owner_kernel<<<(n+127)/128,128>>>(grid, first, n, cuts_d, ncpu, owner_d, keys_d)
+       call check_cuda(cudaGetLastError())
+       owner(1:n) = owner_d
+       keys(:,1:n) = keys_d
+       deallocate(cuts_d, owner_d, keys_d)
+    endif
+
+    ! Sort the remote octs by owner, keeping their order in the cache
     nreq = 0
-    do k = 1, ncand
-       r = hcand(ndim+1,k)
-       nreq(r) = nreq(r) + 1
+    do k = 1, n
+       nreq(owner(k)) = nreq(owner(k)) + 1
     end do
     roff(0) = 0
     do r = 1, ncpu
        roff(r) = roff(r-1) + nreq(r)
     end do
-    nreq = 0
-    do k = 1, ncand
-       r = hcand(ndim+1,k)
-       i = roff(r-1) + nreq(r) + 1
-       keys(:,i) = hcand(1:ndim,k)
-       nreq(r) = nreq(r) + 1
+    next = roff(0:ncpu-1)
+    do k = 1, n
+       r = owner(k)
+       next(r) = next(r) + 1
+       list(next(r)) = first + k - 1
+       keys_out(:,next(r)) = keys(:,k)
     end do
-    deallocate(hcand)
-    call MPI_ALLTOALL(nreq, 1, MPI_INTEGER, nin, 1, MPI_INTEGER, gpu_comm, info)
-    call check_mpi(info)
-    if (sum(int(nin,8)) > (huge(1)-127)/ndim) then
-       write(error_unit,'(a,i0,a)') 'gpu_mpi: rank ', myid, ' received too many halo requests'
-       call abort_all()
-    endif
+
+    call MPI_ALLTOALL(nreq, 1, MPI_INTEGER, nin, 1, MPI_INTEGER, MPI_COMM_WORLD, info)
     soff(0) = 0
     do r = 1, ncpu
        soff(r) = soff(r-1) + nin(r)
     end do
     nkeys = soff(ncpu)
     allocate(keys_in(1:ndim,1:max(nkeys,1)), idx(1:max(nkeys,1)))
-    call MPI_ALLTOALLV(keys, ndim*nreq, ndim*roff(0:ncpu-1), MPI_INTEGER, &
-         & keys_in, ndim*nin, ndim*soff(0:ncpu-1), MPI_INTEGER, gpu_comm, info)
-    call check_mpi(info)
+    call MPI_ALLTOALLV(keys_out, ndim*nreq, ndim*roff(0:ncpu-1), MPI_INTEGER, &
+         & keys_in, ndim*nin, ndim*soff(0:ncpu-1), MPI_INTEGER, MPI_COMM_WORLD, info)
 
+    ! The owner looks up the requested octs
     if (nkeys > 0) then
        allocate(keys_d(1:ndim,1:nkeys), idx_d(1:nkeys))
        keys_d = keys_in(:,1:nkeys)
        call probe_kernel<<<(nkeys+127)/128,128>>>(grid, hash_key, hash_val, sim%m%hash_size, &
             & ckey_max, key_off, ilevel, sim%m%ngridmax, keys_d, nkeys, idx_d)
        call check_cuda(cudaGetLastError())
-       call check_cuda(cudaStreamSynchronize(default_stream))
        idx(1:nkeys) = idx_d
        deallocate(keys_d, idx_d)
-    endif
-    deallocate(keys_in)
-    call MPI_ALLTOALLV(idx, nin, soff(0:ncpu-1), MPI_INTEGER, &
-         & found, nreq, roff(0:ncpu-1), MPI_INTEGER, gpu_comm, info)
-    call check_mpi(info)
-    if (nreq(myid) > 0) found(roff(myid-1)+1:roff(myid)) = 0
-    local = [count(found(1:ncand) == 0), myid]
-    call MPI_ALLREDUCE(local, largest, 1, MPI_2INTEGER, MPI_MAXLOC, gpu_comm, info)
-    call check_mpi(info)
-    if (largest(1) > 0) then
-       if (myid == largest(2)) then
-          do k = 1, ncand
-             if (found(k) == 0) exit
-          end do
-          do r = 1, ncpu
-             if (k <= roff(r)) exit
-          end do
-          write(error_unit,'(a,i0,a,i0,a,3(i0,1x),a,i0)') 'gpu_mpi: rank ', myid, &
-               & ' has ', local(1), ' unconfirmed base octs. First key ', keys(:,k), 'owner rank ', r
-       endif
-       call abort_collectively(largest(2))
+       do k = 1, nkeys
+          if (idx(k) == 0) then
+             do r = 1, ncpu
+                if (k <= soff(r)) exit
+             end do
+             write(*,'(a,i0,a,3(i0,1x),a,i0)') ' gpu_halo_build: rank ', sim%g%myid, ' does not own the oct ', &
+                  & keys_in(:,k), 'requested by rank ', r
+             call mdl_abort(sim%mdl)
+          endif
+       end do
     endif
 
-    local = [sim%m%ifree_cache-1+ncand, myid]
-    call MPI_ALLREDUCE(local, largest, 1, MPI_2INTEGER, MPI_MAXLOC, gpu_comm, info)
-    call check_mpi(info)
-    if (largest(1) > sim%m%ncachemax) then
-       if (myid == largest(2)) write(error_unit,'(a,i0,a,i0,a,i0)') &
-            & 'gpu_mpi: rank ', myid, ' has cache capacity ', sim%m%ncachemax, &
-            & ' octs. Minimum ncachemax = ', largest(1)
-       call abort_collectively(largest(2))
-    endif
-
-    first = sim%m%ngridmax + sim%m%ifree_cache
     if (allocated(isend)) deallocate(isend, irecv)
-    allocate(isend(1:max(nkeys,1)), irecv(1:max(ncand,1)))
+    allocate(isend(1:max(nkeys,1)), irecv(1:max(n,1)))
     if (nkeys > 0) isend(1:nkeys) = idx(1:nkeys)
-    if (ncand > 0) then
-       allocate(keys_d(1:ndim,1:ncand))
-       keys_d = keys(:,1:ncand)
-       call make_kernel<<<(ncand+127)/128,128>>>(grid, hash_key, hash_val, sim%m%hash_size, &
-            & ckey_max, key_off, ilevel, first, keys_d, ncand)
-       call check_cuda(cudaGetLastError())
-       call check_cuda(cudaStreamSynchronize(default_stream))
-    endif
+    if (n > 0) irecv(1:n) = list(1:n)
     if (allocated(peers)) deallocate(peers)
     allocate(peers(count(nreq+nin > 0)))
     peers(:) = pack([(r, r=1,ncpu)], nreq+nin > 0)
-    sim%m%ifree_cache = sim%m%ifree_cache + ncand
 #endif
-  end subroutine gpu_mpi_finish
+  end subroutine gpu_halo_build
 
 #ifndef WITHOUTMPI
-  ! Each buffer record holds both fields for one oct.
-  attributes(global) subroutine gather_kernel(a, nc, idx, n, buf, stride, off)
-    integer, value :: nc, n, stride, off
+  ! One buffer record per oct: the twotondim*nc values of the field.
+  attributes(global) subroutine gather_kernel(a, nc, idx, n, buf)
+    integer, value :: nc, n
     real(dp), device :: a(1:twotondim*nc,*), buf(*)
     integer, device :: idx(*)
     integer :: t, k, i
@@ -337,11 +189,11 @@ contains
     if (t >= n*twotondim*nc) return
     k = t/(twotondim*nc)
     i = t-k*twotondim*nc+1
-    buf(off+k*stride+i) = a(i,idx(k+1))
+    buf(k*twotondim*nc+i) = a(i,idx(k+1))
   end subroutine gather_kernel
 
-  attributes(global) subroutine scatter_kernel(a, nc, idx, n, buf, stride, off)
-    integer, value :: nc, n, stride, off
+  attributes(global) subroutine scatter_kernel(a, nc, idx, n, buf)
+    integer, value :: nc, n
     real(dp), device :: a(1:twotondim*nc,*), buf(*)
     integer, device :: idx(*)
     integer :: t, k, i
@@ -350,20 +202,14 @@ contains
     if (t >= n*twotondim*nc) return
     k = t/(twotondim*nc)
     i = t-k*twotondim*nc+1
-    a(i,idx(k+1)) = buf(off+k*stride+i)
+    a(i,idx(k+1)) = buf(k*twotondim*nc+i)
   end subroutine scatter_kernel
 
-  subroutine grow_buffers(nrec, stride)
-    integer, intent(in) :: nrec, stride
-    integer(kind=8) :: n
+  subroutine grow_buffers(n)
+    integer, intent(in) :: n
 
-    n = int(nrec,8)*stride
-    if (n > huge(1)-255) then
-       write(error_unit,'(a,i0,a,i0,a)') 'gpu_mpi: rank ', myid, ' cannot exchange ', n, ' values in one buffer'
-       call abort_all()
-    endif
     if (allocated(sbuf)) then
-       if (size(sbuf,kind=8) < n) deallocate(sbuf, rbuf)
+       if (size(sbuf) < n) deallocate(sbuf, rbuf)
     endif
     if (.not. allocated(sbuf)) allocate(sbuf(1:n), rbuf(1:n))
     if (device_buffers) return
@@ -375,76 +221,31 @@ contains
 
   subroutine check_cuda(info)
     integer, intent(in) :: info
+    integer :: ierr
 
     if (info == cudaSuccess) return
-    write(error_unit,'(a,i0,2a)') 'gpu_mpi: CUDA error on rank ', myid, ': ', cudaGetErrorString(info)
-    call abort_all()
+    write(*,*) 'gpu_mpi: CUDA error: ', trim(cudaGetErrorString(info))
+    call MPI_ABORT(MPI_COMM_WORLD, 1, ierr)
   end subroutine check_cuda
-
-  subroutine check_mpi(info)
-    integer, intent(in) :: info
-    character(len=MPI_MAX_ERROR_STRING) :: message
-    integer :: n, ierr
-
-    if (info == MPI_SUCCESS) return
-    call MPI_ERROR_STRING(info, message, n, ierr)
-    write(error_unit,'(a,i0,2a)') 'gpu_mpi: MPI error on rank ', myid, ': ', trim(message)
-    call abort_all()
-  end subroutine check_mpi
-
-  subroutine abort_collectively(reporter)
-    integer, intent(in) :: reporter
-    integer :: info
-
-    if (myid == reporter) flush(error_unit)
-    call MPI_BARRIER(gpu_comm, info)
-    call check_mpi(info)
-    call abort_all()
-  end subroutine abort_collectively
-
-  subroutine abort_all()
-    integer :: info
-
-    flush(error_unit)
-    call MPI_ABORT(MPI_COMM_WORLD, 1, info)
-    error stop
-  end subroutine abort_all
 #endif
 
-  ! Exchange the owner values for one or two fields, from device buffers or through pinned host buffers.
-  subroutine gpu_halo_update(ilevel, a, nc1, b, nc2)
-    integer, intent(in) :: ilevel, nc1
+  ! Copy the owners' values of a field into the remote octs of the level, from device buffers or
+  ! through pinned host buffers.
+  subroutine gpu_halo_update(ilevel, a, nc)
+    integer, intent(in) :: ilevel, nc
     real(dp), device :: a(*)
-    real(dp), device, optional :: b(*)
-    integer, intent(in), optional :: nc2
 #ifndef WITHOUTMPI
-    integer(kind=8) :: wide_stride
-    integer :: stride, ns, nr, n2, off, n, nmsg, k, r, info
+    integer :: stride, ns, nr, off, n, nmsg, k, r, info
 
     if (ilevel /= levelmin .or. .not. allocated(peers)) return
     if (size(peers) == 0) return
-    if (present(b) .neqv. present(nc2)) then
-       write(error_unit,'(a)') 'gpu_mpi: the second halo field needs its component count'
-       call abort_all()
-    endif
-    n2 = 0
-    if (present(nc2)) n2 = nc2
-    wide_stride = int(twotondim,8)*(int(nc1,8)+n2)
-    if (nc1 <= 0 .or. (present(b) .and. n2 <= 0) .or. wide_stride > huge(1)-255) then
-       write(error_unit,'(a,i0)') 'gpu_mpi: invalid halo record length ', wide_stride
-       call abort_all()
-    endif
-    stride = int(wide_stride)
+    stride = twotondim*nc
     ns = soff(ncpu)
     nr = roff(ncpu)
-    call grow_buffers(max(ns,nr), stride)
+    call grow_buffers(max(ns,nr)*stride)
     if (ns > 0) then
-       call gather_kernel<<<(ns*twotondim*nc1+255)/256,256>>>(a, nc1, isend, ns, sbuf, stride, 0)
+       call gather_kernel<<<(ns*stride+255)/256,256>>>(a, nc, isend, ns, sbuf)
        call check_cuda(cudaGetLastError())
-       if (n2 > 0) then
-          call gather_kernel<<<(ns*twotondim*n2+255)/256,256>>>(b, n2, isend, ns, sbuf, stride, twotondim*nc1)
-          call check_cuda(cudaGetLastError())
-       endif
     endif
     call check_cuda(cudaStreamSynchronize(default_stream))
     if (.not. device_buffers .and. ns > 0) call check_cuda(cudaMemcpy(sbuf_h, sbuf, ns*stride))
@@ -457,11 +258,10 @@ contains
        off = roff(r-1)*stride
        nmsg = nmsg + 1
        if (device_buffers) then
-          call MPI_IRECV(rbuf(off+1), n, mpi_real_dp, r-1, halo_tag, gpu_comm, requests(nmsg), info)
+          call MPI_IRECV(rbuf(off+1), n, mpi_real_dp, r-1, halo_tag, MPI_COMM_WORLD, requests(nmsg), info)
        else
-          call MPI_IRECV(rbuf_h(off+1), n, mpi_real_dp, r-1, halo_tag, gpu_comm, requests(nmsg), info)
+          call MPI_IRECV(rbuf_h(off+1), n, mpi_real_dp, r-1, halo_tag, MPI_COMM_WORLD, requests(nmsg), info)
        endif
-       call check_mpi(info)
     end do
     do k = 1, size(peers)
        r = peers(k)
@@ -470,23 +270,17 @@ contains
        off = soff(r-1)*stride
        nmsg = nmsg + 1
        if (device_buffers) then
-          call MPI_ISEND(sbuf(off+1), n, mpi_real_dp, r-1, halo_tag, gpu_comm, requests(nmsg), info)
+          call MPI_ISEND(sbuf(off+1), n, mpi_real_dp, r-1, halo_tag, MPI_COMM_WORLD, requests(nmsg), info)
        else
-          call MPI_ISEND(sbuf_h(off+1), n, mpi_real_dp, r-1, halo_tag, gpu_comm, requests(nmsg), info)
+          call MPI_ISEND(sbuf_h(off+1), n, mpi_real_dp, r-1, halo_tag, MPI_COMM_WORLD, requests(nmsg), info)
        endif
-       call check_mpi(info)
     end do
     call MPI_WAITALL(nmsg, requests, MPI_STATUSES_IGNORE, info)
-    call check_mpi(info)
 
     if (nr > 0) then
        if (.not. device_buffers) call check_cuda(cudaMemcpy(rbuf, rbuf_h, nr*stride))
-       call scatter_kernel<<<(nr*twotondim*nc1+255)/256,256>>>(a, nc1, irecv, nr, rbuf, stride, 0)
+       call scatter_kernel<<<(nr*stride+255)/256,256>>>(a, nc, irecv, nr, rbuf)
        call check_cuda(cudaGetLastError())
-       if (n2 > 0) then
-          call scatter_kernel<<<(nr*twotondim*n2+255)/256,256>>>(b, n2, irecv, nr, rbuf, stride, twotondim*nc1)
-          call check_cuda(cudaGetLastError())
-       endif
        call check_cuda(cudaStreamSynchronize(default_stream))
     endif
 #endif

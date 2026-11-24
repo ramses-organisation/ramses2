@@ -1292,10 +1292,9 @@ contains
 
     if (sim%g%ncpu > 1 .and. ilevel == sim%r%levelmin) then
 #ifdef HYDRO
-#ifdef MHD
-       call gpu_halo_update(ilevel, uold, nvar, bold, 6)
-#else
        call gpu_halo_update(ilevel, uold, nvar)
+#ifdef MHD
+       call gpu_halo_update(ilevel, bold, 6)
 #endif
 #endif
        return
@@ -3070,17 +3069,19 @@ contains
   subroutine gpu_build_level_cache(sim, ilevel)
     use nvtx
     use refine_device
-    use gpu_mpi, only: gpu_mpi_begin, gpu_mpi_retry, gpu_mpi_finish
+    use gpu_mpi, only: gpu_halo_build
+    use mdl_module, only: mdl_abort
     use ramses_commons, only: ramses_t
     use cub_inclusive_scan_mod
     use iso_c_binding, only: c_loc
     type(ramses_t), intent(inout) :: sim
     integer, intent(in) :: ilevel
-    integer :: ind, head_idx, num_subgrids, num_blocks, num_threads, head, tail
+    integer :: ind, head_idx, num_subgrids, num_blocks, num_threads, head
     integer :: interpol_var, interpol_type, cache_overflow
     integer(kind=4), device :: ifree_cache_d, cache_overflow_d, new_noct_d
+    integer(kind=1) :: source
     real(dp) :: smallr_d
-    logical :: request_missing
+    logical :: remote
     character(len=64) :: descr
 
     head = sim%m%ifree_cache
@@ -3090,27 +3091,12 @@ contains
     num_threads = 128
     num_blocks = (num_subgrids + num_threads - 1) / num_threads
 
-    if (ilevel == sim%r%levelmin) then
-       request_missing = sim%g%ncpu > 1
-       if (request_missing) call gpu_mpi_begin(sim)
-       do
-          if (num_subgrids > 0) then
-             do ind = 1, subgridsize
-                call update_nbor_array<<<num_blocks, num_threads>>>(nbor, grid, hash_key, hash_val, &
-                     & sim%m%hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
-                     & head_idx, num_subgrids, ind, request_missing)
-                call GPU_Error_Check(__FILE__, __LINE__)
-             end do
-          endif
-          if (.not. request_missing) exit
-          if (gpu_mpi_retry()) cycle
-          call gpu_mpi_finish(sim, ilevel, grid, hash_key, hash_val, ckey_max, key_off)
-          tail = sim%m%ifree_cache - 1
-          if (tail >= head) cache_source(sim%m%ngridmax+head:sim%m%ngridmax+tail) = cache_remote
-          ! Resolve the missing entries now that the remote octs are in the hash.
-          request_missing = .false.
-       end do
-    else if (num_subgrids > 0) then
+    ! A neighbour missing at levelmin is an oct of another rank; above, it is interpolated from its parent.
+    remote = ilevel == sim%r%levelmin .and. sim%g%ncpu > 1
+    source = cache_interpolated
+    if (remote) source = cache_remote
+
+    if (num_subgrids > 0) then
        interpol_var = sim%r%interpol_var
        interpol_type = sim%r%interpol_type
        smallr_d = sim%r%smallr
@@ -3126,11 +3112,11 @@ contains
           ! Get nbor index from hash table
           call update_nbor_array<<<num_blocks, num_threads>>>(nbor, grid, hash_key, hash_val, &
                & sim%m%hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
-               & head_idx, num_subgrids, ind, .false., prefix_sum)
+               & head_idx, num_subgrids, ind, prefix_sum)
           call GPU_Error_Check(__FILE__, __LINE__)
 
-          ! No ghost octs when ncachemax=0: missing neighbors keep nbor = 0
-          if (sim%r%ncachemax > 0) then
+          ! No interpolated ghost octs when ncachemax=0: missing neighbors keep nbor = 0
+          if (sim%r%ncachemax > 0 .or. remote) then
 
              ! Compute prefix sum
 #if defined(CUB_SCAN_REFINE)
@@ -3147,7 +3133,7 @@ contains
                   & uold, bold, f, phi, phi_old, swap_local, prefix_sum, father, nbor, hash_key, &
                   & hash_val, sim%m%hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, &
                   & periodic, sim%m%ngridmax, sim%m%ncachemax, ifree_cache_d, cache_overflow_d, ind, &
-                  & head_idx, num_subgrids, interpol_var, interpol_type, smallr_d)
+                  & head_idx, num_subgrids, interpol_var, interpol_type, smallr_d, source)
              call GPU_Error_Check(__FILE__, __LINE__)
 #else
 #if defined(CUB_SCAN_REFINE)
@@ -3162,7 +3148,7 @@ contains
                   & uold, bold, f, phi, phi_old, swap_local, father, nbor, &
                   & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
                   & sim%m%ngridmax, sim%m%ncachemax, ifree_cache_d, cache_overflow_d, new_noct_d, ind, &
-                  & interpol_var, interpol_type, smallr_d)
+                  & interpol_var, interpol_type, smallr_d, source)
              call GPU_Error_Check(__FILE__, __LINE__)
 
              call insert_hash_cache<<<num_blocks, num_threads>>>(grid, hash_key, hash_val, sim%m%hash_size, &
@@ -3183,9 +3169,12 @@ contains
        if (cache_overflow /= 0) then
           write(*,*)'No more cache memory, increase ncachemax'
           write(*,*)'Cache octs:', sim%m%ifree_cache-1, ' ncachemax:', sim%m%ncachemax
-          stop
+          call mdl_abort(sim%mdl)
        endif
     endif
+
+    ! Every rank takes part, also one without octs
+    if (remote) call gpu_halo_build(sim, ilevel, grid, hash_key, hash_val, ckey_max, key_off)
 
     sim%m%tail_cache(ilevel) = sim%m%ifree_cache - 1
     sim%m%noct_cache(ilevel) = sim%m%ifree_cache - head
