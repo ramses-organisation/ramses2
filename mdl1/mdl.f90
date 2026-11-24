@@ -320,37 +320,11 @@ contains
     integer::info
 #endif
 #ifdef _CUDA
-    integer::status, local_rank
+    integer::node_rank
     type(cudaDeviceProp) :: prop
 #ifndef WITHOUTMPI
-    integer::node_rank, node_size, node_comm
-    character(len=16)::value
-
-    ! Prefer the MPI launcher's local rank when it runs inside a Slurm task.
-    local_rank=-1
-    call get_environment_variable('OMPI_COMM_WORLD_LOCAL_RANK',value)
-    if(value==' ')call get_environment_variable('MPI_LOCALRANKID',value)
-    if(value==' ')call get_environment_variable('MV2_COMM_WORLD_LOCAL_RANK',value)
-    if(value==' ')call get_environment_variable('PALS_LOCAL_RANKID',value)
-    if(value==' ')call get_environment_variable('SLURM_LOCALID',value)
-    if(value/=' ')then
-       read(value,*,iostat=info)local_rank
-       if(info/=0)local_rank=-1
-    endif
-#else
-    local_rank=0
+    integer::node_comm
 #endif
-    ! CUDA-aware MPI can select a transport during MPI_INIT.
-    status=cudaGetDeviceCount(mdl%ngpu)
-    mdl%mydev=-1
-    if(status==cudaSuccess)then
-       if(mdl%ngpu==0)error stop 'No CUDA device visible'
-       if(mdl%ngpu==1)local_rank=0
-       if(local_rank>=0)then
-          mdl%mydev=mod(local_rank,mdl%ngpu)
-          status=cudaSetDevice(mdl%mydev)
-       endif
-    endif
 #endif
 #ifndef WITHOUTMPI
     call MPI_INIT(info)
@@ -366,28 +340,24 @@ contains
     mdl%myid=1
 #endif
 #ifdef _CUDA
-    call check_cuda(status,'initial CUDA device selection')
-#ifndef WITHOUTMPI
+    ! Each rank uses the GPU given by its rank among the ranks of its node
+    call check_cuda(cudaGetDeviceCount(mdl%ngpu),'cudaGetDeviceCount')
     node_rank=0
-    if(mdl%ncpu>1)then
-       call MPI_COMM_SPLIT_TYPE(MPI_COMM_WORLD,MPI_COMM_TYPE_SHARED,0,MPI_INFO_NULL,node_comm,info)
-       call MPI_COMM_RANK(node_comm,node_rank,info)
-       call MPI_COMM_SIZE(node_comm,node_size,info)
-       call MPI_COMM_FREE(node_comm,info)
-       if(node_rank==0.and.node_size>mdl%ngpu)write(*,'(" Rank ",I0,": ",I0," ranks share ",I0," GPUs on this node")') &
-            & mdl%myid,node_size,mdl%ngpu
-    endif
-    if(mdl%mydev/=mod(node_rank,mdl%ngpu))then
-       mdl%mydev=mod(node_rank,mdl%ngpu)
-       call check_cuda(cudaSetDevice(mdl%mydev),'cudaSetDevice')
-    endif
+#ifndef WITHOUTMPI
+    call MPI_COMM_SPLIT_TYPE(MPI_COMM_WORLD,MPI_COMM_TYPE_SHARED,0,MPI_INFO_NULL,node_comm,info)
+    call MPI_COMM_RANK(node_comm,node_rank,info)
+    call MPI_COMM_FREE(node_comm,info)
 #endif
-    if(mdl%myid==1)write(*,'(" Launching CUDA with ndevice/task = ",I0)')mdl%ngpu
+    mdl%mydev=mod(node_rank,mdl%ngpu)
+    call check_cuda(cudaSetDevice(mdl%mydev),'cudaSetDevice')
     call check_cuda(cudaGetDeviceProperties(prop,mdl%mydev),'cudaGetDeviceProperties')
     write(*,'(" Rank ",I0," uses device ",I0,": ",A)')mdl%myid,mdl%mydev,trim(prop%name)
-    write(*,'(" Compute Capability: ",i0,".",i0)')prop%major,prop%minor
-    write(*,'(" Shared Memory per Block: ",i0)')prop%sharedMemPerBlock
-    write(*,'(" Maximum Shared Memory per Block: ",i0)')prop%sharedMemPerBlockOptIn
+    if(mdl%myid==1)then
+       write(*,'(" Launching CUDA with ndevice/task = ",I0)')mdl%ngpu
+       write(*,'(" Compute Capability: ",i0,".",i0)')prop%major,prop%minor
+       write(*,'(" Shared Memory per Block: ",i0)')prop%sharedMemPerBlock
+       write(*,'(" Maximum Shared Memory per Block: ",i0)')prop%sharedMemPerBlockOptIn
+    endif
 #endif
 #ifdef _METAL
     call mtl_init()
