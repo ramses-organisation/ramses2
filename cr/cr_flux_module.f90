@@ -487,7 +487,7 @@ SUBROUTINE cr_unsplit(r,kcr,cr_c,dx,dt)
      a3 = max(meandiffv, lmax(i,j,k,3))
      a3 = min(a3, cr_c*sqrt(r%gamma_rad(iEcr-r%inener+igrp)-1.0))
      lminus = min(a2,0.)
-     lplus  = max(a2,0.)
+     lplus  = max(a3,0.)
 
      kcr%crflux( i, j, k, 1+(iGrp-1)*(ndim+1):iGrp*(ndim+1), 3)=&
           cmp_cr_face( f2, f3, u2, u3, lminus, lplus)*dtdx
