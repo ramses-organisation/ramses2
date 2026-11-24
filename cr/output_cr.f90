@@ -228,7 +228,7 @@ subroutine output_crinfo(r, g, filename)
 
   ! Write physical parameters
   call units(r,g,scale_l,scale_t,scale_d,scale_v,scale_nH,scale_T2)
-  write(ilun,'("cr_c_frac   = ", 100(E15.7))') g%cr_c(r%levelmin:r%nlevelmax)*scale_t/c_cgs
+  write(ilun,'("cr_c_frac   = ", 100(E15.7))') g%cr_c(r%levelmin:r%nlevelmax)*scale_v/c_cgs
   write(ilun,*)
 
   ! Write photon group properties
