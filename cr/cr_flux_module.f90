@@ -116,8 +116,8 @@ SUBROUTINE cmp_cr_wavespeeds(r, kcr, iGrp, cr_c, dx, dt)
   real(kind=8),intent(in)::cr_c, dt
   real(kind=8)::dx, Ecr, va, gmone_div_twodx
   integer::i, j, k, idim, nedge, iEgrp
-  real(kind=8),dimension(1:3)::bcell, gradpcr, Dcr_vec
-  real(kind=8)::norm,bdotgradp,cosp,sinp,cost,sint,bxby,Dcr_dir
+  real(kind=8),dimension(1:3)::bcell, gradpcr, Dcr_vec, Dcr_ax
+  real(kind=8)::norm,bdotgradp
   !------------------------------------------------------------------------
   associate(if2=>kcr%if2, jf2=>kcr%jf2, kf2=>kcr%kf2)
   gmone_div_twodx=(r%gamma_rad(r%iEcr-r%inener+igrp)-1.0)/(2d0*dx)
@@ -140,29 +140,13 @@ SUBROUTINE cmp_cr_wavespeeds(r, kcr, iGrp, cr_c, dx, dt)
 
      Ecr  = kcr%uloc(i, j, k, iEgrp)
 
-     ! Magnetic field, needed to rotate Dcr and for bdotgradpcr
+     ! Magnetic field, needed for Dcr along each axis and for bdotgradpcr
      norm=0.
      do idim=1,3
         bcell(idim) = 0.5*(kcr%bloc(i,j,k,idim)+kcr%bloc(i,j,k,3+idim))
         norm = norm + bcell(idim)**2
      end do
      norm = max(sqrt(norm), 1d-30)
-
-     bxby = sqrt(bcell(1)**2+bcell(2)**2)
-     if(norm.gt.1e-10) then
-        sint = bxby/norm
-        cost = bcell(3)/norm
-     else
-        sint = 1d0
-        cost = 0d0
-     endif
-     if(bxby.gt.1e-10) then
-        sinp = bcell(2)/bxby
-        cosp = bcell(1)/bxby
-     else
-        sinp = 0d0
-        cosp = 1d0
-     endif
      bcell = bcell/norm
 
      va=0.
@@ -192,26 +176,24 @@ SUBROUTINE cmp_cr_wavespeeds(r, kcr, iGrp, cr_c, dx, dt)
           Dcr_vec(1) = Dcr_vec(1) + &
           min(r%cr_dmax_code, 3./max(abs(bdotgradp),1d-50) * va * r%gamma_rad(r%iEcr-r%inener+iGrp) * max(Ecr,smallecr))
 
-     ! Rotate Dcr_vec so it is parallel with B, hence
-     ! describing Dcr in the simulation coordinate system
-     ! (instead of the B coordinate system)
-     call invrotatevec(sint, cost, sinp, cosp, Dcr_vec(1), Dcr_vec(2), Dcr_vec(3))
+     ! Dcr along each axis: diagonal of the diffusion tensor, with a vanishing field along x
+     if(norm.le.1e-10) bcell = (/ 1d0, 0d0, 0d0 /)
+     do idim=1,3
+        Dcr_ax(idim) = Dcr_vec(1)*bcell(idim)**2 + Dcr_vec(2)*(1d0-bcell(idim)**2)
+     end do
 
      ! Calculate wavespeeds
-     Dcr_dir = abs(Dcr_vec(1)) ! x component of rotated Dcr
      kcr%lmax(i,j,k,1) = &
-          cmp_cr_lmax(r, dx, Dcr_dir, r%gamma_rad(r%iEcr-r%inener+igrp), cr_c, dt)
+          cmp_cr_lmax(r, dx, Dcr_ax(1), r%gamma_rad(r%iEcr-r%inener+igrp), cr_c, dt)
 
 #if NDIM>1
-     Dcr_dir = abs(Dcr_vec(2)) ! y component of rotated Dcr
      kcr%lmax(i,j,k,2) = &
-          cmp_cr_lmax(r, dx, Dcr_dir, r%gamma_rad(r%iEcr-r%inener+igrp), cr_c, dt)
+          cmp_cr_lmax(r, dx, Dcr_ax(2), r%gamma_rad(r%iEcr-r%inener+igrp), cr_c, dt)
 #endif
 
 #if NDIM>2
-     Dcr_dir = abs(Dcr_vec(3)) ! z component of rotated Dcr
      kcr%lmax(i,j,k,3) = &
-          cmp_cr_lmax(r, dx, Dcr_dir, r%gamma_rad(r%iEcr-r%inener+igrp), cr_c, dt)
+          cmp_cr_lmax(r, dx, Dcr_ax(3), r%gamma_rad(r%iEcr-r%inener+igrp), cr_c, dt)
 #endif
 
   end do
