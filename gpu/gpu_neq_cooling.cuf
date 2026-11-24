@@ -32,26 +32,35 @@ module neq_cooling_device
      real(kind=8)::facT, yy, yy2, yy3
   end type rate_index_t
 
-  !> The device data live in gpu_neq_cooling and are passed to the kernels as arguments:
-  !> without module device data, this file can be compiled with -gpu=nordc, which lets
-  !> the compiler inline the device routines
+  !> Device copies of the rate tables and of the run parameters
+  type(neq_cooling_t), device, allocatable :: neq_tables_d
+  type(run_t), device, allocatable :: neq_run_d
 
-  !> Host-side flag: are the device copies of the tables and run parameters up to date?
+  !> Host-side flag: have the device copies been made yet?
   logical, save :: neq_tables_uploaded = .false.
 
   !> Sub-step caps of the passes; the cells still unfinished at the cap of a pass
   !> are solved again from scratch in the next pass, the last pass has no cap
   integer, parameter :: neq_npass = 3
-  !> Host arrays, not parameters: nvfortran puts module parameter arrays in the device image,
-  !> which does not work in this file compiled with -gpu=nordc
-  integer, save, dimension(1:neq_npass) :: neq_maxloop = (/ 8, 64, huge(0) /)
+  integer, parameter, dimension(1:neq_npass) :: neq_maxloop = (/ 8, 64, huge(0) /)
+
+  !> Lists of the unfinished cells, as (oct - head)*twotondim + cell - 1, used in turn:
+  !> pass 1 fills list 1, pass 2 reads list 1 and fills list 2, pass 3 reads list 2
+  integer(kind=4), device, allocatable :: neq_list1_d(:), neq_list2_d(:)
+  integer(kind=4), device :: neq_nlist_d
 
   !> Tests that limit a sub-step (diagnostic); a cell done in one sub-step counts as limiter 0
   integer, parameter :: neq_nlim = 6
   integer, parameter :: ilim_Np = 1, ilim_Fp = 2, ilim_T = 3, ilim_xH = 4, ilim_xHe = 5, ilim_ne = 6
-  character(len=6), save, dimension(0:neq_nlim) :: neq_lim_name = &
+  character(len=6), parameter, dimension(0:neq_nlim) :: neq_lim_name = &
        & (/ '1-step', 'Np    ', 'Fp    ', 'T     ', 'xH    ', 'xHe   ', 'ne    ' /)
 
+  !> Sub-step statistics per pass (diagnostic): finished cells, sub-steps, sum of warp max sub-steps,
+  !> rejected sub-steps
+  integer(kind=8), device :: neq_stat_d(1:4,1:neq_npass)
+  integer(kind=4), device :: neq_stat_max_d
+  !> Sub-steps of the finished cells by the limiter of their shortest sub-step (diagnostic)
+  integer(kind=8), device :: neq_lim_d(0:neq_nlim)
   !> Host sums over one coarse step, printed at the first call of the next one
   integer(kind=8), save :: neq_stat(1:4,1:neq_npass) = 0, neq_stat_in(1:neq_npass) = 0, neq_stat_ncall = 0
   integer(kind=4), save :: neq_stat_max = 0, neq_stat_nstep = -1
@@ -65,14 +74,18 @@ contains
   ! =========================================================================
   subroutine gpu_upload_neq_tables(sim)
   ! =========================================================================
-  ! Mark the rate tables and the run parameters for a new copy to the
-  ! device, done at the next call of gpu_neq_cooling.
+  ! Copy the rate tables and the run parameters to the device, allocating
+  ! the device copies at the first call.
   ! =========================================================================
     use ramses_commons, only: ramses_t
     implicit none
     type(ramses_t), intent(in) :: sim
 
-    neq_tables_uploaded = .false.
+    if (.not. allocated(neq_tables_d)) allocate(neq_tables_d)
+    if (.not. allocated(neq_run_d)) allocate(neq_run_d)
+    neq_tables_d = sim%tables
+    neq_run_d = sim%r
+    neq_tables_uploaded = .true.
 
   end subroutine gpu_upload_neq_tables
 
@@ -1308,14 +1321,10 @@ contains
   end subroutine neq_cool_cell
 
   !> Sub-step statistics of a warp: sums and max, one set of atomics per warp
-  attributes(device) subroutine neq_warp_stats(lane, active, loopcnt, nrej, ilim, ipass, &
-       & neq_stat_d, neq_stat_max_d, neq_lim_d)
+  attributes(device) subroutine neq_warp_stats(lane, active, loopcnt, nrej, ilim, ipass)
     implicit none
     integer :: lane, loopcnt, nrej, ilim, ipass
     logical :: active
-    integer(kind=8) :: neq_stat_d(1:4,1:neq_npass)
-    integer(kind=4) :: neq_stat_max_d
-    integer(kind=8) :: neq_lim_d(0:neq_nlim)
     integer :: ncell, nsub, nmax, nret, offset, info, icat, k, nk
     integer(kind=8) :: info8
 
@@ -1362,12 +1371,8 @@ contains
        & rtuold, rtunew, do_smooth, ilevel, scale_d, scale_v, scale_Np, scale_Fp, &
        & emissivity, do_emis, scale_t, &
 #endif
-       & runaway, neq_run_d, neq_tables_d, neq_nlist_d, neq_stat_d, neq_stat_max_d, neq_lim_d)
+       & runaway)
     implicit none
-    type(run_t), device :: neq_run_d
-    type(neq_cooling_t), device :: neq_tables_d
-    integer(kind=4), device :: neq_nlist_d, neq_stat_max_d
-    integer(kind=8), device :: neq_stat_d(1:4,1:neq_npass), neq_lim_d(0:neq_nlim)
     type(oct), device :: grid(*)
     real(kind=dp), device :: uold(1:twotondim,1:nvar,*)
     real(kind=dp), device :: bold(1:twotondim,1:6,*)
@@ -1429,8 +1434,7 @@ contains
     if (loopcnt > 100000) runaway = 1
 
     lane = iand((threadIdx%y - 1) * blockDim%x + threadIdx%x - 1, 31)
-    call neq_warp_stats(lane, active .and. done, loopcnt, nrej, ilim, 1, &
-         & neq_stat_d, neq_stat_max_d, neq_lim_d)
+    call neq_warp_stats(lane, active .and. done, loopcnt, nrej, ilim, 1)
 
   end subroutine neq_cool_kernel
 
@@ -1443,12 +1447,8 @@ contains
        & rtuold, rtunew, do_smooth, ilevel, scale_d, scale_v, scale_Np, scale_Fp, &
        & emissivity, do_emis, scale_t, &
 #endif
-       & runaway, neq_run_d, neq_tables_d, neq_nlist_d, neq_stat_d, neq_stat_max_d, neq_lim_d)
+       & runaway)
     implicit none
-    type(run_t), device :: neq_run_d
-    type(neq_cooling_t), device :: neq_tables_d
-    integer(kind=4), device :: neq_nlist_d, neq_stat_max_d
-    integer(kind=8), device :: neq_stat_d(1:4,1:neq_npass), neq_lim_d(0:neq_nlim)
     real(kind=dp), device :: uold(1:twotondim,1:nvar,*)
     real(kind=dp), device :: bold(1:twotondim,1:6,*)
     integer(kind=4), intent(in), value :: head_idx, nlist, maxloop, ipass
@@ -1501,8 +1501,7 @@ contains
     if (loopcnt > 100000) runaway = 1
 
     lane = iand(threadIdx%x - 1, 31)
-    call neq_warp_stats(lane, active .and. done, loopcnt, nrej, ilim, ipass, &
-         & neq_stat_d, neq_stat_max_d, neq_lim_d)
+    call neq_warp_stats(lane, active .and. done, loopcnt, nrej, ilim, ipass)
 
   end subroutine neq_cool_list_kernel
 
@@ -1528,18 +1527,6 @@ contains
     integer(kind=4) :: threadsX_per_block, threadsY_per_block, num_blocks
     integer(kind=4), device :: runaway_d
     integer(kind=4) :: runaway
-    !> Device copies of the rate tables and of the run parameters
-    type(neq_cooling_t), device, allocatable, save :: neq_tables_d
-    type(run_t), device, allocatable, save :: neq_run_d
-    !> Lists of the unfinished cells, as (oct - head)*twotondim + cell - 1, used in turn:
-    !> pass 1 fills list 1, pass 2 reads list 1 and fills list 2, pass 3 reads list 2
-    integer(kind=4), device, allocatable, save :: neq_list1_d(:), neq_list2_d(:)
-    integer(kind=4), device :: neq_nlist_d
-    !> Sub-step statistics per pass (diagnostic): finished cells, sub-steps, sum of warp max
-    !> sub-steps, rejected sub-steps; sub-steps of the finished cells by limiter
-    integer(kind=8), device :: neq_stat_d(1:4,1:neq_npass)
-    integer(kind=4), device :: neq_stat_max_d
-    integer(kind=8), device :: neq_lim_d(0:neq_nlim)
     integer(kind=8) :: stat(1:4,1:neq_npass)
     integer(kind=8) :: lim(0:neq_nlim)
     integer(kind=4) :: stat_max
@@ -1576,14 +1563,8 @@ contains
        neq_stat_nstep = sim%g%nstep_coarse
     endif
 
-    ! Copy the rate tables and the run parameters to the device when needed
-    if (.not. neq_tables_uploaded) then
-       if (.not. allocated(neq_tables_d)) allocate(neq_tables_d)
-       if (.not. allocated(neq_run_d)) allocate(neq_run_d)
-       neq_tables_d = sim%tables
-       neq_run_d = sim%r
-       neq_tables_uploaded = .true.
-    endif
+    ! Ensure the rate tables live on the device
+    if (.not. neq_tables_uploaded) call gpu_upload_neq_tables(sim)
 #ifdef DO_RT
     ! With emitting stars, copy the run parameters at every call
     if (sim%r%rt .and. sim%r%star .and. sim%r%rt_star) neq_run_d = sim%r
@@ -1633,7 +1614,7 @@ contains
             & rtuold, rtunew, do_smooth, ilevel, scale_d, scale_v, scale_Np, scale_Fp, &
             & emissivity, do_emis, scale_t,                                            &
 #endif
-            & runaway_d, neq_run_d, neq_tables_d, neq_nlist_d, neq_stat_d, neq_stat_max_d, neq_lim_d)
+            & runaway_d)
        call GPU_Error_Check(__FILE__, __LINE__)
 
        ! Next passes on the cells left unfinished by the previous one
@@ -1656,8 +1637,7 @@ contains
                   & rtuold, rtunew, do_smooth, ilevel, scale_d, scale_v, scale_Np, scale_Fp, &
                   & emissivity, do_emis, scale_t,                                     &
 #endif
-                  & runaway_d, neq_run_d, neq_tables_d, neq_nlist_d, neq_stat_d,      &
-                  & neq_stat_max_d, neq_lim_d)
+                  & runaway_d)
           else
              call neq_cool_list_kernel<<<(nlist + 127) / 128, 128>>>(                &
                   & uold, bold, head_idx, nlist, neq_maxloop(ipass), ipass,           &
@@ -1667,8 +1647,7 @@ contains
                   & rtuold, rtunew, do_smooth, ilevel, scale_d, scale_v, scale_Np, scale_Fp, &
                   & emissivity, do_emis, scale_t,                                     &
 #endif
-                  & runaway_d, neq_run_d, neq_tables_d, neq_nlist_d, neq_stat_d,      &
-                  & neq_stat_max_d, neq_lim_d)
+                  & runaway_d)
           endif
           call GPU_Error_Check(__FILE__, __LINE__)
        end do
