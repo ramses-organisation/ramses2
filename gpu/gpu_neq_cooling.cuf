@@ -1695,12 +1695,12 @@ contains
     ndone = sum(neq_lim)
     if (ncell == 0 .or. ndone == 0) return
     neq_stat_in(1) = ncell
-    write(*,'(" neq chem step ",I0,": calls=",I0," per cell=",F0.2," max=",I0, &
+    write(*,'(" Chemistry: calls=",I0," per cell=",F0.2," max=",I0, &
          & " lane efficiency=",F0.3," redone=",F0.1,"% rejected=",F0.1,"%")') &
-         & neq_stat_nstep, neq_stat_ncall, dble(ndone)/dble(ncell), neq_stat_max, &
+         & neq_stat_ncall, dble(ndone)/dble(ncell), neq_stat_max, &
          & dble(nsub)/(32d0*dble(nwarp)), 100d0*dble(nsub-ndone)/dble(nsub), &
          & 100d0*dble(sum(neq_stat(4,:)))/dble(nsub)
-    line = '   limiters:'
+    line = '   Limiters:'
     do k = 0, neq_nlim
        write(field,'(1X,A,"=",F0.1,"%")') trim(neq_lim_name(k)), 100d0*dble(neq_lim(k))/dble(ndone)
        line = trim(line)//trim(field)
@@ -1708,7 +1708,7 @@ contains
     write(*,'(A)') trim(line)
     do ilev = 1, MAXLEVEL
        if (neq_lev(2,ilev) == 0) cycle
-       write(*,'("   level ",I2,": calls=",I4," cells/call=",I10," per cell=",F7.2," max=",I6, &
+       write(*,'("   Level ",I2,": calls=",I4," cells/call=",I10," per cell=",F7.2," max=",I6, &
             & " cost=",F5.1,"%")') ilev, neq_lev(1,ilev), neq_lev(2,ilev)/neq_lev(1,ilev), &
             & dble(neq_lev(3,ilev))/dble(neq_lev(2,ilev)), neq_lev_max(ilev), &
             & 100d0*dble(neq_lev(4,ilev))/dble(nwarp)
