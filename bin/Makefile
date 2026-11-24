@@ -405,6 +405,9 @@ cub_module_radix_sort_f.o: cub_module_radix_sort.cuf cub_module_radix_sort_c.o
 
 gpu_hydro.o gpu_runner.o: gpu_launch.h
 
+# No relocatable device code for the neq chemistry, so that its device routines get inlined
+gpu_neq_cooling.o: FFLAGS += -gpu=nordc
+
 %.o:%.cuf
 	$(F90) $(FFLAGS) -c $< -o $@
 %.o:%.f90
