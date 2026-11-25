@@ -1540,11 +1540,19 @@ subroutine m_read_params(pst)
         write(*,*)'Error: dual energy, SGS, non-thermal energies and non-equilibrium chemistry need one rank on GPU'
         nml_ok=.false.
      endif
-     if(nlevelmax>levelmin.or.geom/=1.or.ndim/=3.or.nhilbert/=1)then
-        write(*,*)'Error: on several ranks, the GPU requires a uniform 3D Cartesian grid and NHILBERT=1'
+     if((nlevelmax>levelmin.and..not.static_mesh).or.geom/=1.or.ndim/=3.or.nhilbert/=1)then
+        write(*,*)'Error: on several ranks, the GPU requires a uniform or static 3D Cartesian grid and NHILBERT=1'
+        nml_ok=.false.
+     endif
+     if(nlevelmax>levelmin.and.(nrestart>0.or.filetype=='ramses'))then
+        write(*,*)'Error: on several ranks, the GPU builds a static mesh from initial conditions only'
         nml_ok=.false.
      endif
 #ifdef MHD
+     if(nlevelmax>levelmin)then
+        write(*,*)'Error: on several ranks, the GPU runs MHD on a uniform grid only'
+        nml_ok=.false.
+     endif
      if(etamag/=0.0d0.or.eta_ohm/=0.0d0.or.eta_ad/=0.0d0)then
         write(*,*)'Error: non-ideal MHD coefficients are supported on one MPI rank only on GPU'
         nml_ok=.false.

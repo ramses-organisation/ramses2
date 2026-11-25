@@ -2659,6 +2659,7 @@ contains
     use cub_inclusive_scan_mod
     use cub_module, only: radix_sort
     use iso_fortran_env
+    use gpu_mpi, only: gpu_halo_check
 #ifdef DO_RT
     use rt_parameters, only: nrtvar
 #endif
@@ -2878,6 +2879,9 @@ contains
     ! New pointer to free memory
     sim%m%ifree = new_head
     nkill = new_ifree - sim%m%ifree
+
+    ! On several ranks, a static mesh keeps the octs the host made
+    if (sim%g%ncpu > 1 .and. sim%r%static_mesh) call gpu_halo_check(sim, nmake+nkill, 'octs made or removed in a static mesh')
 
     ! Sort Hilbert key within each level using LSD radix sort.
     do ilev = ilevel + 1, sim%r%nlevelmax
