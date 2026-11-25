@@ -3081,7 +3081,6 @@ contains
     integer(kind=4), device :: ifree_cache_d, cache_overflow_d, new_noct_d
     integer(kind=1) :: source
     real(dp) :: smallr_d
-    logical :: remote
     character(len=64) :: descr
 
     head = sim%m%ifree_cache
@@ -3092,9 +3091,13 @@ contains
     num_blocks = (num_subgrids + num_threads - 1) / num_threads
 
     ! A neighbour missing at levelmin is an oct of another rank; above, it is interpolated from its parent.
-    remote = ilevel == sim%r%levelmin .and. sim%g%ncpu > 1
-    source = cache_interpolated
-    if (remote) source = cache_remote
+    ! With source = 0 the level has no cache octs.
+    source = 0
+    if (ilevel == sim%r%levelmin) then
+       if (sim%g%ncpu > 1) source = cache_remote
+    else if (sim%r%ncachemax > 0) then
+       source = cache_interpolated
+    endif
 
     if (num_subgrids > 0) then
        interpol_var = sim%r%interpol_var
@@ -3115,8 +3118,8 @@ contains
                & head_idx, num_subgrids, ind, prefix_sum)
           call GPU_Error_Check(__FILE__, __LINE__)
 
-          ! No interpolated ghost octs when ncachemax=0: missing neighbors keep nbor = 0
-          if (sim%r%ncachemax > 0 .or. remote) then
+          ! Without cache octs, missing neighbors keep nbor = 0
+          if (source /= 0) then
 
              ! Compute prefix sum
 #if defined(CUB_SCAN_REFINE)
@@ -3162,19 +3165,22 @@ contains
           call nvtxEndRange()
 
        end do
-       sim%m%ifree_cache = ifree_cache_d
 
-       ! Cache overflow is flagged on the device, report it here
-       cache_overflow = cache_overflow_d
-       if (cache_overflow /= 0) then
-          write(*,*)'No more cache memory, increase ncachemax'
-          write(*,*)'Cache octs:', sim%m%ifree_cache-1, ' ncachemax:', sim%m%ncachemax
-          call mdl_abort(sim%mdl)
+       if (source /= 0) then
+          sim%m%ifree_cache = ifree_cache_d
+
+          ! Cache overflow is flagged on the device, report it here
+          cache_overflow = cache_overflow_d
+          if (cache_overflow /= 0) then
+             write(*,*)'No more cache memory, increase ncachemax'
+             write(*,*)'Cache octs:', sim%m%ifree_cache-1, ' ncachemax:', sim%m%ncachemax
+             call mdl_abort(sim%mdl)
+          endif
        endif
     endif
 
     ! Every rank takes part, also one without octs
-    if (remote) call gpu_halo_build(sim, ilevel, grid, hash_key, hash_val, ckey_max, key_off)
+    if (source == cache_remote) call gpu_halo_build(sim, ilevel, grid, hash_key, hash_val, ckey_max, key_off)
 
     sim%m%tail_cache(ilevel) = sim%m%ifree_cache - 1
     sim%m%noct_cache(ilevel) = sim%m%ifree_cache - head
