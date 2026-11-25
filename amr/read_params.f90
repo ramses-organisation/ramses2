@@ -1544,10 +1544,6 @@ subroutine m_read_params(pst)
         write(*,*)'Error: on several ranks, the GPU requires a 3D Cartesian grid and NHILBERT=1'
         nml_ok=.false.
      endif
-     if(nlevelmax>levelmin.and.(nrestart>0.or.filetype=='ramses'))then
-        write(*,*)'Error: on several ranks, the GPU builds a multi-level mesh from initial conditions only'
-        nml_ok=.false.
-     endif
 #ifdef MHD
      if(nlevelmax>levelmin)then
         write(*,*)'Error: on several ranks, the GPU runs MHD on a uniform grid only'
