@@ -96,6 +96,7 @@ static id<MTLComputePipelineState> s_pso_update_father     = nil;
 
 /* PSOs for AMR refine/sort/cache kernels (refine.metal) */
 static id<MTLComputePipelineState> s_pso_refine            = nil;
+static id<MTLComputePipelineState> s_pso_enforce_rules_hash = nil;
 static id<MTLComputePipelineState> s_pso_gather_force      = nil;
 static id<MTLComputePipelineState> s_pso_scatter_force     = nil;
 static id<MTLComputePipelineState> s_pso_gather_phi        = nil;
@@ -313,6 +314,7 @@ extern "C" void mtl_init(void)
     s_pso_update_father     = make_pso(@"update_father_kernel");
 
     s_pso_refine            = make_pso(@"refine_kernel");
+    s_pso_enforce_rules_hash = make_pso(@"enforce_rules_hash_kernel");
     s_pso_derefine          = make_pso(@"derefine_kernel");
     s_pso_free_hash         = make_pso(@"free_hash_kernel");
     s_pso_update_hash       = make_pso(@"update_hash_kernel");
@@ -1471,18 +1473,18 @@ extern "C" void mtl_flag_count(int head_idx, int num_octs, int num_nbors)
 /* -----------------------------------------------------------------------
  * mtl_enforce_rules — clear flag1 if any nbor slot is 0 or > ngridmax.
  * ----------------------------------------------------------------------- */
-extern "C" void mtl_enforce_rules(int head_idx, int num_octs, int ngridmax)
+extern "C" void mtl_enforce_rules(int head_idx, int num_groups, int ngridmax)
 {
-    if (num_octs <= 0) return;
+    if (num_groups <= 0) return;
     NSUInteger tg128 = 128;
-    NSUInteger nblk  = ((NSUInteger)num_octs + tg128 - 1) / tg128;
+    NSUInteger nblk  = ((NSUInteger)num_groups + tg128 - 1) / tg128;
     id<MTLCommandBuffer>         cmd = [s_queue commandBuffer];
     id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
     [enc setComputePipelineState:s_pso_enforce_rules];
     [enc setBuffer:s_flag1    offset:0 atIndex:0];
     [enc setBuffer:s_nbor     offset:0 atIndex:1];
     [enc setBytes:&head_idx   length:sizeof(int) atIndex:2];
-    [enc setBytes:&num_octs   length:sizeof(int) atIndex:3];
+    [enc setBytes:&num_groups length:sizeof(int) atIndex:3];
     [enc setBytes:&ngridmax   length:sizeof(int) atIndex:4];
     [enc setBuffer:s_grid     offset:0 atIndex:5];
     [enc dispatchThreadgroups:{nblk,1,1} threadsPerThreadgroup:{tg128,1,1}];
@@ -1918,6 +1920,36 @@ extern "C" void mtl_insert_hash_all(int head_idx, int num_octs, int hash_size)
     [enc setBytes:&hash_size length:sizeof(int) atIndex:5];
     [enc setBytes:&head_idx  length:sizeof(int) atIndex:6];
     [enc setBytes:&num_octs  length:sizeof(int) atIndex:7];
+    [enc dispatchThreadgroups:{nblk,1,1} threadsPerThreadgroup:{tg,1,1}];
+    [enc endEncoding];
+    [cmd commit];
+    [cmd waitUntilCompleted];
+}
+
+/* --- enforce_rules_hash_kernel: in-pass 2:1 check before refining a level --- */
+
+extern "C" void mtl_enforce_rules_hash(int head_idx, int num_groups, int nskip,
+                                       int ngridmax, int hash_size)
+{
+    if (num_groups <= 0) return;
+    NSUInteger tg = 128, nblk = ((NSUInteger)num_groups + tg - 1) / tg;
+    id<MTLCommandBuffer>         cmd = [s_queue commandBuffer];
+    id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
+    [enc setComputePipelineState:s_pso_enforce_rules_hash];
+    [enc setBuffer:s_grid             offset:0 atIndex:0];
+    [enc setBuffer:s_flag1            offset:0 atIndex:1];
+    [enc setBuffer:s_hash_key         offset:0 atIndex:2];
+    [enc setBuffer:s_hash_val         offset:0 atIndex:3];
+    [enc setBuffer:s_ckey_max_dev     offset:0 atIndex:4];
+    [enc setBuffer:s_key_off_dev      offset:0 atIndex:5];
+    [enc setBuffer:s_box_ckey_min_dev offset:0 atIndex:6];
+    [enc setBuffer:s_box_ckey_max_dev offset:0 atIndex:7];
+    [enc setBuffer:s_periodic_dev     offset:0 atIndex:8];
+    [enc setBytes:&hash_size  length:sizeof(int) atIndex:9];
+    [enc setBytes:&ngridmax   length:sizeof(int) atIndex:10];
+    [enc setBytes:&nskip      length:sizeof(int) atIndex:11];
+    [enc setBytes:&head_idx   length:sizeof(int) atIndex:12];
+    [enc setBytes:&num_groups length:sizeof(int) atIndex:13];
     [enc dispatchThreadgroups:{nblk,1,1} threadsPerThreadgroup:{tg,1,1}];
     [enc endEncoding];
     [cmd commit];

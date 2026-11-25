@@ -12,7 +12,7 @@
  *   hydro_flag_kernel       2D TG(128): 8 cells × 16 octs
  *   count_neighbors_kernel  2D TG(128): 8 cells × 16 octs
  *   flag_count_kernel       2D TG(128): 8 cells × 16 octs
- *   enforce_rules_kernel    1D TG(128): 1 thread per oct
+ *   enforce_rules_kernel    1D TG(128): 1 thread per group of (nsubgrid/2)**3 octs
  *
  * Memory conventions (0-based throughout):
  *   flag1[cell_0 + 8 * oct_abs_0]            — column-major (8, ntotal)
@@ -496,44 +496,59 @@ kernel void enforce_subgrid_kernel(
 }
 
 /* =========================================================================
- * enforce_rules_kernel — clear flag1 for an oct if any of its 27 subgrid
- * neighbour slots is missing (0) or in the ghost cache (> ngridmax).
- * 1D: 1 thread per oct; head_idx/num_octs at the current level.
+ * enforce_rules_kernel — clear flag1 for a group of (nsubgrid/2)**3 octs if
+ * any of the 27 subgrid neighbour slots of one oct of the group is missing (0)
+ * or in the ghost cache (> ngridmax).
+ * 1D: 1 thread per group; head_idx/num_groups at the current level.
  * Mirrors enforce_rules<<<128 threads>>> in gpu_flag.cuf.
  * ========================================================================= */
 kernel void enforce_rules_kernel(
-    device int          *flag1    [[buffer(0)]],
-    device const int    *nbor     [[buffer(1)]],
-    constant int        &head_idx [[buffer(2)]],
-    constant int        &num_octs [[buffer(3)]],
-    constant int        &ngridmax [[buffer(4)]],
-    device const oct_t  *grid     [[buffer(5)]],
+    device int          *flag1      [[buffer(0)]],
+    device const int    *nbor       [[buffer(1)]],
+    constant int        &head_idx   [[buffer(2)]],
+    constant int        &num_groups [[buffer(3)]],
+    constant int        &ngridmax   [[buffer(4)]],
+    device const oct_t  *grid       [[buffer(5)]],
     uint gid [[thread_position_in_grid]])
 {
-    if (int(gid) >= num_octs) return;
+    if (int(gid) >= num_groups) return;
 
-    int sg_1, i, j, k;
-    fl_oct_position(head_idx + int(gid), sg_1, i, j, k);
-    int ind_mid = 1 + i + NSUBGRIDP2_FL * j + NSUBGRIDP2SQ_FL * k;
-    int oct_abs_0 = nbor_fl(nbor, sg_1, ind_mid) - 1;
-    if (oct_abs_0 < 0) return;
+    /* Octs per direction in a group of (nsubgrid/2)**3 octs,
+       and groups per direction in a subgrid */
+    int gsize  = max(NSUBGRID_FL / 2, 1);
+    int ngroup = NSUBGRID_FL / gsize;
 
+    /* Subgrid idx and group position within subgrid */
+    int g    = (head_idx - 1) / (gsize * gsize * gsize) + int(gid);
+    int sg_1 = g / (ngroup * ngroup * ngroup) + 1;
+    g -= (sg_1 - 1) * ngroup * ngroup * ngroup;
+    int gk = g / (ngroup * ngroup);
+    int gj = (g - gk * ngroup * ngroup) / ngroup;
+    int gi = g - gj * ngroup - gk * ngroup * ngroup;
+
+    /* Check if one neighbouring grid of one oct of the group is missing or in the cache */
     bool ok = false;
-    for (int kn = -1; kn <= 1; kn++) {
-        for (int jn = -1; jn <= 1; jn++) {
-            for (int in = -1; in <= 1; in++) {
-                int ind = 1 + (i + in) + NSUBGRIDP2_FL * (j + jn) +
-                          NSUBGRIDP2SQ_FL * (k + kn);
-                int nb_val = nbor_fl(nbor, sg_1, ind);
-                ok = ok || (nb_val == 0) || (nb_val > ngridmax);
-            }
-        }
+    for (int k = gk * gsize; k <= gk * gsize + gsize + 1; k++)
+    for (int j = gj * gsize; j <= gj * gsize + gsize + 1; j++)
+    for (int i = gi * gsize; i <= gi * gsize + gsize + 1; i++) {
+        int ind = 1 + i + NSUBGRIDP2_FL * j + NSUBGRIDP2SQ_FL * k;
+        int nb_val = nbor_fl(nbor, sg_1, ind);
+        ok = ok || (nb_val == 0) || (nb_val > ngridmax);
     }
-    /* Only cancel new refinements: unflagging a refined cell would
+
+    /* If one grid is missing, cancel the flags of all octs of the group.
+       Only cancel new refinements: unflagging a refined cell would
        destroy its child and could orphan finer octs (2:1 violation) */
     if (ok) {
-        for (int ic = 0; ic < 8; ic++) {
-            if (!(bool)grid[oct_abs_0].refined[ic]) flag1[ic + 8 * oct_abs_0] = 0;
+        for (int k = gk * gsize + 1; k <= gk * gsize + gsize; k++)
+        for (int j = gj * gsize + 1; j <= gj * gsize + gsize; j++)
+        for (int i = gi * gsize + 1; i <= gi * gsize + gsize; i++) {
+            int ind_mid = 1 + i + NSUBGRIDP2_FL * j + NSUBGRIDP2SQ_FL * k;
+            int oct_abs_0 = nbor_fl(nbor, sg_1, ind_mid) - 1;
+            if (oct_abs_0 < 0) continue;
+            for (int ic = 0; ic < 8; ic++) {
+                if (!(bool)grid[oct_abs_0].refined[ic]) flag1[ic + 8 * oct_abs_0] = 0;
+            }
         }
     }
 }

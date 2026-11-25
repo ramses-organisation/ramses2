@@ -494,17 +494,21 @@ end subroutine metal_enforce_subgrid
 !###########################################################
 
 subroutine metal_enforce_rules(sim, ilevel)
-  ! Clears flag1 for any oct whose 3x3x3 nbor stencil contains a
-  ! missing or ghost-cache entry (enforces 2:1 refinement constraint).
+  ! Clears flag1 for any group of (nsubgrid/2)**ndim octs in which one oct
+  ! has a 3x3x3 nbor stencil with a missing or ghost-cache entry
+  ! (enforces 2:1 refinement constraint).
+  use amr_parameters, only: ndim
   use ramses_commons, only: ramses_t
   use iso_c_binding
   implicit none
   type(ramses_t), intent(inout) :: sim
   integer,        intent(in)    :: ilevel
+  integer :: nskip
 
+  nskip = max(nsubgrid/2,1)**ndim
   if (sim%m%noct(ilevel) > 0) then
      call mtl_enforce_rules(int(sim%m%head(ilevel), c_int), &
-                            int(sim%m%noct(ilevel), c_int), &
+                            int(sim%m%noct(ilevel) / nskip, c_int), &
                             int(sim%m%ngridmax,     c_int))
   end if
 
@@ -541,8 +545,9 @@ end subroutine metal_smooth_flag
 subroutine metal_refine(sim, ilevel, nmake, nkill)
   ! Steps:
   !  1. Wipe hash entries for existing cache octs.
-  !  2. refine_kernel → read back new ifree.
-  !  3. insert_hash_all for newly created octs.
+  !  2. Per level, coarse to fine: enforce_rules_hash (levels > ilevel),
+  !     refine_kernel → read back new ifree.
+  !  3. insert_hash_all for the octs created at this level.
   !  4. derefine_kernel per level (nlevelmax → ilevel+1).
   !  5. Level bucket sort: compact [head_child..new_ifree-1] by level;
   !     update sim%m%head/noct/tail and sim%m%ifree.
@@ -559,7 +564,7 @@ subroutine metal_refine(sim, ilevel, nmake, nkill)
   integer,        intent(in)    :: ilevel
   integer,        intent(out)   :: nmake, nkill
 
-  integer(c_int) :: hash_size_l, old_ifree, new_ifree
+  integer(c_int) :: hash_size_l, old_ifree, new_ifree, ins_head, nskip
   integer(c_int) :: head_child, n_all, n_rem
   integer(c_int) :: ilev, ind
   integer(c_int) :: cur_head, nones, new_noct
@@ -588,24 +593,45 @@ subroutine metal_refine(sim, ilevel, nmake, nkill)
   ! Reset cache pointer to head of cache region for level ilevel+1.
   sim%m%ifree_cache = int(head_cache)
 
-  ! --- Step 2: refine_kernel -------------------------------------------------
+  ! --- Steps 2-3: refine_kernel level by level, coarse to fine ---------------
+  !     and insert the new octs of each level into the hash table
   old_ifree = int(sim%m%ifree, c_int)
   call mtl_set_ifree(old_ifree)
+  ins_head = old_ifree
+  nskip = max(nsubgrid/2,1)**ndim
+  do ilev = int(ilevel, c_int), int(sim%r%nlevelmax - 1, c_int)
 
-  call mtl_refine_cells( &
-       int(sim%m%head(ilevel),        c_int), &
-       old_ifree - int(sim%m%head(ilevel), c_int), &
-       hash_size_l, int(sim%r%interpol_var, c_int), &
-       int(sim%r%interpol_type, c_int), real(sim%r%smallr, c_float))
+     ! Finer level flags may rely on coarser buffer cells cancelled by
+     ! ensure_ref_rules (adaptive time steps): check them now that the
+     ! octs of level ilev created in this pass exist
+     if (ilev > ilevel .and. sim%m%noct(ilev) > 0) then
+        call mtl_enforce_rules_hash( &
+             int(sim%m%head(ilev), c_int), &
+             int(sim%m%noct(ilev) / nskip, c_int), nskip, &
+             int(sim%m%ngridmax, c_int), hash_size_l)
+     end if
+
+     if (sim%m%noct(ilev) > 0) then
+        call mtl_refine_cells( &
+             int(sim%m%head(ilev), c_int), &
+             int(sim%m%noct(ilev), c_int), &
+             hash_size_l, int(sim%r%interpol_var, c_int), &
+             int(sim%r%interpol_type, c_int), real(sim%r%smallr, c_float))
+        new_ifree = mtl_get_ifree()
+        call mtl_insert_hash_all(ins_head, new_ifree - ins_head, hash_size_l)
+        ins_head = new_ifree
+     end if
+  end do
 
   new_ifree = mtl_get_ifree()
   nmake     = int(new_ifree - old_ifree)
 
-  ! --- Step 3: insert new octs into hash table -------------------------------
-  call mtl_insert_hash_all( &
-       old_ifree, &
-       int(nmake, c_int), &
-       hash_size_l)
+  ! Check we have enough memory
+  if (new_ifree - 1 > sim%r%ngridmax) then
+     write(*,*)'No more main memory, increase ngridmax'
+     write(*,*)'New octs:', nmake
+     stop
+  endif
 
   ! --- Step 4: derefine per level (top-down) ---------------------------------
   do ilev = int(sim%r%nlevelmax, c_int), int(ilevel + 1, c_int), -1
@@ -737,6 +763,13 @@ subroutine metal_refine(sim, ilevel, nmake, nkill)
 #endif
              hash_size_l, ind)
         if (cache_noct_lev <= 0) cycle
+
+        ! Stop before writing past the cache region
+        if (ifree_cache_now - 1 + cache_noct_lev > sim%m%ncachemax) then
+           write(*,*)'No more cache memory, increase ncachemax'
+           write(*,*)'Cache octs:', ifree_cache_now - 1 + cache_noct_lev, ' ncachemax:', sim%m%ncachemax
+           stop
+        endif
 
         ! cache_swap + make_cache_octs + insert_hash in one command buffer.
         call mtl_cache_fill( &

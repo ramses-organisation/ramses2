@@ -819,6 +819,81 @@ kernel void insert_hash_all_kernel(
 }
 
 /* =========================================================================
+ * enforce_rules_hash_kernel — same as ensure_ref_rules on the CPU, with hash
+ * lookups instead of nbor, so that the octs created earlier in this refine
+ * pass count. Checks that all octs at level ilevel are surrounded by 26
+ * neighbouring octs, for entire groups of nskip=(nsubgrid/2)**3 octs.
+ * Mirrors enforce_rules_hash in gpu_refine.cuf. 1 thread/group.
+ * ========================================================================= */
+kernel void enforce_rules_hash_kernel(
+    device const oct_t *grid         [[buffer(0)]],
+    device int         *flag1        [[buffer(1)]],
+    device const long  *hash_key     [[buffer(2)]],
+    device const int   *hash_val     [[buffer(3)]],
+    device const int   *ckey_max_dev [[buffer(4)]],
+    device const long  *key_off_dev  [[buffer(5)]],
+    device const int   *box_ckey_min [[buffer(6)]],
+    device const int   *box_ckey_max [[buffer(7)]],
+    device const int   *periodic     [[buffer(8)]],
+    constant int       &hash_size    [[buffer(9)]],
+    constant int       &ngridmax     [[buffer(10)]],
+    constant int       &nskip        [[buffer(11)]],
+    constant int       &head_idx     [[buffer(12)]],
+    constant int       &num_groups   [[buffer(13)]],
+    uint gid [[thread_position_in_grid]])
+{
+    if (int(gid) >= num_groups) return;
+    int oct_abs_0 = (head_idx - 1) + int(gid) * nskip;   /* leading oct of the group */
+
+    bool ok = true;
+
+    /* Loop over octs in the group */
+    for (int iskip = 0; iskip < nskip; iskip++) {
+        int ilevel = grid[oct_abs_0 + iskip].lev;
+        long nx  = long(ckey_max_dev[ilevel - 1]);
+        long off = key_off_dev[ilevel - 1];
+
+        /* Loop over 3x3x3 neighbouring father cells */
+        for (int kn = -1; kn <= 1; kn++) {
+            for (int jn = -1; jn <= 1; jn++) {
+                for (int in = -1; in <= 1; in++) {
+                    int ckey_n[3];
+                    ckey_n[0] = grid[oct_abs_0 + iskip].ckey[0] + in;
+                    ckey_n[1] = grid[oct_abs_0 + iskip].ckey[1] + jn;
+                    ckey_n[2] = grid[oct_abs_0 + iskip].ckey[2] + kn;
+
+                    /* Periodic boundary conditions (level-specific box bounds). */
+                    for (int d = 0; d < 3; d++) {
+                        if (periodic[d]) {
+                            int bmin = box_ckey_min[3 * (ilevel - 1) + d];
+                            int bmax = box_ckey_max[3 * (ilevel - 1) + d];
+                            if (ckey_n[d] <  bmin) ckey_n[d] = bmax - 1;
+                            if (ckey_n[d] >= bmax) ckey_n[d] = bmin;
+                        }
+                    }
+
+                    long key = off + long(ckey_n[0])
+                                   + long(ckey_n[1]) * nx
+                                   + long(ckey_n[2]) * nx * nx;
+                    int nbor_idx = hash_get(hash_key, hash_val, hash_size, key);
+                    ok = ok && (nbor_idx > 0) && (nbor_idx <= ngridmax);
+                }
+            }
+        }
+    }
+
+    /* Only cancel new refinements: unflagging a refined cell would
+       destroy its child and could orphan finer octs (2:1 violation) */
+    if (!ok) {
+        for (int iskip = 0; iskip < nskip; iskip++) {
+            for (int ic = 0; ic < 8; ic++) {
+                if (!(bool)grid[oct_abs_0 + iskip].refined[ic]) flag1[ic + 8 * (oct_abs_0 + iskip)] = 0;
+            }
+        }
+    }
+}
+
+/* =========================================================================
  * init_global_swap_table_kernel — swap_global[oct] = oct (identity).
  * Mirrors init_global_swap_table_kernel in gpu_refine.cuf. 1 thread/oct.
  * ========================================================================= */
