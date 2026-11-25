@@ -8,7 +8,7 @@ program amr2map
 
   integer,parameter::flen=200
 
-  integer::ndim,twotondim,nvar
+  integer::ndim,twotondim,nvar,nvar_hydro=0
   integer::n,i,j,k,type=0,dopeak=0,domax=0,dograv=0,dort=0,backup=0
   integer::ivar,lmax=0
   integer::ilevel,idim,jdim,kdim,ldim,icell
@@ -21,7 +21,7 @@ program amr2map
   integer::ix,iy,iz,ndom,impi,bit_length,maxdom
   integer::noct_file,noct_tmp
   integer,dimension(1:8)::idom,jdom,kdom,cpu_min,cpu_max
-  integer(kind=8)::ipos,iskip_amr,iskip_hydro,noct_skip
+  integer(kind=8)::ipos,iskip_amr,iskip_hydro,iskip_rho,noct_skip
 
   real(KIND=8)::dxline,weight
   real(KIND=8)::xmin=0,xmax=1,ymin=0,ymax=1,zmin=0,zmax=1
@@ -33,8 +33,8 @@ program amr2map
   character(LEN=1)::proj='z'
   character(LEN=5)::nchar,ncharcpu
   character(LEN=flen)::nomfich,repository,outfich,mapfiletype='bin'
-  character(LEN=flen)::file_amr,file_hydro
-  logical::ok,ok_part,ok_cell,do_max,do_grav,do_peak,do_rt
+  character(LEN=flen)::file_amr,file_hydro,file_rho
+  logical::ok,ok_part,ok_cell,do_max,do_grav,do_peak,do_rt,do_rt_mass
   logical::backup_file=.false.
   logical::check_ramses_exist
 
@@ -46,6 +46,7 @@ program amr2map
   logical,dimension(:),allocatable::refined
   real(KIND=8),dimension(:,:),allocatable::uold
   real(KIND=4),dimension(:,:),allocatable::qold
+  real(KIND=4),dimension(:,:),allocatable::qrho
 
   type level
      integer::ilevel
@@ -162,6 +163,7 @@ program amr2map
      allocate(uold(1:twotondim,1:nvar))
   else
      allocate(qold(1:twotondim,1:nvar))
+     if(do_rt_mass)allocate(qrho(1:twotondim,1:nvar_hydro))
   endif
 
   ! Loop over levels
@@ -214,6 +216,12 @@ program amr2map
         else
            iskip_hydro=17+4*(p%nlevelmax-p%levelmin+1)+(4*twotondim*nvar)*noct_skip
         endif
+        ! Gas density used as weight for RT variables (-rt 2)
+        if(do_rt_mass)then
+           file_rho=TRIM(repository)//'/hydro.'//TRIM(ncharcpu)
+           open(unit=12,file=file_rho,access="stream",action="read",form='unformatted')
+           iskip_rho=17+4*(p%nlevelmax-p%levelmin+1)+(4*twotondim*nvar_hydro)*noct_skip
+        endif
         ! Loop over useful octs in file
         do i=1,noct_file
 
@@ -231,6 +239,10 @@ program amr2map
            else
               ipos=iskip_hydro+(4*twotondim*nvar)*int((i-1),kind=8)
               read(11,POS=ipos)qold
+              if(do_rt_mass)then
+                 ipos=iskip_rho+(4*twotondim*nvar_hydro)*int((i-1),kind=8)
+                 read(12,POS=ipos)qrho
+              endif
            endif
            ! Loop over 2**ndim cells
            do ind=1,twotondim
@@ -283,6 +295,7 @@ program amr2map
                  ! Get variable to map out
                  rho = qold(ind,1)
                  if(do_rt) rho = 1.0
+                 if(do_rt_mass) rho = qrho(ind,1)
                  select case (type)
                  case (-1) ! Cpu map
                     map = icpu
@@ -362,6 +375,7 @@ program amr2map
         ! Close file
         close(10)
         close(11)
+        if(do_rt_mass)close(12)
 
      end do
      ! End loop over cpu
@@ -532,7 +546,7 @@ contains
        print *, '                 [-max maxi] '
        print *, '                 [-gra read_grav] '
        print *, '                 [-pk  read_pk] '
-       print *, '                 [-rt  read_rt] '
+       print *, '                 [-rt  read_rt] (1: volume, 2: gas mass weighted)'
        print *, '                 [-nx  nx] '
        print *, '                 [-ny  ny] '
        print *, 'ex: amr2map -inp output_00001 -out map.dat'// &
@@ -619,7 +633,8 @@ contains
     do_peak=.false.
     if(dopeak==1)do_peak=.true.
     do_rt=.false.
-    if(dort==1)do_rt=.true.
+    if(dort>=1)do_rt=.true.
+    do_rt_mass=(dort==2)
 
     if(rad>0)then
        xmin=xcen-rad
@@ -683,6 +698,11 @@ contains
     open(unit=ilun,file=file_hydro,access="stream",action="read",form='unformatted')
     read(ilun,POS=5)p%nvar
     close(ilun)
+    if(do_rt_mass)then
+       open(unit=ilun,file=TRIM(repository)//'/hydro.00001',access="stream",action="read",form='unformatted')
+       read(ilun,POS=5)nvar_hydro
+       close(ilun)
+    endif
 
   end subroutine read_ramses_params
   !================================================================
