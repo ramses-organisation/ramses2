@@ -282,6 +282,7 @@ program amr2map
               else
                  ! Get variable to map out
                  rho = qold(ind,1)
+                 if(do_rt) rho = 1.0
                  select case (type)
                  case (-1) ! Cpu map
                     map = icpu
