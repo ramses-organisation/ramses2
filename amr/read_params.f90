@@ -1540,12 +1540,16 @@ subroutine m_read_params(pst)
         write(*,*)'Error: dual energy, SGS, non-thermal energies and non-equilibrium chemistry need one rank on GPU'
         nml_ok=.false.
      endif
-     if((nlevelmax>levelmin.and..not.static_mesh).or.geom/=1.or.ndim/=3.or.nhilbert/=1)then
-        write(*,*)'Error: on several ranks, the GPU requires a uniform or static 3D Cartesian grid and NHILBERT=1'
+     if(geom/=1.or.ndim/=3.or.nhilbert/=1)then
+        write(*,*)'Error: on several ranks, the GPU requires a 3D Cartesian grid and NHILBERT=1'
+        nml_ok=.false.
+     endif
+     if(nlevelmax>levelmin.and..not.static_mesh.and.interpol_type/=0)then
+        write(*,*)'Error: on several ranks, the GPU refines the mesh with injection only (interpol_type=0)'
         nml_ok=.false.
      endif
      if(nlevelmax>levelmin.and.(nrestart>0.or.filetype=='ramses'))then
-        write(*,*)'Error: on several ranks, the GPU builds a static mesh from initial conditions only'
+        write(*,*)'Error: on several ranks, the GPU builds a multi-level mesh from initial conditions only'
         nml_ok=.false.
      endif
 #ifdef MHD
