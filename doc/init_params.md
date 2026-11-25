@@ -49,7 +49,7 @@ This sets of parameters, contained in the namelist block `&INIT_PARAMS`. This is
 | `rt_u_region=0.0`  | `real arrays` | Photon reduced flux direction (x coordinate). |
 | `rt_v_region=0.0`  | `real arrays` | Photon reduced flux direction (y coordinate). |
 | `rt_w_region=0.0`  | `real arrays` | Photon reduced flux direction (z coordinate). |
-| `cr_nregion=0`  | `integer` | Number of independent regions in the computational box used to set up initial cosmic ray flux variables. Only available if compiled with `CR=1`. |
+| `cr_nregion=0`  | `integer` | Number of independent regions in the computational box used to set up initial cosmic ray flux variables. Only available if compiled with `DO_CR=1`. |
 | `cr_region_type='square'`  | `10*char` | Geometry defining each CR region. `square` defines a generalized ellipsoidal shape. |
 | `cr_reg_x_center=0.0`  | `real arrays` | X coordinate of the center of each CR region. |
 | `cr_reg_y_center=0.0`  | `real arrays` | Y coordinate of the center of each CR region. |

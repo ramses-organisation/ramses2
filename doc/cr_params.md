@@ -1,4 +1,4 @@
-The namelist block `&CR_PARAMS` is used to specify parameters controlling the cosmic ray two-moment (M1) solver. Cosmic rays require the code to be compiled with `CR=1` and `MHD=1`, and activated at runtime with `cr=.true.` in `&RUN_PARAMS`.
+The namelist block `&CR_PARAMS` is used to specify parameters controlling the cosmic ray two-moment (M1) solver. Cosmic rays require the code to be compiled with `DO_CR=1`, which also turns on MHD, and activated at runtime with `cr=.true.` in `&RUN_PARAMS`.
 
 | Variable name | Fortran type | Default value  | Description      |
 |:------------------- |:-------|:----- |:------------------------- |
@@ -14,3 +14,7 @@ The namelist block `&CR_PARAMS` is used to specify parameters controlling the co
 | `cr_courant_factor` | `real`      | 0.8        | Courant factor used to compute the CR transport timestep. A value smaller than 1 improves stability at the cost of smaller timesteps. |
 | `cr_test_setup`     | `character(LEN=100)` | `'none'`  | Name of a predefined setup for standard CR test problems. When set to `'none'`, no special test configuration is applied. |
 | `cr_v_alfven`       | `real`      | 0.0        | Manually prescribed Alfvén velocity for idealised test problems (in code units). When set to 0.0, the Alfvén speed is computed self-consistently from the local magnetic field and density. |
+
+With `cr_nsubcycle>1`, the CR energy is not exactly conserved at level boundaries: the fine fluxes are not sent to the coarser level, because their sum over the subcycles can make its CR energy negative. The error depends on the interpolation (`interpol_type` in `&REFINE_PARAMS`): in a 1D diffusion test refined from level 7 to 9 with `cr_nsubcycle=10`, the CR energy grows by 45 % by t=0.4 with `interpol_type=0` and by 0.9 % with `interpol_type=1`. Use `interpol_type>=1` with CR subcycling.
+
+The thermal energy is the total energy minus the kinetic, magnetic and CR energies. Where the CR energy dominates and the gas expands, it can become negative. Running with `entropy=.true.` and `dual_energy` (see `&HYDRO_PARAMS`) prevents this.
