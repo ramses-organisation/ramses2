@@ -3472,7 +3472,7 @@ contains
        ! Update left coarse X cell if necessary
        ind_nbor = 1 + i_subgrid_idx + nsubgridp2 * j_subgrid_idx + nsubgridp2sq * k_subgrid_idx
        source_idx = nbor(ind_nbor)
-       if (source_idx > ngridmax) then
+       if (is_interpolated(source_idx, ngridmax)) then
           father_idx = father(source_idx)
           cell_idx = parent_cell_idx(grid(source_idx)%ckey, grid(father_idx)%ckey)
           info = atomicadd(unew(cell_idx, 1, father_idx), flux%density)
@@ -3525,7 +3525,7 @@ contains
        ! Update right coarse X cell if necessary
        ind_nbor = 1 + i_subgrid_idx + nsubgridp2 * j_subgrid_idx + nsubgridp2sq * k_subgrid_idx
        source_idx = nbor(ind_nbor)
-       if (source_idx > ngridmax) then
+       if (is_interpolated(source_idx, ngridmax)) then
           father_idx = father(source_idx)
           cell_idx = parent_cell_idx(grid(source_idx)%ckey, grid(father_idx)%ckey)
           info = atomicadd(unew(cell_idx, 1, father_idx), flux%density)
@@ -3582,7 +3582,7 @@ contains
        ! Update left coarse Y cell if necessary
        ind_nbor = 1 + i_subgrid_idx + nsubgridp2 * j_subgrid_idx + nsubgridp2sq * k_subgrid_idx
        source_idx = nbor(ind_nbor)
-       if (source_idx > ngridmax) then
+       if (is_interpolated(source_idx, ngridmax)) then
           father_idx = father(source_idx)
           cell_idx = parent_cell_idx(grid(source_idx)%ckey, grid(father_idx)%ckey)
           info = atomicadd(unew(cell_idx, 1, father_idx), flux%density)
@@ -3635,7 +3635,7 @@ contains
        ! Update right coarse Y cell if necessary
        ind_nbor = 1 + i_subgrid_idx + nsubgridp2 * j_subgrid_idx + nsubgridp2sq * k_subgrid_idx
        source_idx = nbor(ind_nbor)
-       if (source_idx > ngridmax) then
+       if (is_interpolated(source_idx, ngridmax)) then
           father_idx = father(source_idx)
           cell_idx = parent_cell_idx(grid(source_idx)%ckey, grid(father_idx)%ckey)
           info = atomicadd(unew(cell_idx, 1, father_idx), flux%density)
@@ -3692,7 +3692,7 @@ contains
        ! Update left coarse Z cell if necessary
        ind_nbor = 1 + i_subgrid_idx + nsubgridp2 * j_subgrid_idx + nsubgridp2sq * k_subgrid_idx
        source_idx = nbor(ind_nbor)
-       if (source_idx > ngridmax) then
+       if (is_interpolated(source_idx, ngridmax)) then
           father_idx = father(source_idx)
           cell_idx = parent_cell_idx(grid(source_idx)%ckey, grid(father_idx)%ckey)
           info = atomicadd(unew(cell_idx, 1, father_idx), flux%density)
@@ -3745,7 +3745,7 @@ contains
        ! Update right coarse Z cell if necessary
        ind_nbor = 1 + i_subgrid_idx + nsubgridp2 * j_subgrid_idx + nsubgridp2sq * k_subgrid_idx
        source_idx = nbor(ind_nbor)
-       if (source_idx > ngridmax) then
+       if (is_interpolated(source_idx, ngridmax)) then
           father_idx = father(source_idx)
           cell_idx = parent_cell_idx(grid(source_idx)%ckey, grid(father_idx)%ckey)
           info = atomicadd(unew(cell_idx, 1, father_idx), flux%density)

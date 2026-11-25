@@ -33,3 +33,19 @@ attributes(device) function subgrid_pos(ckey) result(pos)
 
 end function subgrid_pos
 ! =========================================================================
+
+! =========================================================================
+!> @brief
+!> True for an interpolated oct: a cache oct that is not a copy of another
+!> rank's oct
+!>
+attributes(device) logical function is_interpolated(idx, ngridmax)
+  use gpu_utils, only: cache_source, cache_remote
+  implicit none
+  integer, value :: idx, ngridmax
+
+  is_interpolated = .false.
+  if (idx > ngridmax) is_interpolated = cache_source(idx) /= cache_remote
+
+end function is_interpolated
+! =========================================================================

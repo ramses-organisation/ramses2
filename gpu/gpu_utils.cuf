@@ -17,6 +17,10 @@ module gpu_utils
 
   logical :: gpu_debug = .false.
 
+  ! Source of each cache oct
+  integer(kind=1), parameter :: cache_interpolated=1, cache_remote=2, cache_physical_boundary=3
+  integer(kind=1), device, allocatable :: cache_source(:)
+
   !> @brief
   !> Contains a 6 by 6 by 6 subgrid of primitive variables. Intended to act as a subgrid
   !> where the inner 2 by 2 by 2 cells are "real" and the outer 2 cells are ghost/halo cells.
