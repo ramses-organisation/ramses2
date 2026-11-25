@@ -3385,6 +3385,9 @@ contains
     threadsY_per_block = 16
     num_blocks = (num_octs + threadsY_per_block - 1) / threadsY_per_block
 
+    ! Copies take their owners' current values
+    call gpu_update_copies(sim, ilevel)
+
     ! Refinement rules for the gravity solver
     if(sim%r%poisson .and. num_octs > 0)then
        call nvtxStartRange("GPU user_flag", color=2)!yellow
@@ -3496,6 +3499,7 @@ contains
   subroutine gpu_smooth_flag(sim, ilevel, nflag)
     use nvtx
     use flag_device, only: count_neighbors, flag_count_kernel, count_flag1_kernel
+    use gpu_mpi, only: gpu_halo_flag
     use ramses_commons, only: ramses_t
     type(ramses_t), intent(inout)::sim
     integer, intent(in) :: ilevel
@@ -3512,8 +3516,10 @@ contains
     threadsY_per_block = 16
     num_blocks = (num_octs + threadsY_per_block - 1) / threadsY_per_block
 
-    if(num_octs > 0)then
-       do idim = 1, ndim ! Loop over steps
+    do idim = 1, ndim ! Loop over steps
+       ! On several ranks, copies take their owners' flag1 at each step
+       if (sim%g%ncpu > 1) call gpu_halo_flag(ilevel, flag1)
+       if(num_octs > 0)then
           call nvtxStartRange("GPU smooth_flag", color=2)!yellow
           call count_neighbors<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(flag2, flag1, nbor, &
                & head_idx, num_octs, sim%m%ngridmax)
@@ -3522,8 +3528,8 @@ contains
                & head_idx, num_octs, n_nbor(idim))
           call GPU_Error_Check(__FILE__, __LINE__)
           call nvtxEndRange()
-       end do
-    endif
+       endif
+    end do
 
     nflag_d = 0
 

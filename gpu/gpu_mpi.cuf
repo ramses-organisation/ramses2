@@ -10,7 +10,7 @@ module gpu_mpi
 #endif
   implicit none
   private
-  public :: gpu_halo_build, gpu_halo_update, gpu_halo_flush, gpu_halo_zero, gpu_halo_refined
+  public :: gpu_halo_build, gpu_halo_update, gpu_halo_flush, gpu_halo_zero, gpu_halo_refined, gpu_halo_flag
   public :: gpu_halo_check
 
 #ifndef WITHOUTMPI
@@ -423,6 +423,33 @@ contains
     grid(idx(i0+k+1))%refined(i) = buf(k*twotondim+i) /= 0.0_dp
   end subroutine scatter_refined_kernel
 
+  ! Integers travel in the real(dp) buffers.
+  attributes(global) subroutine gather_int_kernel(a, idx, i0, n, buf)
+    integer, value :: i0, n
+    integer, device :: a(1:twotondim,*), idx(*)
+    real(dp), device :: buf(*)
+    integer :: t, k, i
+
+    t = (blockIdx%x-1)*blockDim%x + threadIdx%x-1
+    if (t >= n*twotondim) return
+    k = t/twotondim
+    i = t-k*twotondim+1
+    buf(k*twotondim+i) = real(a(i,idx(i0+k+1)), dp)
+  end subroutine gather_int_kernel
+
+  attributes(global) subroutine scatter_int_kernel(a, idx, i0, n, buf)
+    integer, value :: i0, n
+    integer, device :: a(1:twotondim,*), idx(*)
+    real(dp), device :: buf(*)
+    integer :: t, k, i
+
+    t = (blockIdx%x-1)*blockDim%x + threadIdx%x-1
+    if (t >= n*twotondim) return
+    k = t/twotondim
+    i = t-k*twotondim+1
+    a(i,idx(i0+k+1)) = nint(buf(k*twotondim+i))
+  end subroutine scatter_int_kernel
+
   subroutine grow_buffers(n)
     integer, intent(in) :: n
 
@@ -593,5 +620,29 @@ contains
     endif
 #endif
   end subroutine gpu_halo_refined
+
+  ! Copy one integer per cell of the level's octs, such as flag1, from the owners to their copies.
+  subroutine gpu_halo_flag(ilevel, a)
+    integer, intent(in) :: ilevel
+    integer, device :: a(1:twotondim,*)
+#ifndef WITHOUTMPI
+    integer :: ns, nr
+
+    if (.not. has_halo(ilevel)) return
+    ns = soff(ncpu,ilevel)-soff(0,ilevel)
+    nr = roff(ncpu,ilevel)-roff(0,ilevel)
+    call grow_buffers(max(ns,nr)*twotondim)
+    if (ns > 0) then
+       call gather_int_kernel<<<(ns*twotondim+255)/256,256>>>(a, isend, soff(0,ilevel), ns, sbuf)
+       call check_cuda(cudaGetLastError())
+    endif
+    call exchange(ilevel, soff(:,ilevel), roff(:,ilevel), twotondim)
+    if (nr > 0) then
+       call scatter_int_kernel<<<(nr*twotondim+255)/256,256>>>(a, irecv, roff(0,ilevel), nr, rbuf)
+       call check_cuda(cudaGetLastError())
+       call check_cuda(cudaStreamSynchronize(default_stream))
+    endif
+#endif
+  end subroutine gpu_halo_flag
 
 end module gpu_mpi
