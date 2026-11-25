@@ -471,6 +471,8 @@ contains
     threadsX_per_block = 8
     threadsY_per_block = 16
     num_blocks = (num_octs + threadsY_per_block - 1) / threadsY_per_block
+    ! Copies take their owners' values for the level step
+    call gpu_update_copies(sim, ilevel)
     if (num_octs == 0) return
     call nvtxStartRange("GPU Set_unew", color=0)!green
     call set_unew_kernel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(uold, unew, bold, bnew, head_idx, num_octs)
@@ -478,6 +480,23 @@ contains
     call nvtxEndRange()
 
   end subroutine gpu_set_unew
+
+  !> @brief
+  !> On several ranks, the copies of other ranks' octs at one level take their owners' values.
+  subroutine gpu_update_copies(sim, ilevel)
+    use gpu_mpi, only: gpu_halo_update
+    use ramses_commons, only: ramses_t
+    type(ramses_t), intent(in) :: sim
+    integer, intent(in) :: ilevel
+
+    if (sim%g%ncpu <= 1) return
+#ifdef HYDRO
+    call gpu_halo_update(ilevel, uold, nvar)
+#ifdef MHD
+    call gpu_halo_update(ilevel, bold, 6)
+#endif
+#endif
+  end subroutine gpu_update_copies
 
   !> @brief
   !> Synchronization (corrector) step of old hydro variables (uold) due to gravity
@@ -1278,10 +1297,9 @@ contains
   end subroutine cache_oct_range
 
   !> @brief
-  !> Refresh remote copies from their owners and interpolated octs from their parents.
+  !> Refresh interpolated octs from their parents. Copies of other ranks' octs are updated in gpu_set_unew.
   subroutine gpu_refresh_cache(sim, ilevel)
     use nvtx
-    use gpu_mpi, only: gpu_halo_update
     use refine_device, only: refresh_cache_octs_kernel
     use ramses_commons, only: ramses_t
     type(ramses_t), intent(inout) :: sim
@@ -1289,16 +1307,6 @@ contains
 
     integer(kind=4) :: head_idx, num_octs
     integer :: num_threads, num_blocks
-
-    if (sim%g%ncpu > 1 .and. ilevel == sim%r%levelmin) then
-#ifdef HYDRO
-       call gpu_halo_update(ilevel, uold, nvar)
-#ifdef MHD
-       call gpu_halo_update(ilevel, bold, 6)
-#endif
-#endif
-       return
-    endif
 
     call cache_oct_range(sim, ilevel, head_idx, num_octs, num_threads, num_blocks)
     if (num_octs <= 0) return
