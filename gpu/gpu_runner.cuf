@@ -2720,14 +2720,20 @@ contains
     d_rt_c = sim%g%rt_c
 #endif
     nskip = max(nsubgrid/2,1)**ndim
+    ! On several ranks, the copies of level ilevel take their owners' values for the parent stencils
+    if (interpol_type > 0) call gpu_update_copies(sim, ilevel)
     do ilev = ilevel, sim%r%nlevelmax - 1
 
        ! Finer level flags may rely on coarser buffer cells cancelled by
        ! ensure_ref_rules (adaptive time steps): check them now that the
        ! octs of level ilev created in this pass exist
        if (ilev > ilevel) then
-          ! On several ranks, copies of the octs other ranks own next to the octs of this level
-          if (sim%g%ncpu > 1) call gpu_build_level_cache(sim, ilev, .false.)
+          ! On several ranks, copies of the octs other ranks own next to the octs of this level,
+          ! with their values for the parent stencils
+          if (sim%g%ncpu > 1) then
+             call gpu_build_level_cache(sim, ilev, .false.)
+             if (interpol_type > 0) call gpu_update_copies(sim, ilev)
+          endif
           head_idx = sim%m%head(ilev)
           num_octs = sim%m%noct(ilev) / nskip
           num_threads = 128
