@@ -10,7 +10,7 @@ module gpu_mpi
 #endif
   implicit none
   private
-  public :: gpu_halo_build, gpu_halo_update, gpu_halo_refined
+  public :: gpu_halo_build, gpu_halo_update, gpu_halo_flush, gpu_halo_zero, gpu_halo_refined
   public :: gpu_halo_check
 
 #ifndef WITHOUTMPI
@@ -367,6 +367,33 @@ contains
     a(i,idx(i0+k+1)) = buf(k*twotondim*nc+i)
   end subroutine scatter_kernel
 
+  attributes(global) subroutine add_kernel(a, nc, idx, i0, n, buf, off)
+    integer, value :: nc, i0, n, off
+    real(dp), device :: a(1:twotondim*nc,*), buf(*)
+    integer, device :: idx(*)
+    integer :: t, k, i
+
+    t = (blockIdx%x-1)*blockDim%x + threadIdx%x-1
+    if (t >= n*twotondim*nc) return
+    k = t/(twotondim*nc)
+    i = t-k*twotondim*nc+1
+    a(i,idx(i0+k+1)) = a(i,idx(i0+k+1)) + buf(off+k*twotondim*nc+i)
+  end subroutine add_kernel
+
+  attributes(global) subroutine fill_kernel(a, nc, idx, i0, n, val)
+    integer, value :: nc, i0, n
+    real(dp), value :: val
+    real(dp), device :: a(1:twotondim*nc,*)
+    integer, device :: idx(*)
+    integer :: t, k, i
+
+    t = (blockIdx%x-1)*blockDim%x + threadIdx%x-1
+    if (t >= n*twotondim*nc) return
+    k = t/(twotondim*nc)
+    i = t-k*twotondim*nc+1
+    a(i,idx(i0+k+1)) = val
+  end subroutine fill_kernel
+
   ! Refined cells travel as 0 or 1 in the real(dp) buffers.
   attributes(global) subroutine gather_refined_kernel(grid, idx, i0, n, buf)
     type(oct), device :: grid(*)
@@ -494,6 +521,54 @@ contains
     endif
 #endif
   end subroutine gpu_halo_update
+
+  ! Return the values the copies collected to their owners, which add them in rank order; the copies restart at -0.
+  subroutine gpu_halo_flush(ilevel, a, nc)
+    integer, intent(in) :: ilevel, nc
+    real(dp), device :: a(*)
+#ifndef WITHOUTMPI
+    integer :: stride, ns, nr, n, k, r
+
+    if (.not. has_halo(ilevel)) return
+    stride = twotondim*nc
+    ns = roff(ncpu,ilevel)-roff(0,ilevel)
+    nr = soff(ncpu,ilevel)-soff(0,ilevel)
+    call grow_buffers(max(ns,nr)*stride)
+    if (ns > 0) then
+       call gather_kernel<<<(ns*stride+255)/256,256>>>(a, nc, irecv, roff(0,ilevel), ns, sbuf)
+       call check_cuda(cudaGetLastError())
+       call fill_kernel<<<(ns*stride+255)/256,256>>>(a, nc, irecv, roff(0,ilevel), ns, -0.0_dp)
+       call check_cuda(cudaGetLastError())
+    endif
+    call exchange(ilevel, roff(:,ilevel), soff(:,ilevel), stride)
+    if (nr > 0) then
+       do k = 1, npeer(ilevel)
+          r = peers(k,ilevel)
+          n = soff(r,ilevel)-soff(r-1,ilevel)
+          if (n == 0) cycle
+          call add_kernel<<<(n*stride+255)/256,256>>>(a, nc, isend, soff(r-1,ilevel), n, rbuf, &
+               & (soff(r-1,ilevel)-soff(0,ilevel))*stride)
+          call check_cuda(cudaGetLastError())
+       end do
+       call check_cuda(cudaStreamSynchronize(default_stream))
+    endif
+#endif
+  end subroutine gpu_halo_flush
+
+  ! Set one field of the level's copies to -0, which adds to any value without changing it.
+  subroutine gpu_halo_zero(ilevel, a, nc)
+    integer, intent(in) :: ilevel, nc
+    real(dp), device :: a(*)
+#ifndef WITHOUTMPI
+    integer :: nr
+
+    if (.not. has_halo(ilevel)) return
+    nr = roff(ncpu,ilevel)-roff(0,ilevel)
+    if (nr == 0) return
+    call fill_kernel<<<(nr*twotondim*nc+255)/256,256>>>(a, nc, irecv, roff(0,ilevel), nr, -0.0_dp)
+    call check_cuda(cudaGetLastError())
+#endif
+  end subroutine gpu_halo_zero
 
   ! Copy the refined cells of the level's octs from the owners to their copies.
   subroutine gpu_halo_refined(ilevel, grid)

@@ -429,6 +429,7 @@ contains
   subroutine gpu_set_uold(sim, ilevel)
     use nvtx
     use hydro_device, only: set_uold_kernel
+    use gpu_mpi, only: gpu_halo_flush
     use ramses_commons, only: ramses_t
     type(ramses_t), intent(inout)::sim
     integer, intent(in)::ilevel
@@ -441,6 +442,10 @@ contains
     threadsX_per_block = 8
     threadsY_per_block = 16
     num_blocks = (num_octs + threadsY_per_block - 1) / threadsY_per_block
+#ifdef HYDRO
+    ! The coarse corrections this level put into copies go to their owners
+    if (sim%g%ncpu > 1 .and. ilevel > sim%r%levelmin) call gpu_halo_flush(ilevel-1, unew, nvar)
+#endif
     if (num_octs == 0) return
     call nvtxStartRange("GPU Set_uold", color=0)!green
     call set_uold_kernel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(uold, unew, bold, bnew, head_idx, num_octs)
@@ -3054,7 +3059,7 @@ contains
   subroutine gpu_build_level_cache(sim, ilevel)
     use nvtx
     use refine_device
-    use gpu_mpi, only: gpu_halo_build, gpu_halo_refined
+    use gpu_mpi, only: gpu_halo_build, gpu_halo_refined, gpu_halo_zero
     use mdl_module, only: mdl_abort
     use ramses_commons, only: ramses_t
     use cub_inclusive_scan_mod
@@ -3182,9 +3187,12 @@ contains
           call GPU_Error_Check(__FILE__, __LINE__)
           deallocate(miss_d)
        endif
-       ! Copies take their owners' refined cells and values
+       ! Copies take their owners' refined cells and values, and collect coarse corrections from -0
        call gpu_halo_refined(ilevel, grid)
        call gpu_update_copies(sim, ilevel)
+#ifdef HYDRO
+       call gpu_halo_zero(ilevel, unew, nvar)
+#endif
     endif
 
     sim%m%tail_cache(ilevel) = sim%m%ifree_cache - 1
