@@ -2659,7 +2659,7 @@ contains
     use cub_inclusive_scan_mod
     use cub_module, only: radix_sort
     use iso_fortran_env
-    use gpu_mpi, only: gpu_halo_check, gpu_halo_refined
+    use gpu_mpi, only: gpu_halo_check, gpu_halo_check_blocks, gpu_halo_refined
 #ifdef DO_RT
     use rt_parameters, only: nrtvar
 #endif
@@ -3051,8 +3051,14 @@ contains
 
     endif
 
-    ! On several ranks, the copies of level ilevel take the refined cells of their owners
-    if (sim%g%ncpu > 1) call gpu_halo_refined(ilevel, grid)
+    if (sim%g%ncpu > 1) then
+       ! The copies of level ilevel take the refined cells of their owners
+       call gpu_halo_refined(ilevel, grid)
+       ! The finer levels must consist of whole blocks
+       do ilev = ilevel + 1, sim%r%nlevelmax
+          call gpu_halo_check_blocks(sim, grid, ilev, sim%m%head(ilev), sim%m%noct(ilev))
+       end do
+    endif
 
     do ilev = ilevel + 1, sim%r%nlevelmax
        call gpu_build_level_cache(sim, ilev)

@@ -1,6 +1,6 @@
 ! MPI halos for the periodic GPU mesh, level by level.
 module gpu_mpi
-  use amr_parameters, only: ndim, twotondim, dp
+  use amr_parameters, only: ndim, twotondim, dp, nsubgrid
   use oct_commons, only: oct
   use ramses_commons, only: ramses_t
   use mdl_module, only: mdl_abort
@@ -11,7 +11,7 @@ module gpu_mpi
   implicit none
   private
   public :: gpu_halo_build, gpu_halo_update, gpu_halo_flush, gpu_halo_zero, gpu_halo_refined, gpu_halo_flag
-  public :: gpu_halo_check
+  public :: gpu_halo_check, gpu_halo_check_blocks
 
 #ifndef WITHOUTMPI
 #if defined(NPRE) && NPRE == 4
@@ -111,6 +111,48 @@ contains
     old = atomicadd(norphan, 1)
   end subroutine parent_kernel
 
+  ! Count the octs found on no rank whose block holds a copy made in this round (cache slots first on).
+  attributes(global) subroutine mixed_kernel(grid, hash_key, hash_val, hash_size, ckey_max, key_off, &
+       & ilevel, first, ncache, found, slots, n, nmixed)
+    type(oct), device :: grid(*)
+    integer(kind=8), device :: hash_key(*), key_off(*)
+    integer, device :: hash_val(*), ckey_max(*), found(*), slots(*), nmixed
+    integer, value :: hash_size, ilevel, first, ncache, n
+    integer :: k, o, m, d, old, ckey(1:ndim)
+
+    k = (blockIdx%x-1)*blockDim%x + threadIdx%x
+    if (k > n) return
+    do m = 0, nsubgrid**ndim-1
+       do d = 1, ndim
+          ckey(d) = (grid(slots(k))%ckey(d)/nsubgrid)*nsubgrid + mod(m/nsubgrid**(d-1), nsubgrid)
+       end do
+       o = hash_get(hash_key, hash_val, hash_size, oct_key(ckey, ilevel, ckey_max, key_off))
+       if (o < first .or. o >= first+ncache) cycle
+       if (found(o-first+1) /= 0) then
+          old = atomicadd(nmixed, 1)
+          return
+       endif
+    end do
+  end subroutine mixed_kernel
+
+  ! Count the octs that are not in the block of the first oct of their group of nsubgrid**ndim.
+  attributes(global) subroutine split_kernel(grid, head, n, nsplit)
+    type(oct), device :: grid(*)
+    integer, device :: nsplit
+    integer, value :: head, n
+    integer :: k, o, d, old
+    logical :: split
+
+    k = (blockIdx%x-1)*blockDim%x + threadIdx%x
+    if (k > n) return
+    o = head + ((k-1)/nsubgrid**ndim)*nsubgrid**ndim
+    split = o + nsubgrid**ndim > head + n
+    do d = 1, ndim
+       split = split .or. grid(head+k-1)%ckey(d)/nsubgrid /= grid(o)%ckey(d)/nsubgrid
+    end do
+    if (split) old = atomicadd(nsplit, 1)
+  end subroutine split_kernel
+
   ! Store a level's list after the lists of the coarser levels.
   subroutine store_list(h, n0, n, vals)
     integer, allocatable, intent(inout) :: h(:)
@@ -143,7 +185,7 @@ contains
 #ifndef WITHOUTMPI
     integer(kind=8) :: cuts(0:sim%g%ncpu)
     integer(kind=8), device, allocatable :: cuts_d(:)
-    integer, device, allocatable :: owner_d(:), keys_d(:,:), idx_d(:), miss_d(:)
+    integer, device, allocatable :: owner_d(:), keys_d(:,:), idx_d(:), found_d(:), miss_d(:)
     integer, device :: ndefect_d
     integer, allocatable :: owner(:), keys(:,:), keys_out(:,:), keys_in(:,:), list(:), idx(:), reply(:), found(:)
     integer, allocatable :: lsend(:), lrecv(:)
@@ -280,6 +322,22 @@ contains
        write(what,'(a,i0,a)') 'interpolated octs at level ', ilevel, ' without a parent oct'
        call gpu_halo_check(sim, ndefect, trim(what))
 
+       ! At NSUBGRID>1, stop if a block is found in part
+       if (nsubgrid > 1) then
+          ndefect = 0
+          if (nmiss > 0 .and. nr > 0) then
+             allocate(found_d(1:n))
+             found_d = found(1:n)
+             ndefect_d = 0
+             call mixed_kernel<<<(nmiss+127)/128,128>>>(grid, hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, &
+                  & ilevel, first, n, found_d, miss_d, nmiss, ndefect_d)
+             call check_cuda(cudaGetLastError())
+             ndefect = ndefect_d
+             deallocate(found_d)
+          endif
+          write(what,'(a,i0)') 'mixed block replies at level ', ilevel
+          call gpu_halo_check(sim, ndefect, trim(what))
+       endif
        if (allocated(miss_d)) deallocate(miss_d)
     endif
 
@@ -338,6 +396,30 @@ contains
     call mdl_abort(sim%mdl)
 #endif
   end subroutine gpu_halo_check
+
+  ! At NSUBGRID>1, stop every rank when the octs of one level, from head on, do not form whole blocks.
+  subroutine gpu_halo_check_blocks(sim, grid, ilevel, head, n)
+    type(ramses_t), intent(in) :: sim
+    type(oct), device :: grid(*)
+    integer, intent(in) :: ilevel, head, n
+#ifndef WITHOUTMPI
+    integer, device :: nsplit_d
+    integer :: nsplit
+    character(len=64) :: what
+
+    if (sim%g%ncpu <= 1 .or. nsubgrid == 1) return
+    nsplit = 0
+    if (mod(head-1, nsubgrid**ndim) /= 0) nsplit = n
+    if (nsplit == 0 .and. n > 0) then
+       nsplit_d = 0
+       call split_kernel<<<(n+127)/128,128>>>(grid, head, n, nsplit_d)
+       call check_cuda(cudaGetLastError())
+       nsplit = nsplit_d
+    endif
+    write(what,'(a,i0)') 'octs outside a whole block at level ', ilevel
+    call gpu_halo_check(sim, nsplit, trim(what))
+#endif
+  end subroutine gpu_halo_check_blocks
 
 #ifndef WITHOUTMPI
   ! One buffer record per oct: the twotondim*nc values of the field.
