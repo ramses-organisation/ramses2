@@ -2162,12 +2162,8 @@ contains
     call GPU_Error_Check(__FILE__, __LINE__)
     call nvtxEndRange()
 
-    ! A star without a cell or bad SED weights are flagged on the device, report them here
+    ! Bad SED weights are flagged on the device, report them here
     fail = fail_d
-    if (fail == 1) then
-       write(*,*)'Error: a star has no cell at its level or the coarser level in the GPU stellar emission'
-       error stop
-    endif
     if (fail == 2) then
        write(*,*)'Error: bad SED interpolation weights in the GPU stellar emission'
        error stop
@@ -2664,6 +2660,7 @@ contains
     integer(kind=4) :: threadsX_per_block, threadsY_per_block
     integer(kind=4) :: new_ifree, old_ifree, ins_head, new_head, new_tail, new_noct
     integer(kind=4) :: ilev, ibit, ibucket, skip_bit
+    integer(kind=4) :: nskip
     ! Interpolation parameters for prolongation.
     integer(kind=4) :: interpol_var, interpol_type
     real(kind=dp) :: smallr_d
@@ -2699,24 +2696,37 @@ contains
     ! Copy host free memory pointer to device variable
     ifree_d = sim%m%ifree
 
-    ! Create new octs and put them at the end
+    ! Create new octs and put them at the end, level by level, coarse to fine
     old_ifree = sim%m%ifree
     ins_head = old_ifree
     threadsX_per_block = 8
     threadsY_per_block = 16
-    if (interpol_type == 0) then
-       ! Injection: one launch refines all levels
-       head_idx = sim%m%head(ilevel)
-       num_octs = 0
-       do ilev = ilevel, sim%r%nlevelmax - 1
-          num_octs = num_octs + sim%m%noct(ilev)
-       end do
+#ifdef DO_RT
+    ! Reduced light speed of each level, for the photon densities of new octs
+    d_rt_c = sim%g%rt_c
+#endif
+    nskip = max(nsubgrid/2,1)**ndim
+    do ilev = ilevel, sim%r%nlevelmax - 1
+
+       ! Finer level flags may rely on coarser buffer cells cancelled by
+       ! ensure_ref_rules (adaptive time steps): check them now that the
+       ! octs of level ilev created in this pass exist
+       if (ilev > ilevel) then
+          head_idx = sim%m%head(ilev)
+          num_octs = sim%m%noct(ilev) / nskip
+          num_threads = 128
+          num_blocks = (num_octs + num_threads - 1) / num_threads
+          if (num_octs > 0) then
+             call enforce_rules_hash<<<num_blocks, num_threads>>>(flag1, grid, hash_key, hash_val, sim%m%hash_size, &
+                  & ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, sim%m%ngridmax, nskip, head_idx, num_octs)
+             call GPU_Error_Check(__FILE__, __LINE__)
+          endif
+       endif
+
+       head_idx = sim%m%head(ilev)
+       num_octs = sim%m%noct(ilev)
        num_blocks = (num_octs + threadsY_per_block - 1) / threadsY_per_block
        if (num_octs > 0) then
-#ifdef DO_RT
-          ! Reduced light speed of each level, for the photon densities of new octs
-          d_rt_c = sim%g%rt_c
-#endif
           call refine_kernel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(grid, flag1, &
                & uold, bold, f, phi, phi_old, &
                & ifree_d, sim%m%ngridmax, head_idx, num_octs, &
@@ -2726,43 +2736,21 @@ contains
 #endif
                & interpol_var, interpol_type, smallr_d)
           call GPU_Error_Check(__FILE__, __LINE__)
-       endif
-    else
-       ! Interpolation: refine level by level, coarse to fine
-#ifdef DO_RT
-       ! Reduced light speed of each level, for the photon densities of new octs
-       d_rt_c = sim%g%rt_c
-#endif
-       do ilev = ilevel, sim%r%nlevelmax - 1
-          head_idx = sim%m%head(ilev)
-          num_octs = sim%m%noct(ilev)
-          num_blocks = (num_octs + threadsY_per_block - 1) / threadsY_per_block
-          if (num_octs > 0) then
-             call refine_kernel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(grid, flag1, &
-                  & uold, bold, f, phi, phi_old, &
-                  & ifree_d, sim%m%ngridmax, head_idx, num_octs, &
-                  & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
-#ifdef DO_RT
-                  & rtuold, d_rt_c, &
-#endif
-                  & interpol_var, interpol_type, smallr_d)
-             call GPU_Error_Check(__FILE__, __LINE__)
 
-             ! Insert the octs just created in the hash table, unless main memory is full
-             new_ifree = ifree_d
-             if (new_ifree - 1 > sim%r%ngridmax) exit
-             num_octs = new_ifree - ins_head
-             num_threads = 128
-             num_blocks = (num_octs + num_threads - 1) / num_threads
-             if (num_octs > 0) then
-                call insert_hash_kernel<<<num_blocks, num_threads>>>(grid, hash_key, hash_val, sim%m%hash_size, &
-                     & ckey_max, key_off, ins_head, num_octs)
-                call GPU_Error_Check(__FILE__, __LINE__)
-             end if
-             ins_head = new_ifree
-          endif
-       end do
-    endif
+          ! Insert the octs just created in the hash table, unless main memory is full
+          new_ifree = ifree_d
+          if (new_ifree - 1 > sim%r%ngridmax) exit
+          num_octs = new_ifree - ins_head
+          num_threads = 128
+          num_blocks = (num_octs + num_threads - 1) / num_threads
+          if (num_octs > 0) then
+             call insert_hash_kernel<<<num_blocks, num_threads>>>(grid, hash_key, hash_val, sim%m%hash_size, &
+                  & ckey_max, key_off, ins_head, num_octs)
+             call GPU_Error_Check(__FILE__, __LINE__)
+          end if
+          ins_head = new_ifree
+       endif
+    end do
 
     ! Copy back to host new free memory pointer ifree
     sim%m%ifree = ifree_d
@@ -2777,17 +2765,6 @@ contains
        write(*,*)'New octs:', nmake
        stop
     endif
-
-    ! Insert new octs not yet in the hash table
-    head_idx = ins_head
-    num_octs = new_ifree - ins_head
-    num_threads = 128
-    num_blocks = (num_octs + num_threads - 1) / num_threads
-    if (num_octs > 0) then
-       call insert_hash_kernel<<<num_blocks, num_threads>>>(grid, hash_key, hash_val, sim%m%hash_size, &
-            & ckey_max, key_off, head_idx, num_octs)
-       call GPU_Error_Check(__FILE__, __LINE__)
-    end if
 
     ! Remove old octs by setting lev to zero and free their hash table entry
     do ilev = sim%r%nlevelmax, ilevel+1, -1
@@ -3537,10 +3514,11 @@ contains
     integer, intent(in)::ilevel
 
     integer(kind=4) :: head_idx, num_octs
-    integer :: num_threads, num_blocks
+    integer :: num_threads, num_blocks, nskip
 
+    nskip = max(nsubgrid/2,1)**ndim
     head_idx = sim%m%head(ilevel)
-    num_octs = sim%m%noct(ilevel)
+    num_octs = sim%m%noct(ilevel) / nskip
 
     num_threads = 128
     num_blocks = (num_octs + num_threads - 1) / num_threads
@@ -4568,11 +4546,11 @@ contains
     if (num_octs > 0) then
        call nvtxStartRange("GPU cmp_residual", color=1)!blue
        if (ifine == ilevel) then
-          call cmp_residual<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(phi, f, nbor, &
+          call cmp_residual<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(phi, f, nbor, subgridsize, &
                & head_idx, num_octs, fourpi, offset, oneoverdx2, sim%m%ngridmax)
           call GPU_Error_Check(__FILE__, __LINE__)
        else
-          call cmp_residual<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(phi_mg, f_mg, nbor_mg, &
+          call cmp_residual<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(phi_mg, f_mg, nbor_mg, threetondim, &
                & head_idx, num_octs, fourpi, offset, oneoverdx2, sim%m_mg%ngridmax)
           call GPU_Error_Check(__FILE__, __LINE__)
        endif
@@ -4621,11 +4599,11 @@ contains
     if (num_octs > 0) then
        call nvtxStartRange("GPU gauss_seidel", color=1)!blue
        if (ifine == ilevel) then
-          call gauss_seidel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(phi, f, nbor, &
+          call gauss_seidel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(phi, f, nbor, subgridsize, &
                & head_idx, num_octs, dx2, safe, redstep, sim%m%ngridmax)
           call GPU_Error_Check(__FILE__, __LINE__)
        else
-          call gauss_seidel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(phi_mg, f_mg, nbor_mg, &
+          call gauss_seidel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(phi_mg, f_mg, nbor_mg, threetondim, &
                & head_idx, num_octs, dx2, safe, redstep, sim%m_mg%ngridmax)
           call GPU_Error_Check(__FILE__, __LINE__)
        endif

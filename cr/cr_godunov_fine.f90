@@ -187,7 +187,7 @@ subroutine set_cruold(r, g, m, ilevel)
               fred = sqrt(sum((m%crunew(j,iFlx:iFlx+ndim-1,i))**2))/Ecrc*sqrt3
               if(fred .gt. 1d0) then ! Too big so normalize
                  m%crunew(j,iFlx:iFlx+ndim-1,i) &
-                      = m%unew(j,iFlx:iFlx+ndim-1,i)/fred
+                      = m%crunew(j,iFlx:iFlx+ndim-1,i)/fred
               endif
            end do
         end do
@@ -277,7 +277,7 @@ subroutine conserve_cr_flux(r, g, m, ilevel)
               fred = sqrt(sum((m%cruold(j,iFlx:iFlx+ndim-1,i))**2))/Ecrc*sqrt3
               if(fred .gt. 1d0) then ! Too big so normalize
                  m%cruold(j,iFlx:iFlx+ndim-1,i) &
-                      = m%uold(j,iFlx:iFlx+ndim-1,i)/fred
+                      = m%cruold(j,iFlx:iFlx+ndim-1,i)/fred
               endif
            end do
         end do

@@ -13,6 +13,7 @@ subroutine m_dump_all(pst,write_bkp_file)
   use mdl_module, only: mdl_mkdir, mdl_wtime
   use cooling_module, only: output_cool
   use output_rt_module, only: r_output_rt,file_descriptor_rt,output_rtinfo,output_rt_groups
+  use SED_module, only: write_SED_table
   use output_cr_module, only: r_output_cr,file_descriptor_cr,output_crinfo
   use turb_commons, only: write_turb_fields
 #ifdef _CUDA
@@ -127,6 +128,7 @@ subroutine m_dump_all(pst,write_bkp_file)
         call file_descriptor_rt(r,filename,write_bkp_file)
         filename=TRIM(filedir)//'rt_info.txt'
         call output_rtinfo(r,g,filename)
+        if(r%star)call write_SED_table(pst%s%SED,TRIM(filedir))
         if(write_bkp_file)then
            filename=TRIM(filedir)//'rt_groups.bin'
            call output_rt_groups(r,filename)

@@ -254,11 +254,12 @@ module metal_interface
       integer(c_int), value :: head_idx, num_octs, num_nbors
     end subroutine mtl_flag_count
 
-    ! Clear flag1 if any 3×3×3 neighbour slot is absent or in ghost cache.
-    subroutine mtl_enforce_rules(head_idx, num_octs, ngridmax) &
+    ! Clear flag1 of a group of (nsubgrid/2)**3 octs if any 3×3×3 neighbour
+    ! slot of one oct of the group is absent or in ghost cache.
+    subroutine mtl_enforce_rules(head_idx, num_groups, ngridmax) &
         bind(C, name="mtl_enforce_rules")
       import c_int
-      integer(c_int), value :: head_idx, num_octs, ngridmax
+      integer(c_int), value :: head_idx, num_groups, ngridmax
     end subroutine mtl_enforce_rules
 
     ! Build father[] array: father[oct] = 1-based parent oct via hash lookup.
@@ -344,6 +345,13 @@ module metal_interface
       import c_int
       integer(c_int), value :: head_idx, num_octs, hash_size
     end subroutine mtl_insert_hash_all
+
+    ! Same check as mtl_enforce_rules, with hash lookups, inside the refine pass.
+    subroutine mtl_enforce_rules_hash(head_idx, num_groups, nskip, ngridmax, hash_size) &
+        bind(C, name="mtl_enforce_rules_hash")
+      import c_int
+      integer(c_int), value :: head_idx, num_groups, nskip, ngridmax, hash_size
+    end subroutine mtl_enforce_rules_hash
 
     ! Initialise swap_global to identity permutation.
     subroutine mtl_init_swap_table(head_idx, num_octs) &

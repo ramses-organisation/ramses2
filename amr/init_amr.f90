@@ -121,6 +121,7 @@ subroutine init_amr(r,g,m,type)
   endif
   if(type=='mg')then
      m%ngridmax=r%ngridmax/7
+     if(r%ngridmax_mg>0)m%ngridmax=r%ngridmax_mg
      m%ncachemax=MAX(r%ncachemax/7,10000)
   endif
 
@@ -486,7 +487,6 @@ subroutine init_params(mdl,r,g)
      inquire(file=file_params, exist=file_exist)
      if(file_exist)then
         call input_params(mdl,r,g,file_params,nfile_file,ncpu_file,levelmin_file,nlevelmax_file)
-        if(g%myid==1)write(*,'(" Restarting from backup number ",I8)')r%nrestart
         if(g%myid==1)write(*,'(" Restart file has ",I8," files")')ncpu_file
      else
         if(g%myid==1)write(*,'(" Could not restart from file ",(A))')'backup_'//TRIM(nchar)
@@ -499,7 +499,6 @@ subroutine init_params(mdl,r,g)
         inquire(file=file_params, exist=file_exist)
         if(file_exist)then
            call input_params(mdl,r,g,file_params,nfile_file,ncpu_file,levelmin_file,nlevelmax_file)
-           if(g%myid==1)write(*,'(" Starting from ramses output folder ",A)')TRIM(r%initfile(r%levelmin))
            if(g%myid==1)write(*,'(" Output folder has ",I0," files")')nfile_file
         else
            if(g%myid==1)write(*,'(" Could not read folder ",(A))')r%initfile(r%levelmin)

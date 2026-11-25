@@ -1,4 +1,5 @@
 subroutine write_gitinfo
+#include "gitinfo.h"
   use amr_parameters, ONLY:builddate,buildcommand,patchdir,gitrepo,gitbranch,githash
 
   builddate = BUILDDATE

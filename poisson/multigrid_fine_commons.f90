@@ -512,7 +512,7 @@ subroutine build_mg(s,m,ifinelevel)
                  if(m_mg%ifree.GT.m_mg%ngridmax)then
                     write(*,*)'No more free memory'
                     write(*,*)'in multigrid'
-                    write(*,*)'Increase ngridmax'
+                    write(*,*)'Increase ngridmax_mg'
                     call mdl_abort(mdl)
                  end if
                  ! Insert new grid in hash table

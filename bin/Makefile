@@ -387,8 +387,9 @@ test_cooling:	$(MODOBJ) test_cooling.o
 	$(F90) $(FFLAGS) $(MODOBJ) test_cooling.o -o test_cooling $(LIBS)
 #############################################################################
 write_gitinfo.o: FORCE
-	$(FC) -O0 -cpp -DPATCH=\'"$(PATCH)"\' -DGITBRANCH=\'"$(GITBRANCH)"\' -DGITHASH=\'"$(GITHASH)"\' \
-                -DGITREPO=\'"$(GITREPO)"\' -DBUILDDATE=\'"$(BUILDDATE)"\' -DBUILDCOMMAND=\'"$(BUILDCOMMAND)"\' -c ../amr/write_gitinfo.f90 -o $@
+	@printf '#define %s "%s"\n' PATCH "$(PATCH)" GITBRANCH "$(GITBRANCH)" GITHASH "$(GITHASH)" \
+	  GITREPO "$(GITREPO)" BUILDDATE "$(BUILDDATE)" BUILDCOMMAND "$(BUILDCOMMAND)" > gitinfo.h
+	$(FC) -O0 -cpp -I. -c ../amr/write_gitinfo.f90 -o $@
 #############################################################################
 cub_inclusive_scan_c.o: cub_inclusive_scan.h cub_inclusive_scan.cu
 	nvcc -arch=$(CUDA_ARCH) -O3 -lineinfo -c $(GPU_PATH)/cub_inclusive_scan.cu -o cub_inclusive_scan_c.o
@@ -439,7 +440,7 @@ FORCE:
 -include deps.mk
 #############################################################################
 clean :
-	rm -f *.o *.$(MOD) *.air *.metallib
+	rm -f *.o *.$(MOD) *.air *.metallib gitinfo.h
 
 clobber: clean
 	-find . -type d -name "NDIM*" -prune -exec rm -rf '{}' \;

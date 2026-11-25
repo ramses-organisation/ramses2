@@ -67,7 +67,11 @@ subroutine m_rt_step(pst,ilevel)
      call r_set_rtuold(pst,ilevel,1)
 
      ! Source terms for photo-chemistry
-     if(r%neq_chem)call r_cooling_fine(pst,ilevel,1)
+     if(r%neq_chem)then
+        call m_timer('rt - chemistry','start')
+        call r_cooling_fine(pst,ilevel,1)
+        call m_timer('radiative transfer','start')
+     endif
 
   end do
   ! End RT subcycle loop
@@ -78,7 +82,11 @@ subroutine m_rt_step(pst,ilevel)
   ! Restriction operator to update coarser level split cells
   call m_rt_upload_fine(pst,ilevel)
 
-  if (g%myid==1 .and. r%rt_nsubcycle .gt. 1) write(*,901) ilevel, i_substep
+  ! Track subcycle range, printed at the next coarse step printout
+  g%rt_nsub_min = min(g%rt_nsub_min, i_substep)
+  g%rt_nsub_max = max(g%rt_nsub_max, i_substep)
+
+  if (r%verbose .and. r%rt_nsubcycle .gt. 1) write(*,901) ilevel, i_substep
 901 format (' Performed level', I3, ' RT-step with ', I5, ' subcycles')
 
   end associate

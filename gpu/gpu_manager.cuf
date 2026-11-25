@@ -691,7 +691,7 @@ subroutine gpu_allocate_mg(sim)
 
 #ifdef GRAV
   allocate(grid_mg(1:sim%m_mg%ngridmax+sim%m_mg%ncachemax))
-  allocate(father_mg(1:sim%r%ngridmax+sim%r%ngridmax/7+sim%m_mg%ncachemax))
+  allocate(father_mg(1:sim%r%ngridmax+sim%m_mg%ngridmax+sim%m_mg%ncachemax))
   allocate(nbor_mg(1:threetondim,1:sim%m_mg%ngridmax))
   father_mg=0
   nbor_mg=0

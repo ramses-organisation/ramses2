@@ -97,6 +97,7 @@ module amr_commons
      real(kind=8)::epsilon=1.0D-4     ! Convergence criterion for Poisson solvers
      integer :: nvcycle = -1          ! Desired number of V-cycles
      integer :: mg_safe_mode_reset = 0 ! Number of solves a level stays in safe mode (0 = never reset)
+     integer :: ngridmax_mg=0      ! Maximum number of multigrid octs (0: ngridmax/7)
      real(kind=8),dimension(1:10)::gravity_params=0.0 ! Gravity parameters
      integer :: gravity_type=0     ! Type of force computation
      integer :: cic_levelmax=0     ! Maximum level for CIC dark matter interpolation
@@ -799,6 +800,7 @@ module amr_commons
      ! RT global variables
      real(kind=8),dimension(1:MAXLEVEL)::rt_c=1d0            ! Reduced lightspeed in code units
      real(kind=8),dimension(1:MAXLEVEL)::rt_c_cgs            ! Reduced lightspeed in [cm s-1]
+     integer::rt_nsub_min=huge(0),rt_nsub_max=0             ! RT subcycles since last printout
 
      ! CR global variables
      real(kind=8),dimension(1:MAXLEVEL)::cr_c=1d0            ! Reduced lightspeed in code units

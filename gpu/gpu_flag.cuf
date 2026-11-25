@@ -305,16 +305,17 @@ contains
   ! =========================================================================
 
   ! =========================================================================
-  attributes(global) subroutine enforce_rules(flag1, grid, nbor, head_idx, num_octs, ngridmax)
+  attributes(global) subroutine enforce_rules(flag1, grid, nbor, head_idx, num_groups, ngridmax)
     type(oct), device :: grid(*)
     integer(kind=4), device :: flag1(1:twotondim,*)
     integer(kind=4), device :: nbor(1:subgridsize,*)
     integer(kind=4), intent(in), value :: head_idx
-    integer(kind=4), intent(in), value :: num_octs
+    integer(kind=4), intent(in), value :: num_groups
     integer(kind=4), intent(in), value :: ngridmax
 
-    integer :: tid, bid, oct_idx, subgrid_idx
-    integer :: i, j, k, in, jn, kn
+    integer :: tid, bid, group_idx, subgrid_idx, oct_idx
+    integer :: gsize, ngroup, gi, gj, gk
+    integer :: i, j, k
     integer :: ind, ind_nbor
     logical :: ok
 
@@ -322,43 +323,50 @@ contains
     tid = threadIdx%x - 1
     bid = blockIdx%x - 1
 
-    ! Compute oct idx
-    oct_idx = tid + bid * blockDim%x
-    if (oct_idx >= num_octs) return
-    oct_idx = head_idx + oct_idx
+    ! Compute group idx
+    group_idx = tid + bid * blockDim%x
+    if (group_idx >= num_groups) return
 
-    ! Compute subgrid idx
-    subgrid_idx = (oct_idx - 1) / nsubgridtondim + 1
+    ! Octs per direction in a group of (nsubgrid/2)**ndim octs,
+    ! and groups per direction in a subgrid
+    gsize = max(nsubgrid/2, 1)
+    ngroup = nsubgrid / gsize
 
-    ! Compute oct idx within subgrid
-    oct_idx = (oct_idx - 1) - (subgrid_idx - 1) * nsubgridtondim
-    k = oct_idx / nsubgridsq
-    j = (oct_idx - k * nsubgridsq) / nsubgrid
-    i = oct_idx - j * nsubgrid - k * nsubgridsq
-    i = i + 1; j = j + 1; k = k + 1
+    ! Compute subgrid idx and group position within subgrid
+    group_idx = (head_idx - 1) / gsize**3 + group_idx
+    subgrid_idx = group_idx / ngroup**3 + 1
+    group_idx = group_idx - (subgrid_idx - 1) * ngroup**3
+    gk = group_idx / ngroup**2
+    gj = (group_idx - gk * ngroup**2) / ngroup
+    gi = group_idx - gj * ngroup - gk * ngroup**2
 
-    ! Compute true oct idx
-    ind_nbor = 1 + i + nsubgridp2 * j  + nsubgridp2sq * k
-    oct_idx = nbor(ind_nbor, subgrid_idx)
-
-    ! Check if one neighboring grid is missing or in the cache
+    ! Check if one neighboring grid of one oct of the group is missing or in the cache
     ok = .false.
-    do in = -1, 1
-       do jn = -1, 1
-          do kn = -1, 1
-             ind = 1 + (i + in) + nsubgridp2 * (j + jn)  + nsubgridp2sq * (k + kn)
+    do k = gk * gsize, gk * gsize + gsize + 1
+       do j = gj * gsize, gj * gsize + gsize + 1
+          do i = gi * gsize, gi * gsize + gsize + 1
+             ind = 1 + i + nsubgridp2 * j  + nsubgridp2sq * k
              ok = ok .or. (nbor(ind, subgrid_idx) == 0)
              ok = ok .or. (nbor(ind, subgrid_idx) > ngridmax)
           end do
        end do
     end do
 
-    ! If one grid is missing, set flag1 to zero (no refinement allowed).
+    ! If one grid is missing, set flag1 to zero (no refinement allowed)
+    ! for all octs of the group.
     ! Only cancel new refinements: unflagging a refined cell would
     ! destroy its child and could orphan finer octs (2:1 violation)
     if (ok) then
-       do ind = 1, twotondim
-          if (.not. grid(oct_idx)%refined(ind)) flag1(ind, oct_idx) = 0
+       do k = gk * gsize + 1, gk * gsize + gsize
+          do j = gj * gsize + 1, gj * gsize + gsize
+             do i = gi * gsize + 1, gi * gsize + gsize
+                ind_nbor = 1 + i + nsubgridp2 * j  + nsubgridp2sq * k
+                oct_idx = nbor(ind_nbor, subgrid_idx)
+                do ind = 1, twotondim
+                   if (.not. grid(oct_idx)%refined(ind)) flag1(ind, oct_idx) = 0
+                end do
+             end do
+          end do
        end do
     end if
 

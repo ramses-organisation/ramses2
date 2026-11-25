@@ -95,14 +95,14 @@ subroutine update_cr_vars(r, g)
   implicit none
   type(run_t) :: r
   type(global_t) :: g
-  real(kind=8)::scale_nH,scale_T2,scale_l,scale_d,scale_t,scale_v,scale_kappa
+  real(kind=8)::scale_nH,scale_T2,scale_l,scale_d,scale_t,scale_v,scale_kappa,cr_c
   integer::i,igrp
   !-------------------------------------------------------------------------
   call units(r,g,scale_l,scale_t,scale_d,scale_v,scale_nH,scale_T2)
-  !do i=r%nlevelmax,r%levelmin,-1
-  !  g%cr_c_cgs(i) = c_cgs * r%cr_c_fraction
-  !  g%cr_c(i) = g%cr_c_cgs(i) / scale_v
-  !enddo
+  call get_cr_c(r, g, cr_c)
+  do i=r%levelmin,r%nlevelmax
+     g%cr_c(i) = cr_c
+  end do
 
   scale_kappa = scale_l**2/scale_t
   r%cr_dmax_code=r%cr_dmax/scale_kappa

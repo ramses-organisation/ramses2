@@ -141,22 +141,19 @@ subroutine star_rt_feedback(s, p, ilevel)
 
      end if
 
-     if(.not. ok_level)then
-        write(*,*)"Something went wrong in star_rt_feedback"
-        write(*,*)"Current level grid and coarser grid both dont exist..."
-        stop
-     endif
+     ! No cell at either level: skip the star, as the supernova feedback does (to be investigated)
+     if(.not. ok_level)cycle
 
      ! Compute star particle properties
      if(r%metal) then
-        z = max(p%zp(ipart), 1d-5)                     ! [m_metals/m_tot]
+        z = max(dble(p%zp(ipart)), 1d-5)               ! [m_metals/m_tot]
      else
         z = max(r%z_ave*0.02, 1d-5)
      endif
      age = (g%texp - p%tp(ipart)) * code2Gyr
 
      ! Possibilities: Born i) before dt, ii) within dt, iii) after dt:
-     dt_loc_Gyr = max(min(dt_Gyr, age), 0.)
+     dt_loc_Gyr = max(min(dt_Gyr, age), 0d0)
      call getNPhotonsEmitted(r, s%SED, age, dt_loc_Gyr, z, part_NpInp(1:nrtgrp))
 
      mass = p%mp(ipart)

@@ -358,6 +358,7 @@ subroutine m_read_params(pst)
   real(kind=8)::epsilon=1.0D-4    ! Convergence criterion
   integer :: nvcycle = -1         ! Desired number of V-cycles
   integer :: mg_safe_mode_reset = 0 ! Number of solves a level stays in safe mode (0 = never reset)
+  integer :: ngridmax_mg=0      ! Maximum number of multigrid octs (0: ngridmax/7)
   real(kind=8),dimension(1:10)::gravity_params=0.0 ! Gravity parameters
   integer :: gravity_type=0 ! Type of gravity calculations (see user guide)
   integer :: cic_levelmax=0 ! Maximum level for CIC dark matter interpolation
@@ -632,7 +633,7 @@ subroutine m_read_params(pst)
   namelist/amr_params/levelmin,levelmax,ngridmax,ncachemax,ngridtot &
        & ,npartmax,nparttot,nexpand,boxlen
   ! Poisson solver parameters
-  namelist/poisson_params/epsilon,nvcycle,mg_safe_mode_reset,gravity_type,gravity_params &
+  namelist/poisson_params/epsilon,nvcycle,mg_safe_mode_reset,ngridmax_mg,gravity_type,gravity_params &
        & ,cg_levelmin,cic_levelmax,fast_solver,gravity_test &
        & ,part_mass_deposition_scheme,part_dep_algo,part_force_interpolation_scheme &
        & ,star_mass_deposition_scheme,star_dep_algo,star_force_interpolation_scheme &
@@ -999,9 +1000,9 @@ subroutine m_read_params(pst)
   if(pic.and.npartmax>0)part=.true.
 #ifdef HYDRO
   if(.not. hydro)then
-     write(*,*)'You are not using the hydro solver but'
-     write(*,*)'the code was compiled with HYDRO=1'
-     write(*,*)'This might not be optimal but I am still running.'
+     write(*,'(1x,a)')c_dim()//'You are not using the hydro solver but'//c_reset()
+     write(*,'(1x,a)')c_dim()//'the code was compiled with HYDRO=1'//c_reset()
+     write(*,'(1x,a)')c_dim()//'This might not be optimal but I am still running.'//c_reset()
   endif
 #else
   if(hydro)then
@@ -1013,9 +1014,9 @@ subroutine m_read_params(pst)
 #endif
 #ifdef GRAV
   if(.not. poisson)then
-     write(*,*)'You are not using the poisson solver but'
-     write(*,*)'the code was compiled with GRAV=1'
-     write(*,*)'This might not be optimal but I am still running.'
+     write(*,'(1x,a)')c_dim()//'You are not using the poisson solver but'//c_reset()
+     write(*,'(1x,a)')c_dim()//'the code was compiled with GRAV=1'//c_reset()
+     write(*,'(1x,a)')c_dim()//'This might not be optimal but I am still running.'//c_reset()
   endif
 #else
   if(poisson)then
@@ -1770,6 +1771,7 @@ subroutine m_read_params(pst)
   s%r%epsilon=epsilon
   s%r%nvcycle=nvcycle
   s%r%mg_safe_mode_reset=mg_safe_mode_reset
+  s%r%ngridmax_mg=ngridmax_mg
   s%r%gravity_type=gravity_type
   s%r%gravity_params=gravity_params
   s%r%cic_levelmax=cic_levelmax
@@ -2264,9 +2266,63 @@ subroutine m_read_params(pst)
   ! Broadcast parameters to all CPUs.
   call m_broadcast_params(pst)
 
+  ! Announce where initial conditions come from
+  call print_ic_source(pst)
+
   end associate
 
 end subroutine m_read_params
+!#########################################################################
+!#########################################################################
+!#########################################################################
+!#########################################################################
+subroutine print_ic_source(pst)
+  use ramses_commons, only: pst_t
+  use color_module, only: c_bold, c_green, c_mark, c_reset
+  implicit none
+  type(pst_t)::pst
+  !--------------------------------------------------------------------
+  ! Print one milestone line describing where initial conditions come from
+  !--------------------------------------------------------------------
+  integer::ilevel,ilevel_max
+  character(len=5)::nchar
+  character(len=:),allocatable::msg
+
+  associate(r=>pst%s%r)
+
+  select case(TRIM(r%filetype))
+  case('restart')
+     call title(r%nrestart,nchar)
+     msg='Restarting from backup_'//TRIM(nchar)
+  case('ramses')
+     msg='Reading initial conditions from ramses output folder '//TRIM(r%initfile(r%levelmin))
+  case('grafic')
+     msg='Reading initial conditions from grafic files in '//TRIM(r%initfile(r%levelmin))
+  case('grafic_zoom')
+     ilevel_max=r%levelmin
+     do ilevel=r%levelmin+1,r%nlevelmax
+        if(r%initfile(ilevel)==' ')exit
+        ilevel_max=ilevel
+     end do
+     msg='Reading initial conditions from grafic_zoom files in '//TRIM(r%initfile(r%levelmin))
+     write(*,'(1x,A,A," (levels ",I0," to ",I0,")",A)')c_bold()//c_green()//c_mark(),msg,r%levelmin,ilevel_max,c_reset()
+     return
+  case('gadget')
+     msg='Reading initial conditions from gadget file '//TRIM(r%initfile(r%levelmin))
+  case('ascii')
+     if(r%initfile(r%levelmin)==' ')then
+        msg='Computing initial conditions from analytical model'
+     else
+        msg='Reading initial conditions from ascii files in '//TRIM(r%initfile(r%levelmin))
+     endif
+  case default
+     msg='Initial conditions from unknown filetype '//TRIM(r%filetype)
+  end select
+  write(*,'(1x,A)')c_bold()//c_green()//c_mark()//msg//c_reset()
+
+  end associate
+
+end subroutine print_ic_source
 !#########################################################################
 !#########################################################################
 !#########################################################################

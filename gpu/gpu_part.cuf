@@ -4385,7 +4385,8 @@ attributes(global) subroutine kick_drift_part_kernel(xp_d, vp_d, fp_d, levelp_d,
 
   integer :: thread_idx, block_idx, idx, ipart, idim, lp
   real(kind=8) :: skip(1:3), x(1:3), x_coarse(1:3), ff(1:3)
-  real(kind=8) :: dteff, xnew
+  real(kind=8) :: dteff
+  real(kind=dp) :: xnew
   real(kind=dp) :: gamma, norm2, fnorm, delta
   logical :: ok_level
 

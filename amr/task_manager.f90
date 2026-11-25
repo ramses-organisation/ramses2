@@ -85,7 +85,7 @@ function worker_init(mdl) result(pst)
   use input_part_gadget_module, only: r_input_part_gadget
   use input_part_module, only: r_npart_max, r_mass_min_part, r_broadcast_mp_min, r_check_part_emission
   use update_time_module, only: r_broadcast_aexp, r_hash_stats
-  use init_refine_basegrid_module, only:r_init_refine_basegrid,r_collect_noct,r_noct_tot,r_noct_min,r_noct_max,r_noct_used_max
+  use init_refine_basegrid_module, only:r_init_refine_basegrid,r_collect_noct,r_noct_tot,r_noct_min,r_noct_max,r_noct_stats,r_noct_used_max,out_noct_stats_t
   use init_refine_restart_module, only: r_init_refine_restart
   use init_refine_ramses_module, only: r_init_refine_ramses
   use load_balance_module, only: r_load_balance,r_balance_part,r_broadcast_bound_key,r_collect_bound_key
@@ -169,6 +169,7 @@ function worker_init(mdl) result(pst)
 
   integer::dummy
   integer(kind=8)::dummy8
+  type(out_noct_stats_t)::dummy_noct_stats
   type(in_core_acc_t)::dummy_core_acc_in
   type(out_core_acc_t)::dummy_core_acc_out
   type(in_core_retire_t)::dummy_core_retire_in
@@ -217,6 +218,7 @@ function worker_init(mdl) result(pst)
   call mdl_add_service(pst%s%mdl,MDL_NOCT_TOT,               pst,C_FUNLOC(r_noct_tot),1,2,"noct_tot")
   call mdl_add_service(pst%s%mdl,MDL_NOCT_MIN,               pst,C_FUNLOC(r_noct_min),1,1,"noct_min")
   call mdl_add_service(pst%s%mdl,MDL_NOCT_MAX,               pst,C_FUNLOC(r_noct_max),1,1,"noct_max")
+  call mdl_add_service(pst%s%mdl,MDL_NOCT_STATS,             pst,C_FUNLOC(r_noct_stats),1,storage_size(dummy_noct_stats)/32,"noct_stats")
   call mdl_add_service(pst%s%mdl,MDL_NOCT_USED_MAX,          pst,C_FUNLOC(r_noct_used_max),1,1,"noct_used_max")
   call mdl_add_service(pst%s%mdl,MDL_INIT_REFINE_BASEGRID,   pst,C_FUNLOC(r_init_refine_basegrid),1,0,"init_refine_basegrid")
   call mdl_add_service(pst%s%mdl,MDL_INIT_REFINE_RESTART,    pst,C_FUNLOC(r_init_refine_restart),0,2*nhilbert*(pst%s%g%ncpu+1),"init_refine_restart")

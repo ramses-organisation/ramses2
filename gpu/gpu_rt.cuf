@@ -900,7 +900,7 @@ contains
 
   ! =========================================================================
   !> Luminosity of each star of the window of one level and the key of the cell that receives it, as
-  !> star_rt_feedback: one thread per star. fail is 1 for a star without a cell, 2 for bad SED weights
+  !> star_rt_feedback: one thread per star. fail is 2 for bad SED weights
   attributes(global) subroutine rt_star_contrib_kernel(star_xp, star_mp, star_tp, star_zp, leading, &
        & head_idx, num_stars, hash_key, hash_val, hash_size, ckey_max, key_off, d_skip, ngridmax, ilevel, levelmin, &
        & dx_loc, scale_inp_cell, scale_inp_cell_coarse, code2Gyr, texp, dt_Gyr, t_SN_Gyr, eta_SNII, z_nometal, &
@@ -955,9 +955,8 @@ contains
        if (igrid > ngridmax) igrid = 0
     end if
 
-    ! No cell at either level
+    ! No cell at either level: skip the star, as the supernova feedback does (to be investigated)
     if (igrid == 0) then
-       fail_old = atomicmax(fail, 1)
        key(j) = key_none
        do ig = 1, nrtgrp
           lum(j,ig) = 0d0

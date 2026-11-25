@@ -14,7 +14,7 @@ contains
 !#########################################################################
 subroutine m_refine_fine(pst,ilevel)
   use ramses_commons, only: pst_t
-  use init_refine_basegrid_module, only:r_noct_max,r_noct_min,r_noct_tot,r_noct_used_max
+  use init_refine_basegrid_module, only:r_noct_stats,r_noct_used_max,out_noct_stats_t
   use load_balance_module, only: m_load_balance, r_balance_part
   use mdl_module
   implicit none
@@ -25,6 +25,7 @@ subroutine m_refine_fine(pst,ilevel)
   ! from level ilevel to nlevelmax.
   !--------------------------------------------------------------------
   integer::ilev,dummy
+  type(out_noct_stats_t)::noct_stats
   double precision::ttend,ttstart
   type(out_refine_fine_t)::out_refine_fine
 
@@ -46,10 +47,11 @@ subroutine m_refine_fine(pst,ilevel)
 113 format('   ==> Kill ',i7,' sub-grids')
 
   ! Get total, min and max grid count (only in master)
+  call r_noct_stats(pst,ilevel,1,noct_stats,storage_size(noct_stats)/32)
   do ilev=ilevel+1,s%r%nlevelmax
-     call r_noct_tot(pst,ilev,1,s%m%noct_tot(ilev),2)
-     call r_noct_min(pst,ilev,1,s%m%noct_min(ilev),1)
-     call r_noct_max(pst,ilev,1,s%m%noct_max(ilev),1)
+     s%m%noct_tot(ilev)=noct_stats%noct_tot(ilev)
+     s%m%noct_min(ilev)=int(noct_stats%noct_min(ilev),kind=4)
+     s%m%noct_max(ilev)=int(noct_stats%noct_max(ilev),kind=4)
   end do
 
   ! Get maximum used memory (only in master)
@@ -62,10 +64,11 @@ subroutine m_refine_fine(pst,ilevel)
 !  call r_clean_dirty(pst,ilevel,1)
 
   ! Get total, min and max grid count (only in master).
+  call r_noct_stats(pst,ilevel,1,noct_stats,storage_size(noct_stats)/32)
   do ilev=ilevel+1,s%r%nlevelmax
-     call r_noct_tot(pst,ilev,1,s%m%noct_tot(ilev),2)
-     call r_noct_min(pst,ilev,1,s%m%noct_min(ilev),1)
-     call r_noct_max(pst,ilev,1,s%m%noct_max(ilev),1)
+     s%m%noct_tot(ilev)=noct_stats%noct_tot(ilev)
+     s%m%noct_min(ilev)=int(noct_stats%noct_min(ilev),kind=4)
+     s%m%noct_max(ilev)=int(noct_stats%noct_max(ilev),kind=4)
   end do
 
   ! Get maximum used memory (only in master)
