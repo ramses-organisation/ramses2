@@ -2689,7 +2689,7 @@ contains
     smallr_d      = sim%r%smallr
 
     ! Wipe clean cache memory for all higher levels
-    head_cache = sim%m%head_cache(ilevel+1)
+    head_cache = sim%m%tail_cache(ilevel) + 1
     head_idx = head_cache + sim%r%ngridmax
     num_octs = sim%m%ifree_cache - head_cache
     num_threads = 128
@@ -3054,17 +3054,19 @@ contains
   subroutine gpu_build_level_cache(sim, ilevel)
     use nvtx
     use refine_device
-    use gpu_mpi, only: gpu_halo_build
+    use gpu_mpi, only: gpu_halo_build, gpu_halo_refined
     use mdl_module, only: mdl_abort
     use ramses_commons, only: ramses_t
     use cub_inclusive_scan_mod
     use iso_c_binding, only: c_loc
     type(ramses_t), intent(inout) :: sim
     integer, intent(in) :: ilevel
-    integer :: ind, head_idx, num_subgrids, num_blocks, num_threads, head
+    integer :: ind, head_idx, num_subgrids, num_blocks, num_threads, head, nmiss
     integer :: interpol_var, interpol_type, cache_overflow
     integer(kind=4), device :: ifree_cache_d, cache_overflow_d, new_noct_d
     integer(kind=1) :: source
+    integer, allocatable :: miss(:)
+    integer, device, allocatable :: miss_d(:)
     real(dp) :: smallr_d
     character(len=64) :: descr
 
@@ -3076,11 +3078,12 @@ contains
     num_blocks = (num_subgrids + num_threads - 1) / num_threads
 
     ! A neighbour missing at levelmin is an oct of another rank; above, it is interpolated from its parent.
+    ! On several ranks every neighbour missing above levelmin is first made as an oct of another rank.
     ! With source = 0 the level has no cache octs.
     source = 0
-    if (ilevel == sim%r%levelmin) then
-       if (sim%g%ncpu > 1) source = cache_remote
-    else if (sim%r%ncachemax > 0) then
+    if (sim%g%ncpu > 1) then
+       source = cache_remote
+    else if (ilevel > sim%r%levelmin .and. sim%r%ncachemax > 0) then
        source = cache_interpolated
     endif
 
@@ -3165,7 +3168,24 @@ contains
     endif
 
     ! Every rank takes part, also one without octs
-    if (source == cache_remote) call gpu_halo_build(sim, ilevel, grid, hash_key, hash_val, ckey_max, key_off)
+    if (source == cache_remote) then
+       call gpu_halo_build(sim, ilevel, grid, hash_key, hash_val, ckey_max, key_off, miss)
+       nmiss = size(miss)
+       if (nmiss > 0) then
+          ! The octs found on no rank are interpolated from their parents
+          allocate(miss_d(1:nmiss))
+          miss_d = miss
+          num_blocks = (nmiss + num_threads - 1) / num_threads
+          call make_ghost_octs<<<num_blocks, num_threads>>>(grid, flag1, uold, bold, f, phi, phi_old, father, &
+               & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
+               & miss_d, nmiss, sim%r%interpol_var, sim%r%interpol_type, real(sim%r%smallr, kind=dp))
+          call GPU_Error_Check(__FILE__, __LINE__)
+          deallocate(miss_d)
+       endif
+       ! Copies take their owners' refined cells and values
+       call gpu_halo_refined(ilevel, grid)
+       call gpu_update_copies(sim, ilevel)
+    endif
 
     sim%m%tail_cache(ilevel) = sim%m%ifree_cache - 1
     sim%m%noct_cache(ilevel) = sim%m%ifree_cache - head

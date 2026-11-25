@@ -2264,20 +2264,10 @@ end subroutine nimhd_ghost_b_kernel
     real(kind=dp), intent(in), value :: smallr
     integer(kind=1), intent(in), value :: source
 
-    integer(kind=8) :: hkey, parent_key, offset, ix, iy, iz, nx
-    integer :: oct_idx, subgrid_idx, thread_idx, block_idx, cache_idx, parent_idx, cell_idx
-    integer :: ind, i, j, k, ilevel, idim, ivar
+    integer(kind=8) :: hkey
+    integer :: oct_idx, subgrid_idx, thread_idx, block_idx, cache_idx
+    integer :: ind, i, j, k, ilevel, idim
     integer, dimension(1:ndim) :: ckey
-    ! Prolongation scratch for parent stencil and children.
-    real(kind=dp) :: u1(0:twondim,1:nvar)
-    real(kind=dp) :: u2(1:twotondim,1:nvar)
-#ifdef MHD
-    real(kind=dp) :: b1(0:twondim,1:6)
-    real(kind=dp) :: b2(1:twotondim,1:6)
-    real(kind=dp) :: b3(1:twondim,1:twotondim,1:6)
-    logical :: refined(1:twondim)
-#endif
-    integer :: igrid_nbor(0:twondim), ind_nbor(0:twondim)
 
     ! Compute thread and block idx
     thread_idx = threadIdx%x - 1
@@ -2340,6 +2330,53 @@ end subroutine nimhd_ghost_b_kernel
 
     ! A remote oct has no parent here: its owner sends its values (gpu_halo_update)
     if (source == cache_remote) return
+    call make_ghost_oct(grid, flag1, uold, bold, f, phi, phi_old, father, &
+         & hash_key, hash_val, hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
+         & cache_idx, ckey, ilevel, interpol_var, interpol_type, smallr)
+
+  end subroutine make_cache_octs_impl
+  ! =========================================================================
+
+  ! =========================================================================
+  !> The interpolated oct at slot cache_idx, of level ilevel and Cartesian key ckey, takes its
+  !> parent and its values from the parent stencil, and no flags.
+  attributes(device) subroutine make_ghost_oct(grid, flag1, uold, bold, f, phi, phi_old, father, &
+       & hash_key, hash_val, hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
+       & cache_idx, ckey, ilevel, interpol_var, interpol_type, smallr)
+    type(oct), device :: grid(*)
+    real(kind=dp), device :: f(1:twotondim,1:ndim,*)
+    real(kind=dp), device :: phi(1:twotondim,*)
+    real(kind=dp), device :: phi_old(1:twotondim,*)
+    real(kind=dp), device :: uold(1:twotondim,1:nvar,*)
+    real(kind=dp), device :: bold(1:twotondim,1:6,*)
+    integer(kind=4), device :: flag1(1:twotondim,*)
+    integer(kind=4), device :: father(*)
+    integer(kind=4), device :: ckey_max(*)
+    integer(kind=8), device :: key_off(*)
+    integer(kind=4), device :: box_ckey_min(1:ndim,*)
+    integer(kind=4), device :: box_ckey_max(1:ndim,*)
+    integer(kind=8), device :: hash_key(*)
+    integer(kind=4), device :: hash_val(*)
+    logical, device :: periodic(1:3)
+    integer(kind=4), value :: hash_size
+    integer, value :: cache_idx, ilevel
+    integer, dimension(1:ndim) :: ckey
+    integer(kind=4), value :: interpol_var, interpol_type
+    real(kind=dp), value :: smallr
+
+    integer(kind=8) :: parent_key, offset, ix, iy, iz, nx
+    integer :: parent_idx, cell_idx, ind, i, j, k, ivar
+    ! Prolongation scratch for parent stencil and children.
+    real(kind=dp) :: u1(0:twondim,1:nvar)
+    real(kind=dp) :: u2(1:twotondim,1:nvar)
+#ifdef MHD
+    real(kind=dp) :: b1(0:twondim,1:6)
+    real(kind=dp) :: b2(1:twotondim,1:6)
+    real(kind=dp) :: b3(1:twondim,1:twotondim,1:6)
+    logical :: refined(1:twondim)
+#endif
+    integer :: igrid_nbor(0:twondim), ind_nbor(0:twondim)
+
     flag1(1:twotondim, cache_idx) = 0
 
     ! Compute parent oct hash table key
@@ -2411,12 +2448,52 @@ end subroutine nimhd_ghost_b_kernel
     end do
 #endif
 
-  end subroutine make_cache_octs_impl
+  end subroutine make_ghost_oct
+  ! =========================================================================
+
+  ! =========================================================================
+  !> The cache octs at the listed slots become interpolated octs. One thread per oct.
+  attributes(global) subroutine make_ghost_octs(grid, flag1, uold, bold, f, phi, phi_old, father, &
+       & hash_key, hash_val, hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
+       & slots, n, interpol_var, interpol_type, smallr)
+    type(oct), device :: grid(*)
+    real(kind=dp), device :: f(1:twotondim,1:ndim,*)
+    real(kind=dp), device :: phi(1:twotondim,*)
+    real(kind=dp), device :: phi_old(1:twotondim,*)
+    real(kind=dp), device :: uold(1:twotondim,1:nvar,*)
+    real(kind=dp), device :: bold(1:twotondim,1:6,*)
+    integer(kind=4), device :: flag1(1:twotondim,*)
+    integer(kind=4), device :: father(*)
+    integer(kind=4), device :: ckey_max(*)
+    integer(kind=8), device :: key_off(*)
+    integer(kind=4), device :: box_ckey_min(1:ndim,*)
+    integer(kind=4), device :: box_ckey_max(1:ndim,*)
+    integer(kind=8), device :: hash_key(*)
+    integer(kind=4), device :: hash_val(*)
+    logical, device :: periodic(1:3)
+    integer(kind=4), device :: slots(*)
+    integer(kind=4), intent(in), value :: hash_size, n
+    integer(kind=4), intent(in), value :: interpol_var, interpol_type
+    real(kind=dp), intent(in), value :: smallr
+
+    integer :: k, cache_idx
+    integer, dimension(1:ndim) :: ckey
+
+    k = threadIdx%x + (blockIdx%x - 1) * blockDim%x
+    if (k > n) return
+    cache_idx = slots(k)
+    cache_source(cache_idx) = cache_interpolated
+    ckey(1:ndim) = grid(cache_idx)%ckey(1:ndim)
+    call make_ghost_oct(grid, flag1, uold, bold, f, phi, phi_old, father, &
+         & hash_key, hash_val, hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
+         & cache_idx, ckey, grid(cache_idx)%lev, interpol_var, interpol_type, smallr)
+
+  end subroutine make_ghost_octs
   ! =========================================================================
 
   ! =========================================================================
   !> Refresh the hydro and gravity variables of existing cache (ghost) octs
-  !> from their parent cells, as in make_cache_octs_impl. One thread per oct.
+  !> from their parent cells, as in make_ghost_oct. One thread per oct.
   attributes(global) subroutine refresh_cache_octs_kernel(grid, uold, bold, f, father, &
        & hash_key, hash_val, hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
        & head_idx, num_octs, interpol_var, interpol_type, smallr)
