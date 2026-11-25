@@ -173,14 +173,15 @@ contains
   ! them by owner and sends their keys to the owners, which look them up: this gives the octs to
   ! receive from and to send to each rank at every gpu_halo_update. Above levelmin an oct can exist
   ! on no rank: the keys this rank owns are not sent, the owners answer the others, and miss returns
-  ! the cache slots of the octs found nowhere, which become interpolated octs. Their parents are
-  ! checked first.
-  subroutine gpu_halo_build(sim, ilevel, grid, hash_key, hash_val, ckey_max, key_off, miss)
+  ! the cache slots of the octs found nowhere. With ghosts, these become interpolated octs, whose
+  ! parents are checked first.
+  subroutine gpu_halo_build(sim, ilevel, grid, hash_key, hash_val, ckey_max, key_off, ghosts, miss)
     type(ramses_t), intent(in) :: sim
     integer, intent(in) :: ilevel
     type(oct), device :: grid(*)
     integer(kind=8), device :: hash_key(*), key_off(*)
     integer, device :: hash_val(*), ckey_max(*)
+    logical, intent(in) :: ghosts
     integer, allocatable, intent(out) :: miss(:)
 #ifndef WITHOUTMPI
     integer(kind=8) :: cuts(0:sim%g%ncpu)
@@ -305,7 +306,7 @@ contains
     allocate(miss(1:nmiss))
     if (nmiss > 0) miss = pack([(first+k-1, k=1,n)], found(1:n) == 0)
 
-    if (ilevel > levelmin) then
+    if (ilevel > levelmin .and. ghosts) then
        if (nmiss > 0) then
           allocate(miss_d(1:nmiss))
           miss_d = miss

@@ -2492,6 +2492,32 @@ end subroutine nimhd_ghost_b_kernel
   ! =========================================================================
 
   ! =========================================================================
+  !> The cache octs at the listed slots leave the hash table. One thread per oct.
+  attributes(global) subroutine free_hash_slots(grid, hash_key, hash_val, hash_size, ckey_max, key_off, slots, n)
+    type(oct), device :: grid(*)
+    integer(kind=4), device :: ckey_max(*)
+    integer(kind=8), device :: key_off(*)
+    integer(kind=8), device :: hash_key(*)
+    integer(kind=4), device :: hash_val(*)
+    integer(kind=4), device :: slots(*)
+    integer(kind=4), intent(in), value :: hash_size, n
+
+    integer :: k, oct_idx, ilevel
+    integer(kind=8) :: key, nx
+
+    k = threadIdx%x + (blockIdx%x - 1) * blockDim%x
+    if (k > n) return
+    oct_idx = slots(k)
+    ilevel = grid(oct_idx)%lev
+    nx = int(ckey_max(ilevel), kind=8)
+    key = key_off(ilevel) + int(grid(oct_idx)%ckey(1), kind=8) + int(grid(oct_idx)%ckey(2), kind=8) * nx &
+         & + int(grid(oct_idx)%ckey(3), kind=8) * nx * nx
+    call hash_free(hash_key, hash_val, hash_size, key)
+
+  end subroutine free_hash_slots
+  ! =========================================================================
+
+  ! =========================================================================
   !> Refresh the hydro and gravity variables of existing cache (ghost) octs
   !> from their parent cells, as in make_ghost_oct. One thread per oct.
   attributes(global) subroutine refresh_cache_octs_kernel(grid, uold, bold, f, father, &

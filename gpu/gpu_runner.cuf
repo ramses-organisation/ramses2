@@ -2726,6 +2726,8 @@ contains
        ! ensure_ref_rules (adaptive time steps): check them now that the
        ! octs of level ilev created in this pass exist
        if (ilev > ilevel) then
+          ! On several ranks, copies of the octs other ranks own next to the octs of this level
+          if (sim%g%ncpu > 1) call gpu_build_level_cache(sim, ilev, .false.)
           head_idx = sim%m%head(ilev)
           num_octs = sim%m%noct(ilev) / nskip
           num_threads = 128
@@ -2750,21 +2752,36 @@ contains
 #endif
                & interpol_var, interpol_type, smallr_d)
           call GPU_Error_Check(__FILE__, __LINE__)
-
-          ! Insert the octs just created in the hash table, unless main memory is full
-          new_ifree = ifree_d
-          if (new_ifree - 1 > sim%r%ngridmax) exit
-          num_octs = new_ifree - ins_head
-          num_threads = 128
-          num_blocks = (num_octs + num_threads - 1) / num_threads
-          if (num_octs > 0) then
-             call insert_hash_kernel<<<num_blocks, num_threads>>>(grid, hash_key, hash_val, sim%m%hash_size, &
-                  & ckey_max, key_off, ins_head, num_octs)
-             call GPU_Error_Check(__FILE__, __LINE__)
-          end if
-          ins_head = new_ifree
        endif
+
+       ! On several ranks, every rank stops if one of them runs out of main memory
+       new_ifree = ifree_d
+       if (sim%g%ncpu > 1) call gpu_halo_check(sim, max(new_ifree-1-sim%r%ngridmax, 0), &
+            & 'new octs beyond ngridmax. Increase ngridmax')
+
+       ! Insert the octs just created in the hash table, unless main memory is full
+       if (new_ifree - 1 > sim%r%ngridmax) exit
+       num_octs = new_ifree - ins_head
+       num_threads = 128
+       num_blocks = (num_octs + num_threads - 1) / num_threads
+       if (num_octs > 0) then
+          call insert_hash_kernel<<<num_blocks, num_threads>>>(grid, hash_key, hash_val, sim%m%hash_size, &
+               & ckey_max, key_off, ins_head, num_octs)
+          call GPU_Error_Check(__FILE__, __LINE__)
+       end if
+       ins_head = new_ifree
     end do
+
+    ! The copies made for the finer levels leave the cache
+    num_octs = sim%m%ifree_cache - head_cache
+    num_threads = 128
+    num_blocks = (num_octs + num_threads - 1) / num_threads
+    if (num_octs > 0) then
+       call free_hash_kernel<<<num_blocks, num_threads>>>(grid, hash_key, hash_val, sim%m%hash_size, &
+            & ckey_max, key_off, head_cache + sim%r%ngridmax, num_octs)
+       call GPU_Error_Check(__FILE__, __LINE__)
+    endif
+    sim%m%ifree_cache = head_cache
 
     ! Copy back to host new free memory pointer ifree
     sim%m%ifree = ifree_d
@@ -3061,7 +3078,7 @@ contains
     endif
 
     do ilev = ilevel + 1, sim%r%nlevelmax
-       call gpu_build_level_cache(sim, ilev)
+       call gpu_build_level_cache(sim, ilev, .true.)
     end do
 
     if (ilevel == sim%r%levelmin) call gpu_reset_hash(sim)
@@ -3069,7 +3086,8 @@ contains
   end subroutine gpu_refine
 
   !> Startup and gpu_refine share this per-level neighbour search and cache construction.
-  subroutine gpu_build_level_cache(sim, ilevel)
+  !> With ghosts=.false. (the refinement on several ranks), the octs found on no rank leave the hash table.
+  subroutine gpu_build_level_cache(sim, ilevel, ghosts)
     use nvtx
     use refine_device
     use gpu_mpi, only: gpu_halo_build, gpu_halo_refined, gpu_halo_zero
@@ -3079,6 +3097,7 @@ contains
     use iso_c_binding, only: c_loc
     type(ramses_t), intent(inout) :: sim
     integer, intent(in) :: ilevel
+    logical, intent(in) :: ghosts
     integer :: ind, head_idx, num_subgrids, num_blocks, num_threads, head, nmiss
     integer :: interpol_var, interpol_type, cache_overflow
     integer(kind=4), device :: ifree_cache_d, cache_overflow_d, new_noct_d
@@ -3187,25 +3206,33 @@ contains
 
     ! Every rank takes part, also one without octs
     if (source == cache_remote) then
-       call gpu_halo_build(sim, ilevel, grid, hash_key, hash_val, ckey_max, key_off, miss)
+       call gpu_halo_build(sim, ilevel, grid, hash_key, hash_val, ckey_max, key_off, ghosts, miss)
        nmiss = size(miss)
        if (nmiss > 0) then
-          ! The octs found on no rank are interpolated from their parents
           allocate(miss_d(1:nmiss))
           miss_d = miss
           num_blocks = (nmiss + num_threads - 1) / num_threads
-          call make_ghost_octs<<<num_blocks, num_threads>>>(grid, flag1, uold, bold, f, phi, phi_old, father, &
-               & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
-               & miss_d, nmiss, sim%r%interpol_var, sim%r%interpol_type, real(sim%r%smallr, kind=dp))
+          if (ghosts) then
+             ! The octs found on no rank are interpolated from their parents
+             call make_ghost_octs<<<num_blocks, num_threads>>>(grid, flag1, uold, bold, f, phi, phi_old, father, &
+                  & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
+                  & miss_d, nmiss, sim%r%interpol_var, sim%r%interpol_type, real(sim%r%smallr, kind=dp))
+          else
+             ! The octs found on no rank are missing, as on one rank
+             call free_hash_slots<<<num_blocks, num_threads>>>(grid, hash_key, hash_val, sim%m%hash_size, &
+                  & ckey_max, key_off, miss_d, nmiss)
+          endif
           call GPU_Error_Check(__FILE__, __LINE__)
           deallocate(miss_d)
        endif
-       ! Copies take their owners' refined cells and values, and collect coarse corrections from -0
-       call gpu_halo_refined(ilevel, grid)
-       call gpu_update_copies(sim, ilevel)
+       if (ghosts) then
+          ! Copies take their owners' refined cells and values, and collect coarse corrections from -0
+          call gpu_halo_refined(ilevel, grid)
+          call gpu_update_copies(sim, ilevel)
 #ifdef HYDRO
-       call gpu_halo_zero(ilevel, unew, nvar)
+          call gpu_halo_zero(ilevel, unew, nvar)
 #endif
+       endif
     endif
 
     sim%m%tail_cache(ilevel) = sim%m%ifree_cache - 1
