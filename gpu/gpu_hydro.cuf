@@ -6297,7 +6297,7 @@ contains
     integer :: block_idx ! The index of this block, corresponds to the oct to load
     integer :: cell_idx ! The index of the cell within the block
     integer :: oct_idx ! The index of the oct  within the block
-#if defined MHD || NVAR>5+NENER
+#if defined MHD || NVAR>5
     integer :: ivar
 #endif
 
@@ -6321,8 +6321,8 @@ contains
        bold(cell_idx, ivar, oct_idx) = bnew(cell_idx, ivar, oct_idx)
     end do
 #endif
-#if NVAR>5+NENER
-    do ivar = 6+nener, nvar
+#if NVAR>5
+    do ivar = 6, nvar
        uold(cell_idx, ivar, oct_idx) = unew(cell_idx, ivar, oct_idx)
     end do
 #endif
@@ -6589,7 +6589,7 @@ contains
     integer :: block_idx ! The index of this block, corresponds to the oct to load
     integer :: cell_idx ! The index of the cell within the block
     integer :: oct_idx ! The index of the oct  within the block
-#if defined MHD || NVAR>5+NENER
+#if defined MHD || NVAR>5
     integer :: ivar
 #endif
 
@@ -6613,8 +6613,8 @@ contains
        bnew(cell_idx, ivar, oct_idx) = bold(cell_idx, ivar, oct_idx)
     end do
 #endif
-#if NVAR>5+NENER
-    do ivar = 6+nener, nvar
+#if NVAR>5
+    do ivar = 6, nvar
        unew(cell_idx, ivar, oct_idx) = uold(cell_idx, ivar, oct_idx)
     end do
 #endif
