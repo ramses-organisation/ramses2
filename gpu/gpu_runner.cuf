@@ -899,6 +899,9 @@ contains
 #endif
 #endif
     use hydro_device, only: switch_llf_dmin_d, switch_llf_pmin_d
+#if NENER>0
+    use hydro_device, only: gamma_rad_d
+#endif
     use ramses_commons, only: ramses_t
     type(ramses_t), intent(inout)::sim
     integer, intent(in)::ilevel
@@ -933,6 +936,9 @@ contains
 
     dt = sim%g%dtnew(ilevel)
     dx = sim%r%boxlen/2**ilevel
+#if NENER>0
+    gamma_rad_d = real(sim%r%gamma_rad, kind=dp)
+#endif
     smax_cap = sim%r%courant_factor*(sim%r%boxlen/2**ilevel)/sim%g%dtnew(ilevel)
     gamma = sim%r%gamma
     smallr = sim%r%smallr
