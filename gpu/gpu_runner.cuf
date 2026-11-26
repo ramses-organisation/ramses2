@@ -4,7 +4,7 @@ module gpu_runner
   use amr_parameters, only: MAXLEVEL
   use rt_parameters, only: nrtgrp
 #endif
-  use hydro_parameters, only: nvar
+  use hydro_parameters, only: nvar, nener
   use oct_commons, only: oct
   use gpu_utils
   use cudafor
@@ -17,6 +17,7 @@ module gpu_runner
   logical, device, dimension(1:3) :: periodic
   real(kind=8), device, dimension(1:3) :: box_size
   real(kind=dp), device, dimension(1:3) :: constant_gravity
+  real(kind=dp), device, dimension(1:nener+1) :: gamma_rad
   integer(kind=4), device, allocatable, dimension(:) :: ckey_max
   integer(kind=8), device, allocatable, dimension(:) :: key_off
   integer(kind=4), device, allocatable, dimension(:,:) :: box_ckey_min, box_ckey_max
@@ -213,9 +214,6 @@ contains
   subroutine gpu_cmpdt(sim, ilevel, mass, ekin, eint, emag, dt)
     use nvtx
     use hydro_device, only: cmpdt_kernel
-#if NENER>0
-    use hydro_device, only: gamma_rad_d
-#endif
     use ramses_commons, only: ramses_t
     type(ramses_t), intent(inout) :: sim
     integer(kind=4), intent(in) :: ilevel
@@ -240,9 +238,6 @@ contains
     turb_min_rho = sim%r%turb_min_rho
 #endif
     dt = courant_factor*dx/sim%r%smallc
-#if NENER>0
-    gamma_rad_d = real(sim%r%gamma_rad, kind=dp)
-#endif
 
     ! initialize device memory for reduction
     d_data(:) = 0d0
@@ -254,7 +249,7 @@ contains
     num_blocks = (num_octs + num_threads / twotondim - 1 ) / (num_threads / twotondim)
     call nvtxStartRange("GPU cmpdt", color=0)!green
     call cmpdt_kernel<<<num_blocks, num_threads>>>(grid, uold, bold, f, &
-        & constant_gravity, head_idx, num_octs, d_data, dx, gamma, &
+        & constant_gravity, head_idx, num_octs, d_data, dx, gamma, gamma_rad, &
         & smallr, smallc2, courant_factor, sim%r%induction &
 #ifdef TURB
         & , afield_lev_d(1,0,0,0,ilevel), d_skip, boxlen, turb_min_rho &
@@ -287,9 +282,6 @@ contains
     use, intrinsic :: iso_c_binding, only: c_f_pointer
     use nvtx
     use hydro_device, only: cmpdt_kernel_2, cmpdt_reduce_kernel
-#if NENER>0
-    use hydro_device, only: gamma_rad_d
-#endif
     use ramses_commons, only: ramses_t
     type(ramses_t), intent(inout) :: sim
     integer(kind=4), intent(in) :: ilevel
@@ -325,9 +317,6 @@ contains
     turb_min_rho = sim%r%turb_min_rho
 #endif
     dt = courant_factor*dx/sim%r%smallc
-#if NENER>0
-    gamma_rad_d = real(sim%r%gamma_rad, kind=dp)
-#endif
     mass = 0d0; ekin = 0d0; eint = 0d0; emag = 0d0
 
     head_idx = sim%m%head(ilevel)
@@ -391,7 +380,7 @@ contains
     call cmpdt_kernel_2<<<num_blocks, num_threads>>>(grid, uold, bold, f, &
         & constant_gravity, head_idx, num_octs, &
         & A_mass, A_ekin, A_eint, A_emag, A_dt, &
-        & dx, gamma, smallr, smallc2, courant_factor, sim%r%induction &
+        & dx, gamma, gamma_rad, smallr, smallc2, courant_factor, sim%r%induction &
 #ifdef TURB
         & , afield_lev_d(1,0,0,0,ilevel), d_skip, boxlen, turb_min_rho &
 #endif
@@ -805,9 +794,6 @@ contains
     use nvtx
     use hydro_parameters, only: nener
     use hydro_device, only: source_hydro_kernel
-#if NENER>0
-    use hydro_device, only: gamma_rad_d
-#endif
     use ramses_commons, only: ramses_t
     type(ramses_t), intent(inout)::sim
     integer, intent(in)::ilevel
@@ -838,9 +824,6 @@ contains
 
     dx = real(sim%r%boxlen/2**ilevel, kind=dp)
     dt = real(sim%g%dtnew(ilevel), kind=dp)
-#if NENER>0
-    gamma_rad_d = real(sim%r%gamma_rad, kind=dp)
-#endif
 
     head_idx = sim%m%head(ilevel)
     num_octs = sim%m%noct(ilevel)
@@ -853,7 +836,7 @@ contains
     call source_hydro_kernel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(grid, uold, unew, bnew, &
          & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, &
          & periodic, box_ckey_min, box_ckey_max, sim%m%ngridmax, head_idx, num_octs, ilevel, &
-         & dx, dt, real(sim%g%hexp, kind=dp), real(sim%r%gamma, kind=dp), &
+         & dx, dt, real(sim%g%hexp, kind=dp), real(sim%r%gamma, kind=dp), gamma_rad, &
          & real(sim%r%smallr, kind=dp), real(sim%r%smallc, kind=dp), &
          & sim%r%entropy, real(sim%r%dual_energy, kind=dp), T2_fix, sim%r%ientropy, &
          & sim%r%sgs_turb, sim%r%equilibrium_sgs, sim%r%iturb, &
@@ -899,9 +882,6 @@ contains
 #endif
 #endif
     use hydro_device, only: switch_llf_dmin_d, switch_llf_pmin_d
-#if NENER>0
-    use hydro_device, only: gamma_rad_d
-#endif
     use ramses_commons, only: ramses_t
     type(ramses_t), intent(inout)::sim
     integer, intent(in)::ilevel
@@ -936,9 +916,6 @@ contains
 
     dt = sim%g%dtnew(ilevel)
     dx = sim%r%boxlen/2**ilevel
-#if NENER>0
-    gamma_rad_d = real(sim%r%gamma_rad, kind=dp)
-#endif
     smax_cap = sim%r%courant_factor*(sim%r%boxlen/2**ilevel)/sim%g%dtnew(ilevel)
     gamma = sim%r%gamma
     smallr = sim%r%smallr
@@ -968,7 +945,7 @@ contains
     threads_per_block = ((threads_per_block + 31) / 32) * 32
     call hydro_integrator_paper_kernel<<<num_blocks, threads_per_block>>>(grid, uold, unew, f, father, nbor, &
          & head_idx, num_subgrids, sim%m%ngridmax, ilevel, sim%r%levelmin, sim%r%nlevelmax, &
-         & gamma, dt, dx, smax_cap, slope, riemann, constant_gravity)
+         & gamma, gamma_rad, dt, dx, smax_cap, slope, riemann, constant_gravity)
     call GPU_Error_Check(__FILE__, __LINE__)
 #else
 #ifdef MHD
@@ -989,7 +966,7 @@ contains
     call hydro_integrator_kernel<<<num_blocks, hydro_threads, shmem_bytes>>>(grid, uold, unew, bold, bnew, &
          & f, father, nbor, &
          & head_idx, num_subgrids, sim%m%ngridmax, ilevel, sim%r%levelmin, sim%r%nlevelmax, &
-         & gamma, smallr, smallc2, dt, dx, smax_cap, slope, slope_mag, riemann, riemann2d, &
+         & gamma, gamma_rad, smallr, smallc2, dt, dx, smax_cap, slope, slope_mag, riemann, riemann2d, &
          & switch_llf_dmin, switch_llf_pmin, induction, etamag, constant_gravity)
     call GPU_Error_Check(__FILE__, __LINE__)
 #else
@@ -1015,14 +992,14 @@ contains
        call hydro_integrator_pair_kernel<<<num_blocks, hydro_pair_threads, shmem_bytes>>>(grid, uold, unew, bold, bnew, &
             & f, father, nbor, &
             & head_idx, num_subgrids, sim%m%ngridmax, ilevel, sim%r%levelmin, sim%r%nlevelmax, &
-            & gamma, smallr, smallc2, dt, dx, smax_cap, slope, slope_mag, riemann, riemann2d, &
+            & gamma, gamma_rad, smallr, smallc2, dt, dx, smax_cap, slope, slope_mag, riemann, riemann2d, &
             & switch_llf_dmin, switch_llf_pmin, induction, etamag, constant_gravity)
     else
 #endif
     call hydro_integrator_kernel<<<num_blocks, hydro_threads, shmem_bytes>>>(grid, uold, unew, bold, bnew, &
          & f, father, nbor, &
          & head_idx, num_subgrids, sim%m%ngridmax, ilevel, sim%r%levelmin, sim%r%nlevelmax, &
-         & gamma, smallr, smallc2, dt, dx, smax_cap, slope, slope_mag, riemann, riemann2d, &
+         & gamma, gamma_rad, smallr, smallc2, dt, dx, smax_cap, slope, slope_mag, riemann, riemann2d, &
          & switch_llf_dmin, switch_llf_pmin, induction, etamag, constant_gravity)
 #ifdef HYDRO_PAIR
     endif
@@ -1129,7 +1106,7 @@ contains
          if (int(chunk%nface,8)*nsubgridtondim+counts(2) > capacity) error stop 'UCT face buffer capacity exceeded'
          uct_chunk = chunk
          call uct_face_kernel<<<chunk%nface, uct_face_threads, face_bytes>>>(grid, uold, bold, f, nbor, &
-              & uct_products, uct_halo, gamma, smallr, smallc2, dt, dx, smax_cap, slope, slope_mag, &
+              & uct_products, uct_halo, gamma, gamma_rad, smallr, smallc2, dt, dx, smax_cap, slope, slope_mag, &
               & induction, constant_gravity)
          call GPU_Error_Check(__FILE__, __LINE__)
          if (ncache > 0) then
@@ -1139,7 +1116,8 @@ contains
             num_ghost = uct_ghost_count
             if (num_ghost > 0) then
                call uct_ghost_face_kernel<<<num_ghost, uct_ghost_face_threads, ghost_bytes>>>(grid, uold, bold, f, nbor, &
-                    & uct_products, uct_ghost_list, uct_slot, gamma, smallr, smallc2, dt, dx, smax_cap, slope, slope_mag, &
+                    & uct_products, uct_ghost_list, uct_slot, gamma, gamma_rad, smallr, smallc2, dt, dx, smax_cap, &
+                    & slope, slope_mag, &
                     & induction, constant_gravity)
                call GPU_Error_Check(__FILE__, __LINE__)
                call uct_ghost_bn_kernel<<<num_ghost, 128>>>(bold, nbor, uct_products, uct_ghost_list, uct_slot)

@@ -313,9 +313,6 @@ module hydro_device
 #ifdef MHD
   integer, device :: uct_riemann_d
 #endif
-#if NENER>0
-  real(kind=dp), device :: gamma_rad_d(1:nener+1)
-#endif
 
 contains
 
@@ -373,12 +370,14 @@ contains
   !>
   !> @param[in] primitive : The primitive variables in the cell
   !>  @param[in] gamma : The adiabatic index
+  !>  @param[in] gamma_rad : The adiabatic indices of the non-thermal energies
   !>
   !> @return
   !> The energy in the cell
-  attributes(device) function compute_energy(primitive, gamma) result(energy)
+  attributes(device) function compute_energy(primitive, gamma, gamma_rad) result(energy)
     type(primitive_t), intent(in) :: primitive
     real(kind=dp), value :: gamma
+    real(kind=dp), device :: gamma_rad(1:nener+1)
     real(kind=dp) :: energy, velocity_squared
 #if NENER>0
     integer :: irad
@@ -391,7 +390,7 @@ contains
 #endif
 #if NENER>0
     do irad = 1, nener
-       energy = energy + primitive%prad(irad)/(gamma_rad_d(irad) - 1.0_dp)
+       energy = energy + primitive%prad(irad)/(gamma_rad(irad) - 1.0_dp)
     end do
 #endif
     return
@@ -404,12 +403,14 @@ contains
   !>
   !> @param[in] primitive : The primitive variables in a cell
   !> @param[in] gamma : The adiabatic index
+  !> @param[in] gamma_rad : The adiabatic indices of the non-thermal energies
   !>
   !> @return
   !> The sound speed in a cell
-  attributes(device) function sound_speed(primitive, gamma)
+  attributes(device) function sound_speed(primitive, gamma, gamma_rad)
     type(primitive_t), intent(in) :: primitive
     real(kind=dp), value :: gamma
+    real(kind=dp), device :: gamma_rad(1:nener+1)
     real(kind=dp) :: sound_speed
 #if NENER>0
     integer :: irad
@@ -418,7 +419,7 @@ contains
     sound_speed = gamma*primitive%pressure
 #if NENER>0
     do irad = 1, nener
-       sound_speed = sound_speed + gamma_rad_d(irad)*primitive%prad(irad)
+       sound_speed = sound_speed + gamma_rad(irad)*primitive%prad(irad)
     end do
 #endif
     sound_speed = sqrt(sound_speed/primitive%density)
@@ -840,11 +841,13 @@ contains
   !>
   !> @param[in] primitive : The primitive variables
   !> @param[in] gamma : The adiabatic index
+  !> @param[in] gamma_rad : The adiabatic indices of the non-thermal energies
   !> @return
   !> A conserved_t object with the conserved variables in a cell
-  attributes(device) function primitive_2_conserved(primitive, gamma) result(conserved)
+  attributes(device) function primitive_2_conserved(primitive, gamma, gamma_rad) result(conserved)
     type(primitive_t), intent(in) :: primitive
     real(kind=dp), value :: gamma
+    real(kind=dp), device :: gamma_rad(1:nener+1)
     type(conserved_t) :: conserved
 #if NENER>0
     integer :: irad
@@ -854,7 +857,7 @@ contains
     conserved%momentum_x = primitive%velocity_x * primitive%density
     conserved%momentum_y = primitive%velocity_y * primitive%density
     conserved%momentum_z = primitive%velocity_z * primitive%density
-    conserved%energy     = compute_energy(primitive, gamma)
+    conserved%energy     = compute_energy(primitive, gamma, gamma_rad)
 #ifdef MHD
     conserved%Bx = primitive%Bx
     conserved%By = primitive%By
@@ -862,7 +865,7 @@ contains
 #endif
 #if NENER>0
     do irad = 1, nener
-       conserved%erad(irad) = primitive%prad(irad)/(gamma_rad_d(irad) - 1.0_dp)
+       conserved%erad(irad) = primitive%prad(irad)/(gamma_rad(irad) - 1.0_dp)
     end do
 #endif
     return
@@ -888,9 +891,10 @@ contains
   end function compute_emag
 
   ! 1D HLL MHD Riemann flux (x-normal; y/z via rotation in driver).
-  attributes(device) function hll_mhd_fluxes(left, right, gamma, smallr, smallc2, smax_cap, llf) result(flux)
+  attributes(device) function hll_mhd_fluxes(left, right, gamma, gamma_rad, smallr, smallc2, smax_cap, llf) result(flux)
     type(primitive_t), intent(in) :: left, right
     real(kind=dp), value :: gamma, smallr, smallc2, smax_cap
+    real(kind=dp), device :: gamma_rad(1:nener+1)
     logical, value :: llf
     type(conserved_t) :: flux
     type(primitive_t) :: left_state, right_state
@@ -938,8 +942,8 @@ contains
     blz = left_state%Bz
     brz = right_state%Bz
 
-    left_state_c = primitive_2_conserved(left_state, gamma)
-    right_state_c = primitive_2_conserved(right_state, gamma)
+    left_state_c = primitive_2_conserved(left_state, gamma, gamma_rad)
+    right_state_c = primitive_2_conserved(right_state, gamma, gamma_rad)
 
     emagl = compute_emag(blx, bly, blz)
     emagr = compute_emag(brx, bry, brz)
@@ -984,7 +988,7 @@ contains
     c2l = gamma * pl / rl
 #if NENER>0
     do irad = 1, nener
-       c2l = c2l + gamma_rad_d(irad) * left_state%prad(irad) / rl
+       c2l = c2l + gamma_rad(irad) * left_state%prad(irad) / rl
     end do
 #endif
     d2l = 0.5_dp * (b2l / rl + c2l)
@@ -994,7 +998,7 @@ contains
     c2r = gamma * pr / rr
 #if NENER>0
     do irad = 1, nener
-       c2r = c2r + gamma_rad_d(irad) * right_state%prad(irad) / rr
+       c2r = c2r + gamma_rad(irad) * right_state%prad(irad) / rr
     end do
 #endif
     d2r = 0.5_dp * (b2r / rr + c2r)
@@ -1030,9 +1034,10 @@ contains
     return
   end function hll_mhd_fluxes
 
-  attributes(device) function upwind_mhd_fluxes(left, right, gamma, smallr, smallc2, zero_flux) result(flux)
+  attributes(device) function upwind_mhd_fluxes(left, right, gamma, gamma_rad, smallr, smallc2, zero_flux) result(flux)
     type(primitive_t), intent(in) :: left, right
     real(kind=dp), value :: gamma, smallr, smallc2, zero_flux
+    real(kind=dp), device :: gamma_rad(1:nener+1)
     type(conserved_t) :: flux
     type(primitive_t) :: left_state, right_state
     type(conserved_t) :: left_state_c, right_state_c, left_fluxes, right_fluxes
@@ -1055,8 +1060,8 @@ contains
     left_state%pressure = max(left_state%pressure, smallp * left_state%density)
     right_state%pressure = max(right_state%pressure, smallp * right_state%density)
 
-    left_state_c = primitive_2_conserved(left_state, gamma)
-    right_state_c = primitive_2_conserved(right_state, gamma)
+    left_state_c = primitive_2_conserved(left_state, gamma, gamma_rad)
+    right_state_c = primitive_2_conserved(right_state, gamma, gamma_rad)
 
     rl = left_state%density; rr = right_state%density
     ul = left_state%velocity_x; ur = right_state%velocity_x
@@ -1127,9 +1132,10 @@ contains
   ! 1D HLLD MHD Riemann flux (Miyoshi & Kusano; x-normal). With record (uct-hlld), also the UCT
   ! record of the face; where the rotational fan collapses, flux and record take the HLLC-type
   ! form, and they fall back to LLF if the record is not finite.
-  attributes(device) function hlld_mhd_fluxes(left, right, gamma, smallr, smallc2, smax_cap, record) result(flux)
+  attributes(device) function hlld_mhd_fluxes(left, right, gamma, gamma_rad, smallr, smallc2, smax_cap, record) result(flux)
     type(primitive_t), intent(in) :: left, right
     real(kind=dp), value :: gamma, smallr, smallc2, smax_cap
+    real(kind=dp), device :: gamma_rad(1:nener+1)
     type(uct_record_t), intent(out), optional :: record
     type(conserved_t) :: flux
     type(primitive_t) :: ls, rs
@@ -1171,7 +1177,7 @@ contains
     vdotBl = ul*A + vl*Bl + wl*Cl
 #if NENER>0
     do irad = 1, nener
-       eradl(irad) = ls%prad(irad)/(gamma_rad_d(irad) - 1.0_dp)
+       eradl(irad) = ls%prad(irad)/(gamma_rad(irad) - 1.0_dp)
        etotl = etotl + eradl(irad)
        Ptotl = Ptotl + ls%prad(irad)
     end do
@@ -1187,7 +1193,7 @@ contains
     vdotBr = ur*A + vr*Br + wr*Cr
 #if NENER>0
     do irad = 1, nener
-       eradr(irad) = rs%prad(irad)/(gamma_rad_d(irad) - 1.0_dp)
+       eradr(irad) = rs%prad(irad)/(gamma_rad(irad) - 1.0_dp)
        etotr = etotr + eradr(irad)
        Ptotr = Ptotr + rs%prad(irad)
     end do
@@ -1199,8 +1205,8 @@ contains
     b2r = A*A + Br*Br + Cr*Cr; c2r = gamma*Pr*inv_rr
 #if NENER>0
     do irad = 1, nener
-       c2l = c2l + gamma_rad_d(irad)*ls%prad(irad)*inv_rl
-       c2r = c2r + gamma_rad_d(irad)*rs%prad(irad)*inv_rr
+       c2l = c2l + gamma_rad(irad)*ls%prad(irad)*inv_rl
+       c2r = c2r + gamma_rad(irad)*rs%prad(irad)*inv_rr
     end do
 #endif
     d2l = 0.5_dp*(b2l*inv_rl + c2l)
@@ -1273,8 +1279,8 @@ contains
             & uct_finite(SAL) .and. uct_finite(SAR) .and. uct_finite(record%aL) .and. &
             & uct_finite(record%dL) .and. uct_finite(record%dR) .and. &
             & uct_finite(record%vt1) .and. uct_finite(record%vt2) .and. uct_finite(record%Bn))) then
-          flux = hll_mhd_fluxes(left, right, gamma, smallr, smallc2, smax_cap, .true.)
-          record = hll_uct_record(left, right, gamma, smallr, smallc2, smax_cap, solver_llf)
+          flux = hll_mhd_fluxes(left, right, gamma, gamma_rad, smallr, smallc2, smax_cap, .true.)
+          record = hll_uct_record(left, right, gamma, gamma_rad, smallr, smallc2, smax_cap, solver_llf)
           return
        endif
     endif
@@ -1366,9 +1372,10 @@ contains
   end function hlld_mhd_fluxes
 
   ! 2D HLL edge EMF from four corner states.
-  attributes(device) function riemann2d_hll_emf(qLL, qLR, qRL, qRR, gamma, smallr, smallc) result(E)
+  attributes(device) function riemann2d_hll_emf(qLL, qLR, qRL, qRR, gamma, gamma_rad, smallr, smallc) result(E)
     type(primitive_t), intent(in) :: qLL, qLR, qRL, qRR
     real(kind=dp), value :: gamma, smallr, smallc
+    real(kind=dp), device :: gamma_rad(1:nener+1)
     real(kind=dp) :: E
     type(primitive_t) :: stateLL, stateLR, stateRL, stateRR
     real(kind=dp) :: smallp
@@ -1414,7 +1421,7 @@ contains
     c2LL = gamma * stateLL%pressure / stateLL%density
 #if NENER>0
     do irad = 1, nener
-       c2LL = c2LL + gamma_rad_d(irad) * stateLL%prad(irad) / stateLL%density
+       c2LL = c2LL + gamma_rad(irad) * stateLL%prad(irad) / stateLL%density
     end do
 #endif
     d2LL = 0.5_dp * (b2LL / stateLL%density + c2LL)
@@ -1424,7 +1431,7 @@ contains
     c2LR = gamma * stateLR%pressure / stateLR%density
 #if NENER>0
     do irad = 1, nener
-       c2LR = c2LR + gamma_rad_d(irad) * stateLR%prad(irad) / stateLR%density
+       c2LR = c2LR + gamma_rad(irad) * stateLR%prad(irad) / stateLR%density
     end do
 #endif
     d2LR = 0.5_dp * (b2LR / stateLR%density + c2LR)
@@ -1434,7 +1441,7 @@ contains
     c2RL = gamma * stateRL%pressure / stateRL%density
 #if NENER>0
     do irad = 1, nener
-       c2RL = c2RL + gamma_rad_d(irad) * stateRL%prad(irad) / stateRL%density
+       c2RL = c2RL + gamma_rad(irad) * stateRL%prad(irad) / stateRL%density
     end do
 #endif
     d2RL = 0.5_dp * (b2RL / stateRL%density + c2RL)
@@ -1444,7 +1451,7 @@ contains
     c2RR = gamma * stateRR%pressure / stateRR%density
 #if NENER>0
     do irad = 1, nener
-       c2RR = c2RR + gamma_rad_d(irad) * stateRR%prad(irad) / stateRR%density
+       c2RR = c2RR + gamma_rad(irad) * stateRR%prad(irad) / stateRR%density
     end do
 #endif
     d2RR = 0.5_dp * (b2RR / stateRR%density + c2RR)
@@ -1474,10 +1481,11 @@ contains
   end function riemann2d_hll_emf
 
   ! 2D HLLD edge EMF in the rotated edge frame.
-  attributes(device) function riemann2d_hlld_emf(qLL, qLR, qRL, qRR, gamma, smallr, smallc, &
+  attributes(device) function riemann2d_hlld_emf(qLL, qLR, qRL, qRR, gamma, gamma_rad, smallr, smallc, &
        & switch_llf_dmin, switch_llf_pmin) result(E)
     type(primitive_t), intent(in) :: qLL, qLR, qRL, qRR
     real(kind=dp), value :: gamma, smallr, smallc, switch_llf_dmin, switch_llf_pmin
+    real(kind=dp), device :: gamma_rad(1:nener+1)
     real(kind=dp) :: E
     type(primitive_t) :: stateLL, stateLR, stateRL, stateRR
     real(kind=dp) :: smallp
@@ -1544,7 +1552,7 @@ contains
     b2LL = compute_bsquared(ALL, BLL, CLL); c2LL = gamma*pLL*inv_r
 #if NENER>0
     do irad = 1, nener
-       c2LL = c2LL + gamma_rad_d(irad)*stateLL%prad(irad)*inv_r
+       c2LL = c2LL + gamma_rad(irad)*stateLL%prad(irad)*inv_r
     end do
 #endif
     d2LL = 0.5_dp*(b2LL*inv_r + c2LL)
@@ -1554,7 +1562,7 @@ contains
     b2LR = compute_bsquared(ALR, BLR, CLR); c2LR = gamma*pLR*inv_r
 #if NENER>0
     do irad = 1, nener
-       c2LR = c2LR + gamma_rad_d(irad)*stateLR%prad(irad)*inv_r
+       c2LR = c2LR + gamma_rad(irad)*stateLR%prad(irad)*inv_r
     end do
 #endif
     d2LR = 0.5_dp*(b2LR*inv_r + c2LR)
@@ -1564,7 +1572,7 @@ contains
     b2RL = compute_bsquared(ARL, BRL, CRL); c2RL = gamma*pRL*inv_r
 #if NENER>0
     do irad = 1, nener
-       c2RL = c2RL + gamma_rad_d(irad)*stateRL%prad(irad)*inv_r
+       c2RL = c2RL + gamma_rad(irad)*stateRL%prad(irad)*inv_r
     end do
 #endif
     d2RL = 0.5_dp*(b2RL*inv_r + c2RL)
@@ -1574,7 +1582,7 @@ contains
     b2RR = compute_bsquared(ARR, BRR, CRR); c2RR = gamma*pRR*inv_r
 #if NENER>0
     do irad = 1, nener
-       c2RR = c2RR + gamma_rad_d(irad)*stateRR%prad(irad)*inv_r
+       c2RR = c2RR + gamma_rad(irad)*stateRR%prad(irad)*inv_r
     end do
 #endif
     d2RR = 0.5_dp*(b2RR*inv_r + c2RR)
@@ -1711,9 +1719,10 @@ contains
     return
   end function riemann2d_hlld_emf
 
-  attributes(device) function riemann2d_upwind_emf(qLL, qLR, qRL, qRR, gamma, smallr, smallc) result(E)
+  attributes(device) function riemann2d_upwind_emf(qLL, qLR, qRL, qRR, gamma, gamma_rad, smallr, smallc) result(E)
     type(primitive_t), intent(in) :: qLL, qLR, qRL, qRR
     real(kind=dp), value :: gamma, smallr, smallc
+    real(kind=dp), device :: gamma_rad(1:nener+1)
     real(kind=dp) :: E
     type(primitive_t) :: qleft, qright
     type(conserved_t) :: fmean_x, fmean_y
@@ -1750,7 +1759,7 @@ contains
        qright%prad(irad) = 0.5_dp*(qRR%prad(irad)+qRL%prad(irad))
     end do
 #endif
-    fmean_x = upwind_mhd_fluxes(qleft, qright, gamma, smallr, smallc*smallc, 0.0_dp)
+    fmean_x = upwind_mhd_fluxes(qleft, qright, gamma, gamma_rad, smallr, smallc*smallc, 0.0_dp)
 
     qleft%density = 0.5_dp*(qLL%density+qRL%density)
     qright%density = 0.5_dp*(qRR%density+qLR%density)
@@ -1774,7 +1783,7 @@ contains
        qright%prad(irad) = 0.5_dp*(qRR%prad(irad)+qLR%prad(irad))
     end do
 #endif
-    fmean_y = upwind_mhd_fluxes(qleft, qright, gamma, smallr, smallc*smallc, 0.0_dp)
+    fmean_y = upwind_mhd_fluxes(qleft, qright, gamma, gamma_rad, smallr, smallc*smallc, 0.0_dp)
 
     E = E + (fmean_x%By - fmean_y%By)
     return
@@ -1782,9 +1791,10 @@ contains
 
   ! 2D LLF EMF solver, identical to riemann2d_simple with riemann_llf_mhd (zero_flux=0) on the CPU:
   ! centred average of the 4 corner EMFs plus the LLF diffusion of the two 1D problems.
-  attributes(device) function riemann2d_llf_emf(qLL, qLR, qRL, qRR, gamma, smax_cap) result(E)
+  attributes(device) function riemann2d_llf_emf(qLL, qLR, qRL, qRR, gamma, gamma_rad, smax_cap) result(E)
     type(primitive_t), intent(in) :: qLL, qLR, qRL, qRR
     real(kind=dp), value :: gamma, smax_cap
+    real(kind=dp), device :: gamma_rad(1:nener+1)
     real(kind=dp) :: E
     real(kind=dp) :: ELL, ERL, ELR, ERR
     real(kind=dp) :: dl, dr, pl, pr, ul, ur, al, ar, bl, br, cl, cr, a_mean, vmax
@@ -1818,8 +1828,8 @@ contains
     c2r = gamma*pr/dr
 #if NENER>0
     do irad = 1, nener
-       c2l = c2l + gamma_rad_d(irad)*0.5_dp*(qLL%prad(irad)+qLR%prad(irad))/dl
-       c2r = c2r + gamma_rad_d(irad)*0.5_dp*(qRR%prad(irad)+qRL%prad(irad))/dr
+       c2l = c2l + gamma_rad(irad)*0.5_dp*(qLL%prad(irad)+qLR%prad(irad))/dl
+       c2r = c2r + gamma_rad(irad)*0.5_dp*(qRR%prad(irad)+qRL%prad(irad))/dr
     end do
 #endif
     vmax = max(llf_speed_info(dl, c2l, ul, a_mean, bl, cl), &
@@ -1845,8 +1855,8 @@ contains
     c2r = gamma*pr/dr
 #if NENER>0
     do irad = 1, nener
-       c2l = c2l + gamma_rad_d(irad)*0.5_dp*(qLL%prad(irad)+qRL%prad(irad))/dl
-       c2r = c2r + gamma_rad_d(irad)*0.5_dp*(qRR%prad(irad)+qLR%prad(irad))/dr
+       c2l = c2l + gamma_rad(irad)*0.5_dp*(qLL%prad(irad)+qRL%prad(irad))/dl
+       c2r = c2r + gamma_rad(irad)*0.5_dp*(qRR%prad(irad)+qLR%prad(irad))/dr
     end do
 #endif
     vmax = max(llf_speed_info(dl, c2l, ul, a_mean, bl, cl), &
@@ -1870,24 +1880,25 @@ contains
   end function llf_speed_info
 
   ! Dispatch 2D MHD EMF solver (HLLD, LLF, HLLF, else HLL).
-  attributes(device) function riemann2d_emf(qLL, qLR, qRL, qRR, gamma, smallr, smallc, smax_cap, &
+  attributes(device) function riemann2d_emf(qLL, qLR, qRL, qRR, gamma, gamma_rad, smallr, smallc, smax_cap, &
        & switch_llf_dmin, switch_llf_pmin, riemann2d) result(E)
     type(primitive_t), intent(in) :: qLL, qLR, qRL, qRR
     real(kind=dp), value :: gamma, smallr, smallc, smax_cap, switch_llf_dmin, switch_llf_pmin
+    real(kind=dp), device :: gamma_rad(1:nener+1)
     integer, value :: riemann2d
     real(kind=dp) :: E
 
     if (riemann2d .eq. solver2d_hlld) then
-       E = riemann2d_hlld_emf(qLL, qLR, qRL, qRR, gamma, smallr, smallc, &
+       E = riemann2d_hlld_emf(qLL, qLR, qRL, qRR, gamma, gamma_rad, smallr, smallc, &
             & switch_llf_dmin, switch_llf_pmin)
     else if (riemann2d .eq. solver2d_upwind) then
-       E = riemann2d_upwind_emf(qLL, qLR, qRL, qRR, gamma, smallr, smallc)
+       E = riemann2d_upwind_emf(qLL, qLR, qRL, qRR, gamma, gamma_rad, smallr, smallc)
     else if (riemann2d .eq. solver2d_llf) then
-       E = riemann2d_llf_emf(qLL, qLR, qRL, qRR, gamma, smax_cap)
+       E = riemann2d_llf_emf(qLL, qLR, qRL, qRR, gamma, gamma_rad, smax_cap)
     else if (riemann2d .eq. solver2d_hllf) then
-       E = riemann2d_hll_emf(qLL, qLR, qRL, qRR, gamma, smallr, smallc)
+       E = riemann2d_hll_emf(qLL, qLR, qRL, qRR, gamma, gamma_rad, smallr, smallc)
     else
-       E = riemann2d_hll_emf(qLL, qLR, qRL, qRR, gamma, smallr, smallc)   ! fall back to 2D HLL
+       E = riemann2d_hll_emf(qLL, qLR, qRL, qRR, gamma, gamma_rad, smallr, smallc)   ! fall back to 2D HLL
     endif
 
     return
@@ -1936,6 +1947,7 @@ contains
   !> @param[in] nbor : The neighbor octs of this subgrid
   !> @param[in] thread_idx : The index of calling thread within its block
   !> @param[in] gamma : The adiabatic index
+  !> @param[in] gamma_rad : The adiabatic indices of the non-thermal energies
   !> @param[out] local_subgrid : The local subgrid in shared memory to write the primitive variables to
   !>
   !> Convert conserved subgrid to primitives; MHD fills face-B and scalars.
@@ -1950,7 +1962,7 @@ contains
 #ifdef MHD
        & bf, &
 #endif
-       & thread_idx, gamma, smallr, smallc2, dt, load_refined, local_subgrid, nbox)
+       & thread_idx, gamma, gamma_rad, smallr, smallc2, dt, load_refined, local_subgrid, nbox)
     type(oct), device :: grid(*)
     real(kind=dp), device :: constant_gravity(3)
     real(kind=dp), device :: f(1:twotondim,1:ndim,*)
@@ -1959,6 +1971,7 @@ contains
     integer(kind=4) :: nbor(1:subgridsize)
     integer(kind=4), value :: thread_idx
     real(kind=dp), value :: gamma, smallr, smallc2
+    real(kind=dp), device :: gamma_rad(1:nener+1)
     real(kind=dp), value :: dt
     logical, value :: load_refined
     type(subgrid_6x6x6cell_primitive), intent(inout) :: local_subgrid
@@ -2066,7 +2079,7 @@ contains
 #if NENER>0
        ! Non-thermal pressures, and the energy without them, as ctoprim does
        do irad = 1, nener
-          prad_sub(i, j, k, irad) = (gamma_rad_d(irad) - 1.0_dp) * uold(cell_idx, 5+irad, source_idx)
+          prad_sub(i, j, k, irad) = (gamma_rad(irad) - 1.0_dp) * uold(cell_idx, 5+irad, source_idx)
           conserved%energy = conserved%energy - uold(cell_idx, 5+irad, source_idx)
        end do
 #endif
@@ -2296,6 +2309,7 @@ contains
   !> @param[in] local_subgrid : The subgrid of primitive variables to solve
   !> @param[in] thread_idx : The index of the current thread
   !> @param[in] gamma : The adiabatic index
+  !> @param[in] gamma_rad : The adiabatic indices of the non-thermal energies
   !> @param[in] dtdx : dt / dx
   !> @param[in] left_interfaces_x : The left side interfaces normal to x
   !> @param[in] left_interfaces_y : The left side interfaces normal to y
@@ -2320,7 +2334,7 @@ contains
 #ifdef HYDRO_PAIR
        & pair, &
 #endif
-       & left_interfaces_z, right_interfaces_z, gamma, smallr, smallc2, dtdx, slope &
+       & left_interfaces_z, right_interfaces_z, gamma, gamma_rad, smallr, smallc2, dtdx, slope &
 #ifdef MHD
        & , shell_left, shell_right, owned_only &
 #endif
@@ -2328,6 +2342,7 @@ contains
     type(subgrid_6x6x6cell_primitive), intent(inout) :: local_subgrid ! The subgrid that this block is working on in shared memory
     integer, value :: thread_idx
     real(kind=dp), value :: gamma, smallr, smallc2, dtdx
+    real(kind=dp), device :: gamma_rad(1:nener+1)
     integer, value :: slope
 #ifdef HYDRO_PAIR
     logical, value :: pair ! slope_type=3, by pairs of cells
@@ -2647,7 +2662,7 @@ contains
                                    -cell%velocity_y * slopes_y%prad(irad) &
                                    -cell%velocity_z * slopes_z%prad(irad) &
                                    - (slopes_x%velocity_x + slopes_y%velocity_y + slopes_z%velocity_z) &
-                                   * gamma_rad_d(irad) * cell%prad(irad)
+                                   * gamma_rad(irad) * cell%prad(irad)
        end do
 #endif
 
@@ -3145,12 +3160,15 @@ contains
   !> @param[in] left_state_p : The state on the left side of the interface in primitive variables
   !> @param[in] right_state_p : The state on the right side of the interface in primitive variables
   !> @param[in] gamma : The adiabatic index
+  !> @param[in] gamma_rad : The adiabatic indices of the non-thermal energies
   !>
   !> @return
   !> flux : The conserved_t of the HLL fluxes
-  attributes(device) function hll_fluxes(left_state_p, right_state_p, gamma, smallr, smallc2, smax_cap, llf, waves) result(flux)
+  attributes(device) function hll_fluxes(left_state_p, right_state_p, gamma, gamma_rad, smallr, smallc2, smax_cap, &
+       & llf, waves) result(flux)
     type(primitive_t), intent(inout) :: left_state_p, right_state_p
     real(kind=dp), value :: gamma, smallr, smallc2, smax_cap
+    real(kind=dp), device :: gamma_rad(1:nener+1)
     real(kind=dp), intent(out), optional :: waves(2)
     logical, value :: llf
     type(conserved_t) :: flux
@@ -3168,8 +3186,8 @@ contains
     right_state_p%pressure = max(right_state_p%pressure, smallp * right_state_p%density)
 
     ! Compute the sound speeds
-    sound_speed_l = sound_speed(left_state_p, gamma)
-    sound_speed_r = sound_speed(right_state_p, gamma)
+    sound_speed_l = sound_speed(left_state_p, gamma, gamma_rad)
+    sound_speed_r = sound_speed(right_state_p, gamma, gamma_rad)
 
     ! Compute the wave speeds
     call hll_signal_speeds(left_state_p%velocity_x, right_state_p%velocity_x, sound_speed_l, sound_speed_r, &
@@ -3178,8 +3196,8 @@ contains
     if (present(waves)) waves = [speed_l, speed_r]
 
     ! Convert to conserved variables
-    left_state_c = primitive_2_conserved(left_state_p, gamma)
-    right_state_c = primitive_2_conserved(right_state_p, gamma)
+    left_state_c = primitive_2_conserved(left_state_p, gamma, gamma_rad)
+    right_state_c = primitive_2_conserved(right_state_p, gamma, gamma_rad)
 
     ! Compute the left and right fluxes
     left_fluxes%density    = left_state_c%momentum_x
@@ -3228,12 +3246,14 @@ contains
   !> @param[in] left_state_p : The state on the left side of the interface in primitive variables
   !> @param[in] right_state_p : The state on the right side of the interface in primitive variables
   !> @param[in] gamma : The adiabatic index
+  !> @param[in] gamma_rad : The adiabatic indices of the non-thermal energies
   !>
   !> @return
   !> flux : The conserved_t of the HLLC fluxes
-  attributes(device) function hllc_fluxes(left_state_p, right_state_p, gamma, smallr, smallc2, smax_cap) result(flux)
+  attributes(device) function hllc_fluxes(left_state_p, right_state_p, gamma, gamma_rad, smallr, smallc2, smax_cap) result(flux)
     type(primitive_t), intent(inout) :: left_state_p, right_state_p
     real(kind=dp), value :: gamma, smallr, smallc2, smax_cap
+    real(kind=dp), device :: gamma_rad(1:nener+1)
     type(conserved_t) :: flux
 
     real(kind=dp) :: smallp, entho
@@ -3283,14 +3303,14 @@ contains
     c2r = gamma*pr
 #if NENER>0
     do irad = 1, nener
-       eradl(irad) = left_state_p%prad(irad)/(gamma_rad_d(irad) - 1.0_dp)
-       eradr(irad) = right_state_p%prad(irad)/(gamma_rad_d(irad) - 1.0_dp)
+       eradl(irad) = left_state_p%prad(irad)/(gamma_rad(irad) - 1.0_dp)
+       eradr(irad) = right_state_p%prad(irad)/(gamma_rad(irad) - 1.0_dp)
        etotl = etotl + eradl(irad)
        etotr = etotr + eradr(irad)
        ptotl = ptotl + left_state_p%prad(irad)
        ptotr = ptotr + right_state_p%prad(irad)
-       c2l = c2l + gamma_rad_d(irad)*left_state_p%prad(irad)
-       c2r = c2r + gamma_rad_d(irad)*right_state_p%prad(irad)
+       c2l = c2l + gamma_rad(irad)*left_state_p%prad(irad)
+       c2r = c2r + gamma_rad(irad)*right_state_p%prad(irad)
     end do
 #endif
     c2l = c2l/rl
@@ -3305,7 +3325,7 @@ contains
     ! Degenerate wave fan (both states at the pressure floor, cmax lost
     ! against |u| in single precision): fall back to HLL for this interface
     if (.not. (rcl > 0.0_dp .and. rcr > 0.0_dp)) then
-       flux = hll_fluxes(left_state_p, right_state_p, gamma, smallr, smallc2, smax_cap, .false.)
+       flux = hll_fluxes(left_state_p, right_state_p, gamma, gamma_rad, smallr, smallc2, smax_cap, .false.)
        return
     endif
 
@@ -3384,14 +3404,16 @@ contains
   !> @param[in] left_state_p : The state on the left side of the interface in primitive variables
   !> @param[in] right_state_p : The state on the right side of the interface in primitive variables
   !> @param[in] gamma : The adiabatic index
+  !> @param[in] gamma_rad : The adiabatic indices of the non-thermal energies
   !> @param[in] riemann : Solver id
   !>
   !> @return
   !> flux : The conserved_t of the fluxes
-  attributes(device) function riemann_fluxes(left_state_p, right_state_p, gamma, smallr, smallc2, &
+  attributes(device) function riemann_fluxes(left_state_p, right_state_p, gamma, gamma_rad, smallr, smallc2, &
        & smax_cap, riemann, hydro_waves) result(flux)
     type(primitive_t), intent(inout) :: left_state_p, right_state_p
     real(kind=dp), value :: gamma, smallr, smallc2, smax_cap
+    real(kind=dp), device :: gamma_rad(1:nener+1)
     integer, value :: riemann
     ! Pure hydro passes its LLF/HLL wave speeds on to the passive-scalar flux.
     real(kind=dp), intent(out), optional :: hydro_waves(2)
@@ -3399,28 +3421,28 @@ contains
 
 #ifdef MHD
     if (riemann .eq. solver_hlld) then
-       flux = hlld_mhd_fluxes(left_state_p, right_state_p, gamma, smallr, smallc2, smax_cap)
+       flux = hlld_mhd_fluxes(left_state_p, right_state_p, gamma, gamma_rad, smallr, smallc2, smax_cap)
     else if (riemann .eq. solver_llf) then
-       flux = hll_mhd_fluxes(left_state_p, right_state_p, gamma, smallr, smallc2, smax_cap, .true.)
+       flux = hll_mhd_fluxes(left_state_p, right_state_p, gamma, gamma_rad, smallr, smallc2, smax_cap, .true.)
     else if (riemann .eq. solver_hll) then
-       flux = hll_mhd_fluxes(left_state_p, right_state_p, gamma, smallr, smallc2, smax_cap, .false.)
+       flux = hll_mhd_fluxes(left_state_p, right_state_p, gamma, gamma_rad, smallr, smallc2, smax_cap, .false.)
     else if (riemann .eq. solver_upwind) then
-       flux = upwind_mhd_fluxes(left_state_p, right_state_p, gamma, smallr, smallc2, 1.0_dp)
+       flux = upwind_mhd_fluxes(left_state_p, right_state_p, gamma, gamma_rad, smallr, smallc2, 1.0_dp)
     else
        ! Unimplemented 1D solvers fall back to HLL.
-       flux = hll_mhd_fluxes(left_state_p, right_state_p, gamma, smallr, smallc2, smax_cap, .false.)   ! fall back to HLL
+       flux = hll_mhd_fluxes(left_state_p, right_state_p, gamma, gamma_rad, smallr, smallc2, smax_cap, .false.)   ! fall back to HLL
     endif
 #else
     if(riemann .eq. solver_llf)then
-       flux = hll_fluxes(left_state_p, right_state_p, gamma, smallr, smallc2, smax_cap, .true., hydro_waves)
+       flux = hll_fluxes(left_state_p, right_state_p, gamma, gamma_rad, smallr, smallc2, smax_cap, .true., hydro_waves)
     else if (riemann .eq. solver_hll) then
-       flux = hll_fluxes(left_state_p, right_state_p, gamma, smallr, smallc2, smax_cap, .false., hydro_waves)
+       flux = hll_fluxes(left_state_p, right_state_p, gamma, gamma_rad, smallr, smallc2, smax_cap, .false., hydro_waves)
     else if (riemann .eq. solver_hllc) then
        if (present(hydro_waves)) hydro_waves = 0.0_dp
-       flux = hllc_fluxes(left_state_p, right_state_p, gamma, smallr, smallc2, smax_cap)
+       flux = hllc_fluxes(left_state_p, right_state_p, gamma, gamma_rad, smallr, smallc2, smax_cap)
     else
        ! Unsupported: LLF
-       flux = hll_fluxes(left_state_p, right_state_p, gamma, smallr, smallc2, smax_cap, .true., hydro_waves)
+       flux = hll_fluxes(left_state_p, right_state_p, gamma, gamma_rad, smallr, smallc2, smax_cap, .true., hydro_waves)
     endif
 #endif
 
@@ -3438,16 +3460,18 @@ contains
   !> @param[in,out] left_interfaces_z : The left interfaces at the k+1/2 interfaces. The fluxes along the Z interfaces are returned in this array
   !> @param[in] right_interfaces_z : The right interfaces at the k-1/2 interfaces.
   !> @param[in] gamma : The adiabatic index
+  !> @param[in] gamma_rad : The adiabatic indices of the non-thermal energies
   !> @param[in] thread_idx : The index of this thread
   !>
   !> MHD: rotates B to the face-normal frame and adds MHD flux components.
   attributes(device) subroutine riemann_driver(left_interfaces_x, right_interfaces_x, left_interfaces_y, &
        & right_interfaces_y, left_interfaces_z, right_interfaces_z, thread_idx, &
-       & gamma, smallr, smallc2, smax_cap, riemann)
+       & gamma, gamma_rad, smallr, smallc2, smax_cap, riemann)
     type(subgrid_3x2x2cell_primitive), intent(inout) :: left_interfaces_x, right_interfaces_x
     type(subgrid_2x3x2cell_primitive), intent(inout) :: left_interfaces_y, right_interfaces_y
     type(subgrid_2x2x3cell_primitive), intent(inout) :: left_interfaces_z, right_interfaces_z
     real(kind=dp), value :: gamma, smallr, smallc2, smax_cap
+    real(kind=dp), device :: gamma_rad(1:nener+1)
     integer, value :: riemann
     integer, value :: thread_idx
     integer :: work_idx, interface_array_size, i, j, k
@@ -3595,13 +3619,13 @@ contains
 
        ! Call the Riemann Solver
 #if NVAR>5+NENER && !defined(MHD)
-       flux = riemann_fluxes(left_interface, right_interface, gamma, smallr, smallc2, smax_cap, riemann_local, waves)
+       flux = riemann_fluxes(left_interface, right_interface, gamma, gamma_rad, smallr, smallc2, smax_cap, riemann_local, waves)
 #else
-       flux = riemann_fluxes(left_interface, right_interface, gamma, smallr, smallc2, smax_cap, riemann_local)
+       flux = riemann_fluxes(left_interface, right_interface, gamma, gamma_rad, smallr, smallc2, smax_cap, riemann_local)
 #endif
 #if NVAR>5+NENER
 #ifdef MHD
-       call hll_mhd_wavespeeds(left_interface, right_interface, gamma, smallr, smallc2, smax_cap, &
+       call hll_mhd_wavespeeds(left_interface, right_interface, gamma, gamma_rad, smallr, smallc2, smax_cap, &
             & riemann_local, waves(1), waves(2))
        if (riemann_local .eq. solver_upwind) then
           waves(2) = abs(0.5_dp*(left_interface%velocity_x + right_interface%velocity_x))
@@ -4441,9 +4465,10 @@ contains
 #ifdef MHD
   ! Fast-magnetosonic HLL wave speeds, or for LLF (-lmax, lmax) with the Rusanov speed of
   ! hll_mhd_fluxes(llf=.true.).
-  attributes(device) subroutine hll_mhd_wavespeeds(left, right, gamma, smallr, smallc2, smax_cap, riemann, SL, SR)
+  attributes(device) subroutine hll_mhd_wavespeeds(left, right, gamma, gamma_rad, smallr, smallc2, smax_cap, riemann, SL, SR)
     type(primitive_t), intent(in) :: left, right
     real(kind=dp), value :: gamma, smallr, smallc2, smax_cap
+    real(kind=dp), device :: gamma_rad(1:nener+1)
     integer, value :: riemann
     real(kind=dp), intent(out) :: SL, SR
     real(kind=dp) :: smallp, bx_mean, rl, rr, pl, pr, ul, ur
@@ -4465,8 +4490,8 @@ contains
     b2r = compute_bsquared(brx, bry, brz); c2r = gamma*pr/rr
 #if NENER>0
     do irad = 1, nener
-       c2l = c2l + gamma_rad_d(irad)*left%prad(irad)/rl
-       c2r = c2r + gamma_rad_d(irad)*right%prad(irad)/rr
+       c2l = c2l + gamma_rad(irad)*left%prad(irad)/rl
+       c2r = c2r + gamma_rad(irad)*right%prad(irad)/rr
     end do
 #endif
     d2l = 0.5_dp*(b2l/rl + c2l); cfleft = sqrt(d2l + sqrt(max(d2l**2 - c2l*blx*blx/rl, 0.0_dp)))
@@ -4531,10 +4556,11 @@ contains
   end function gather_corner_z
 
   ! Apply parallel-B continuity and dispatch the 2D EMF solver.
-  attributes(device) function emf_solve(qLL, qLR, qRL, qRR, gamma, smallr, smallc, smax_cap, &
+  attributes(device) function emf_solve(qLL, qLR, qRL, qRR, gamma, gamma_rad, smallr, smallc, smax_cap, &
        & switch_llf_dmin, switch_llf_pmin, riemann2d) result(E)
     type(primitive_t), intent(in) :: qLL, qLR, qRL, qRR
     real(kind=dp), value :: gamma, smallr, smallc, smax_cap, switch_llf_dmin, switch_llf_pmin
+    real(kind=dp), device :: gamma_rad(1:nener+1)
     integer, value :: riemann2d
     real(kind=dp) :: E
     type(primitive_t) :: sLL, sLR, sRL, sRR
@@ -4546,19 +4572,20 @@ contains
     sLL%Bx = b1_LL; sRL%Bx = b1_LL; sLR%Bx = b1_LR; sRR%Bx = b1_LR
     b2_LL = half*(qLL%By + qLR%By); b2_RL = half*(qRL%By + qRR%By)
     sLL%By = b2_LL; sLR%By = b2_LL; sRL%By = b2_RL; sRR%By = b2_RL
-    E = riemann2d_emf(sLL, sLR, sRL, sRR, gamma, smallr, smallc, smax_cap, &
+    E = riemann2d_emf(sLL, sLR, sRL, sRR, gamma, gamma_rad, smallr, smallc, smax_cap, &
          & switch_llf_dmin, switch_llf_pmin, riemann2d)
   end function emf_solve
 
   ! Solve edge EMFs on the oct subgrid from stored corner states.
   attributes(device) subroutine cmp_mag_flx_mhd(corner_x, corner_y, corner_z, emfx, emfy, emfz, &
-       & thread_idx, gamma, smallr, smallc, smax_cap, &
+       & thread_idx, gamma, gamma_rad, smallr, smallc, smax_cap, &
        & switch_llf_dmin, switch_llf_pmin, riemann2d)
     type(subgrid_2x3x3edge_corner), intent(in) :: corner_x
     type(subgrid_3x2x3edge_corner), intent(in) :: corner_y
     type(subgrid_3x3x2edge_corner), intent(in) :: corner_z
     integer, value :: thread_idx, riemann2d
     real(kind=dp), value :: gamma, smallr, smallc, smax_cap, switch_llf_dmin, switch_llf_pmin
+    real(kind=dp), device :: gamma_rad(1:nener+1)
     type(subgrid_2x3x3edge_primitive), intent(inout) :: emfx
     type(subgrid_3x2x3edge_primitive), intent(inout) :: emfy
     type(subgrid_3x3x2edge_primitive), intent(inout) :: emfz
@@ -4597,7 +4624,7 @@ contains
        end if
 
        ! The ONE 2D solver call site (convergent across the warp)
-       E = emf_solve(qLL, qLR, qRL, qRR, gamma, smallr, smallc, smax_cap, &
+       E = emf_solve(qLL, qLR, qRL, qRR, gamma, gamma_rad, smallr, smallc, smax_cap, &
             & switch_llf_dmin, switch_llf_pmin, riemann2d)
 
        if (work_idx < emf_size) then
@@ -4785,13 +4812,14 @@ contains
   ! ==========================================================================
 
   ! Record of the HLL (solver_hll) or LLF (solver_llf) flux.
-  attributes(device) function hll_uct_record(left, right, gamma, smallr, smallc2, smax_cap, solver) result(record)
+  attributes(device) function hll_uct_record(left, right, gamma, gamma_rad, smallr, smallc2, smax_cap, solver) result(record)
     type(primitive_t), intent(in) :: left, right
     real(kind=dp), value :: gamma, smallr, smallc2, smax_cap
+    real(kind=dp), device :: gamma_rad(1:nener+1)
     integer, value :: solver
     type(uct_record_t) :: record
     real(kind=dp) :: SL, SR
-    call hll_mhd_wavespeeds(left, right, gamma, smallr, smallc2, smax_cap, solver, SL, SR)
+    call hll_mhd_wavespeeds(left, right, gamma, gamma_rad, smallr, smallc2, smax_cap, solver, SL, SR)
     call set_uct_hll_record(record, left%velocity_y, right%velocity_y, left%velocity_z, right%velocity_z, &
          & 0.5_dp*(left%Bx + right%Bx), SL, SR)
   end function hll_uct_record
@@ -4867,9 +4895,10 @@ contains
   ! LLF switch of riemann_driver; solver is the one used (solver_hlld, solver_hll or solver_llf). A face
   ! whose HLLD record is not finite falls back to LLF inside hlld_mhd_fluxes; its scalar flux keeps the
   ! hlld (upwind) form.
-  attributes(device) function uct_face_solve(left, right, gamma, smallr, smallc2, smax_cap, record, solver) result(flux)
+  attributes(device) function uct_face_solve(left, right, gamma, gamma_rad, smallr, smallc2, smax_cap, record, solver) result(flux)
     type(primitive_t), intent(in) :: left, right
     real(kind=dp), value :: gamma, smallr, smallc2, smax_cap
+    real(kind=dp), device :: gamma_rad(1:nener+1)
     type(uct_record_t), intent(out) :: record
     integer, intent(out) :: solver
     type(conserved_t) :: flux
@@ -4882,10 +4911,10 @@ contains
     if (uct_riemann_d == solver_uct_hll) solver = solver_hll
     if (llf .or. uct_riemann_d == solver_uct_llf) solver = solver_llf
     if (solver == solver_hlld) then
-       flux = hlld_mhd_fluxes(left, right, gamma, smallr, smallc2, smax_cap, record)
+       flux = hlld_mhd_fluxes(left, right, gamma, gamma_rad, smallr, smallc2, smax_cap, record)
     else
-       flux = hll_mhd_fluxes(left, right, gamma, smallr, smallc2, smax_cap, solver == solver_llf)
-       record = hll_uct_record(left, right, gamma, smallr, smallc2, smax_cap, solver)
+       flux = hll_mhd_fluxes(left, right, gamma, gamma_rad, smallr, smallc2, smax_cap, solver == solver_llf)
+       record = hll_uct_record(left, right, gamma, gamma_rad, smallr, smallc2, smax_cap, solver)
     endif
   end function uct_face_solve
 
@@ -4996,7 +5025,7 @@ contains
 
 #if NVAR>5+NENER
   attributes(device) subroutine uct_scalar_fluxes(lx, rx, ly, ry, lz, rz, orientation, i, j, k, &
-       & ql, qr, flux, solver, gamma, smallr, smallc2, smax_cap, fscal)
+       & ql, qr, flux, solver, gamma, gamma_rad, smallr, smallc2, smax_cap, fscal)
     type(subgrid_3x2x2cell_primitive), intent(in) :: lx, rx
     type(subgrid_2x3x2cell_primitive), intent(in) :: ly, ry
     type(subgrid_2x2x3cell_primitive), intent(in) :: lz, rz
@@ -5004,11 +5033,12 @@ contains
     type(primitive_t), intent(in) :: ql, qr
     type(conserved_t), intent(in) :: flux
     real(kind=dp), value :: gamma, smallr, smallc2, smax_cap
+    real(kind=dp), device :: gamma_rad(1:nener+1)
     real(kind=dp), intent(out) :: fscal(1:nscalar)
     real(kind=dp) :: SL, SR, rhoL, rhoR, sl_n, sr_n
     integer :: n
 
-    call hll_mhd_wavespeeds(ql, qr, gamma, smallr, smallc2, smax_cap, solver, SL, SR)
+    call hll_mhd_wavespeeds(ql, qr, gamma, gamma_rad, smallr, smallc2, smax_cap, solver, SL, SR)
     rhoL = max(ql%density, smallr)
     rhoR = max(qr%density, smallr)
     do n = 1, nscalar
@@ -5138,7 +5168,7 @@ contains
   ! Owned faces (the low faces of the subgrid cells): solve once per chunk and store the fluxes and
   ! record in the owner oct's products.
   attributes(device) subroutine riemann_uct_owned(lx, rx, ly, ry, lz, rz, products, &
-       & nbor, product_offset, thread_idx, gamma, smallr, smallc2, smax_cap, induction)
+       & nbor, product_offset, thread_idx, gamma, gamma_rad, smallr, smallc2, smax_cap, induction)
     type(subgrid_3x2x2cell_primitive), intent(in) :: lx, rx
     type(subgrid_2x3x2cell_primitive), intent(in) :: ly, ry
     type(subgrid_2x2x3cell_primitive), intent(in) :: lz, rz
@@ -5146,6 +5176,7 @@ contains
     integer(kind=4) :: nbor(1:subgridsize)
     integer, value :: product_offset, thread_idx
     real(kind=dp), value :: gamma, smallr, smallc2, smax_cap
+    real(kind=dp), device :: gamma_rad(1:nener+1)
     logical, value :: induction
     integer :: work_idx, ncell, orientation, i, j, k, oct_idx, cell_idx, solver
     type(primitive_t) :: ql, qr
@@ -5159,9 +5190,9 @@ contains
        oct_idx = nbor(1 + (1+i/2) + nsubgridp2*(1+j/2) + nsubgridp2sq*(1+k/2)) + product_offset
        cell_idx = 1 + mod(i,2) + 2*mod(j,2) + 4*mod(k,2)
        call uct_gather_face(lx, rx, ly, ry, lz, rz, orientation, i, j, k, ql, qr)
-       flux = uct_face_solve(ql, qr, gamma, smallr, smallc2, smax_cap, record, solver)
+       flux = uct_face_solve(ql, qr, gamma, gamma_rad, smallr, smallc2, smax_cap, record, solver)
        call store_uct_fluxes(lx, rx, ly, ry, lz, rz, orientation, i, j, k, ql, qr, flux, solver, &
-            & products, oct_idx, cell_idx, gamma, smallr, smallc2, smax_cap, induction)
+            & products, oct_idx, cell_idx, gamma, gamma_rad, smallr, smallc2, smax_cap, induction)
        call store_uct_record(products, cell_idx, oct_idx, orientation, record)
     end do
   end subroutine riemann_uct_owned
@@ -5169,7 +5200,7 @@ contains
   ! Store the lab-frame gas, non-thermal and scalar fluxes of face (i,j,k), from its face-frame flux fface,
   ! in the owner's products.
   attributes(device) subroutine store_uct_fluxes(lx, rx, ly, ry, lz, rz, orientation, i, j, k, ql, qr, &
-       & fface, solver, products, oct_idx, cell_idx, gamma, smallr, smallc2, smax_cap, induction)
+       & fface, solver, products, oct_idx, cell_idx, gamma, gamma_rad, smallr, smallc2, smax_cap, induction)
     type(subgrid_3x2x2cell_primitive), intent(in) :: lx, rx
     type(subgrid_2x3x2cell_primitive), intent(in) :: ly, ry
     type(subgrid_2x2x3cell_primitive), intent(in) :: lz, rz
@@ -5178,6 +5209,7 @@ contains
     type(conserved_t), intent(in) :: fface
     real(kind=dp), device :: products(1:twotondim,1:3*uct_product_fields,*)
     real(kind=dp), value :: gamma, smallr, smallc2, smax_cap
+    real(kind=dp), device :: gamma_rad(1:nener+1)
     logical, value :: induction
     type(conserved_t) :: flux
     integer :: base
@@ -5191,7 +5223,7 @@ contains
 
 #if NVAR>5+NENER
     call uct_scalar_fluxes(lx, rx, ly, ry, lz, rz, orientation, i, j, k, ql, qr, fface, solver, &
-         & gamma, smallr, smallc2, smax_cap, fscal)
+         & gamma, gamma_rad, smallr, smallc2, smax_cap, fscal)
 #endif
     flux = uct_unrotate_flux(fface, orientation)
     if (induction) then
@@ -5517,7 +5549,7 @@ contains
   ! Solve the listed ghost-owned faces and store them in the owner's products: fluxes and record
   ! for a high face of the subgrid, the record for a halo face.
   attributes(device) subroutine solve_uct_ghost_faces(lx, rx, ly, ry, lz, rz, shell_left, shell_right, &
-       & products, nbor, slist, nlist, thread_idx, gamma, smallr, smallc2, smax_cap, induction)
+       & products, nbor, slist, nlist, thread_idx, gamma, gamma_rad, smallr, smallc2, smax_cap, induction)
     type(subgrid_3x2x2cell_primitive), intent(in) :: lx, rx
     type(subgrid_2x3x2cell_primitive), intent(in) :: ly, ry
     type(subgrid_2x2x3cell_primitive), intent(in) :: lz, rz
@@ -5527,6 +5559,7 @@ contains
     integer, intent(in) :: slist(*)
     integer, value :: nlist, thread_idx
     real(kind=dp), value :: gamma, smallr, smallc2, smax_cap
+    real(kind=dp), device :: gamma_rad(1:nener+1)
     logical, value :: induction
     integer, parameter :: m = 2*nsubgrid
     integer :: w, c, orientation, normal, t1, t2, i, j, k, oct_idx, cell_idx, base
@@ -5553,9 +5586,9 @@ contains
           ql = uct_rotate_face(shell_left(c - 3*m**2), orientation)
           qr = uct_rotate_face(shell_right(c - 3*m**2), orientation)
        endif
-       flux = uct_face_solve(ql, qr, gamma, smallr, smallc2, smax_cap, record, solver)
+       flux = uct_face_solve(ql, qr, gamma, gamma_rad, smallr, smallc2, smax_cap, record, solver)
        if (c < 3*m**2) call store_uct_fluxes(lx, rx, ly, ry, lz, rz, orientation, i, j, k, ql, qr, flux, solver, &
-            & products, oct_idx, cell_idx, gamma, smallr, smallc2, smax_cap, induction)
+            & products, oct_idx, cell_idx, gamma, gamma_rad, smallr, smallc2, smax_cap, induction)
        ! Every subgrid next to the ghost oct stores this record, with the same values: atomic
        ! exchanges keep the concurrent stores well defined.
        base = orientation*uct_product_fields + uct_product_record
@@ -7082,7 +7115,7 @@ contains
   attributes(global) subroutine source_hydro_kernel(grid, uold, unew, bnew, &
        & hash_key, hash_val, hash_size, ckey_max, key_off, &
        & periodic, box_ckey_min, box_ckey_max, ngridmax, head_idx, num_octs, ilevel, &
-       & dx, dt, hexp, gamma, smallr, smallc, entropy, dual_energy, T2_fix, ientropy, &
+       & dx, dt, hexp, gamma, gamma_rad, smallr, smallc, entropy, dual_energy, T2_fix, ientropy, &
        & sgs_turb, equilibrium_sgs, iturb, smagorinsky_lilly_constant, nstep_coarse)
     implicit none
     type(oct), device :: grid(*)
@@ -7102,6 +7135,7 @@ contains
     integer(kind=4), intent(in), value :: num_octs
     integer(kind=4), intent(in), value :: ilevel
     real(kind=dp), intent(in), value :: dx, dt, hexp, gamma, smallr, smallc
+    real(kind=dp), device :: gamma_rad(1:nener+1)
     logical, intent(in), value :: entropy
     real(kind=dp), intent(in), value :: dual_energy, T2_fix
     integer(kind=4), intent(in), value :: ientropy
@@ -7196,7 +7230,7 @@ contains
 #if NENER>0
     do irad = 1, nener
        unew(ind,5+irad,igrid) = unew(ind,5+irad,igrid) &
-            & -(gamma_rad_d(irad)-1.0_dp)*uold(ind,5+irad,igrid)*divu*dt
+            & -(gamma_rad(irad)-1.0_dp)*uold(ind,5+irad,igrid)*divu*dt
     end do
 #endif
 
@@ -7431,7 +7465,7 @@ contains
   attributes(device) subroutine cmpdt_cell( &
        grid, uold, bold, f, constant_gravity, &
        oct_idx, cell_idx, in_range, &
-       dx, gamma, smallr, smallc2, courant_factor, induction, &
+       dx, gamma, gamma_rad, smallr, smallc2, courant_factor, induction, &
        mass_loc, ekin_loc, eint_loc, emag_loc, dt_loc &
 #ifdef TURB
        , ctot, grav &
@@ -7446,6 +7480,7 @@ contains
     integer,       intent(in)  :: oct_idx, cell_idx
     logical,       intent(in)  :: in_range
     real(kind=dp), intent(in)  :: dx, gamma, smallr, smallc2, courant_factor
+    real(kind=dp), device :: gamma_rad(1:nener+1)
     logical,       intent(in)  :: induction
     real(kind=dp), intent(out) :: mass_loc, ekin_loc, eint_loc, emag_loc, dt_loc
 #ifdef TURB
@@ -7494,7 +7529,7 @@ contains
 #if NENER>0
     do irad = 1, nener
        conserved%energy = conserved%energy - uold(cell_idx, 5+irad, oct_idx)
-       crad2 = crad2 + gamma_rad_d(irad)*(gamma_rad_d(irad)-1.0_dp)*uold(cell_idx, 5+irad, oct_idx)
+       crad2 = crad2 + gamma_rad(irad)*(gamma_rad(irad)-1.0_dp)*uold(cell_idx, 5+irad, oct_idx)
     end do
 #endif
 
@@ -7672,7 +7707,7 @@ contains
   !> cmpdt_kernel: computes per-cell dt and extensive
   !> quantities, then perform atomic sum and min over the blocks.
   attributes(global) subroutine cmpdt_kernel(grid, uold, bold, f, constant_gravity, &
-      & head_idx, num_octs, data_out, dx, gamma, smallr, smallc2, courant_factor, induction &
+      & head_idx, num_octs, data_out, dx, gamma, gamma_rad, smallr, smallc2, courant_factor, induction &
 #ifdef TURB
       & , afield, d_skip, boxlen, turb_min_rho &
 #endif
@@ -7692,6 +7727,7 @@ contains
     integer(kind=4), intent(in), value :: num_octs
     real(kind=8), device :: data_out(*) !mass, ekin, eint, emag, dt
     real(kind=dp), value :: dx, gamma, smallr, smallc2, courant_factor
+    real(kind=dp), device :: gamma_rad(1:nener+1)
     logical, value :: induction
 
     integer :: info
@@ -7707,7 +7743,7 @@ contains
 
     call cmpdt_cell(grid, uold, bold, f, constant_gravity, &
          oct_idx, cell_idx, local_oct < num_octs, &
-         dx, gamma, smallr, smallc2, courant_factor, induction, &
+         dx, gamma, gamma_rad, smallr, smallc2, courant_factor, induction, &
          m, ek, ei, em, dtl &
 #ifdef TURB
          , ctot, grav &
@@ -7750,7 +7786,7 @@ contains
   !> per-block reduction cost.
   attributes(global) subroutine cmpdt_kernel_2(grid, uold, bold, f, constant_gravity, &
       & head_idx, num_octs, part_mass, part_ekin, part_eint, part_emag, part_dt, &
-      & dx, gamma, smallr, smallc2, courant_factor, induction &
+      & dx, gamma, gamma_rad, smallr, smallc2, courant_factor, induction &
 #ifdef TURB
       & , afield, d_skip, boxlen, turb_min_rho &
 #endif
@@ -7774,6 +7810,7 @@ contains
     real(kind=dp), device :: part_emag(*)
     real(kind=dp), device :: part_dt(*)
     real(kind=dp), value :: dx, gamma, smallr, smallc2, courant_factor
+    real(kind=dp), device :: gamma_rad(1:nener+1)
     logical, value :: induction
 
     integer :: tid, bid, cell_idx, oct_idx, local_oct
@@ -7787,7 +7824,7 @@ contains
 
     call cmpdt_cell(grid, uold, bold, f, constant_gravity, &
          oct_idx, cell_idx, local_oct < num_octs, &
-         dx, gamma, smallr, smallc2, courant_factor, induction, &
+         dx, gamma, gamma_rad, smallr, smallc2, courant_factor, induction, &
          mass_loc, ekin_loc, eint_loc, emag_loc, dt_loc &
 #ifdef TURB
          , ctot, grav &
@@ -8220,7 +8257,7 @@ contains
    ! > @brief Paper hydro kernel solves HD in planes to minimise usage of shared memory without recomputing anything.
   attributes(global) subroutine hydro_integrator_paper_kernel(grid, uold, unew, f, father, nbor, &
        & head_idx, num_subgrids, ngridmax, ilevel, levelmin, levelmax, &
-       & gamma, dt, dx, smax_cap, slope, riemann, constant_gravity)
+       & gamma, gamma_rad, dt, dx, smax_cap, slope, riemann, constant_gravity)
     type(oct), device :: grid(*)
     integer, device :: father(*)
     integer, device :: nbor(1:subgridsize,*)
@@ -8233,6 +8270,7 @@ contains
     integer, intent(in), value :: ngridmax
     integer, intent(in), value :: ilevel, levelmin, levelmax
     real(kind=dp), intent(in), value :: gamma
+    real(kind=dp), device :: gamma_rad(1:nener+1)
     real(kind=dp), intent(in), value :: dt
     real(kind=dp), intent(in), value :: dx, smax_cap
     integer, intent(in), value :: slope
@@ -8407,7 +8445,7 @@ contains
              right_state%velocity_z = qR(ix,iy,i_pz)
              right_state%pressure   = qR(ix,iy,i_ene)
 
-             flux_result = riemann_fluxes(left_state, right_state, gamma, smallr, smallc_squared, smax_cap, riemann)
+             flux_result = riemann_fluxes(left_state, right_state, gamma, gamma_rad, smallr, smallc_squared, smax_cap, riemann)
 
              flux(ix,iy,i_rho) = flux_result%density
              flux(ix,iy,i_pz ) = flux_result%momentum_x
@@ -8479,7 +8517,7 @@ contains
              right_state%velocity_z = qR(ix,iy,i_pz)
              right_state%pressure   = qR(ix,iy,i_ene)
 
-             flux_result = riemann_fluxes(left_state, right_state, gamma, smallr, smallc_squared, smax_cap, riemann)
+             flux_result = riemann_fluxes(left_state, right_state, gamma, gamma_rad, smallr, smallc_squared, smax_cap, riemann)
 
              flux(ix,iy,i_rho) = flux_result%density
              flux(ix,iy,i_px ) = flux_result%momentum_x
@@ -8534,7 +8572,7 @@ contains
              right_state%velocity_z = qR(ix,iy,i_pz)
              right_state%pressure   = qR(ix,iy,i_ene)
 
-             flux_result = riemann_fluxes(left_state, right_state, gamma, smallr, smallc_squared, smax_cap, riemann)
+             flux_result = riemann_fluxes(left_state, right_state, gamma, gamma_rad, smallr, smallc_squared, smax_cap, riemann)
 
              flux(ix,iy,i_rho) = flux_result%density
              flux(ix,iy,i_py ) = flux_result%momentum_x
@@ -8693,13 +8731,13 @@ contains
   attributes(device) subroutine hydro_integrator(grid, uold, unew, bold, bnew, &
        & f, father, nbor, &
        & head_idx, num_subgrids, ngridmax, ilevel, levelmin, levelmax, &
-       & gamma, smallr, smallc2, dt, dx, smax_cap, slope, slope_mag, riemann, riemann2d, &
+       & gamma, gamma_rad, smallr, smallc2, dt, dx, smax_cap, slope, slope_mag, riemann, riemann2d, &
        & switch_llf_dmin, switch_llf_pmin, induction, etamag, constant_gravity, smem, pair)
 #else
   attributes(global) HYDRO_LB subroutine hydro_integrator_kernel(grid, uold, unew, bold, bnew, &
        & f, father, nbor, &
        & head_idx, num_subgrids, ngridmax, ilevel, levelmin, levelmax, &
-       & gamma, smallr, smallc2, dt, dx, smax_cap, slope, slope_mag, riemann, riemann2d, &
+       & gamma, gamma_rad, smallr, smallc2, dt, dx, smax_cap, slope, slope_mag, riemann, riemann2d, &
        & switch_llf_dmin, switch_llf_pmin, induction, etamag, constant_gravity)
 #endif
     type(oct), device :: grid(*)
@@ -8716,6 +8754,8 @@ contains
     integer, intent(in), value :: ngridmax
     integer, intent(in), value :: ilevel, levelmin, levelmax
     real(kind=dp), intent(in), value :: gamma, smallr, smallc2
+    real(kind=dp), device :: gamma_rad(1:nener+1)
+    real(kind=dp), device :: gamma_rad(1:nener+1)
     real(kind=dp), intent(in), value :: dt
     real(kind=dp), intent(in), value :: dx, smax_cap
     integer, intent(in), value :: slope
@@ -8796,7 +8836,7 @@ contains
 #ifdef MHD
          & bf, &
 #endif
-         & thread_idx, gamma, smallr, smallc2, dt, ilevel < levelmax, local_subgrid)
+         & thread_idx, gamma, gamma_rad, smallr, smallc2, dt, ilevel < levelmax, local_subgrid)
 
     ! =======================================================================
     ! Perform tracing step and compute the interface states
@@ -8817,7 +8857,7 @@ contains
 #ifdef HYDRO_PAIR
          & pair, &
 #endif
-         & left_interfaces_z, right_interfaces_z, gamma, smallr, smallc2, dtdx, slope)
+         & left_interfaces_z, right_interfaces_z, gamma, gamma_rad, smallr, smallc2, dtdx, slope)
 
     ! =======================================================================
     ! Compute the fluxes.
@@ -8828,7 +8868,7 @@ contains
     ! names say
     call riemann_driver(left_interfaces_x, right_interfaces_x, left_interfaces_y, &
          & right_interfaces_y, left_interfaces_z, right_interfaces_z, thread_idx, &
-         & gamma, smallr, smallc2, smax_cap, riemann)
+         & gamma, gamma_rad, smallr, smallc2, smax_cap, riemann)
 
 #ifdef MHD
     ! Zero Euler fluxes when induction-only CT is active.
@@ -8838,7 +8878,7 @@ contains
 
     ! 2D EMF solve from the shared edge-corner buffers -> edge-EMF subgrids
     call cmp_mag_flx_mhd(corner_x, corner_y, corner_z, emfx, emfy, emfz, thread_idx, &
-         & gamma, smallr, smallc, smax_cap, switch_llf_dmin, switch_llf_pmin, riemann2d)
+         & gamma, gamma_rad, smallr, smallc, smax_cap, switch_llf_dmin, switch_llf_pmin, riemann2d)
 
     if (etamag > 0.0_dp) then
        call cmpcurrent_mhd(bf, emfx, emfy, emfz, etamag, dx, thread_idx)
@@ -8884,7 +8924,7 @@ contains
   attributes(global) HYDRO_LB subroutine hydro_integrator_kernel(grid, uold, unew, bold, bnew, &
        & f, father, nbor, &
        & head_idx, num_subgrids, ngridmax, ilevel, levelmin, levelmax, &
-       & gamma, smallr, smallc2, dt, dx, smax_cap, slope, slope_mag, riemann, riemann2d, &
+       & gamma, gamma_rad, smallr, smallc2, dt, dx, smax_cap, slope, slope_mag, riemann, riemann2d, &
        & switch_llf_dmin, switch_llf_pmin, induction, etamag, constant_gravity)
     type(oct), device :: grid(*)
     integer, device :: father(*)
@@ -8900,6 +8940,7 @@ contains
     integer, intent(in), value :: ngridmax
     integer, intent(in), value :: ilevel, levelmin, levelmax
     real(kind=dp), intent(in), value :: gamma, smallr, smallc2
+    real(kind=dp), device :: gamma_rad(1:nener+1)
     real(kind=dp), intent(in), value :: dt
     real(kind=dp), intent(in), value :: dx, smax_cap
     integer, intent(in), value :: slope
@@ -8915,14 +8956,14 @@ contains
     call hydro_integrator(grid, uold, unew, bold, bnew, &
          & f, father, nbor, &
          & head_idx, num_subgrids, ngridmax, ilevel, levelmin, levelmax, &
-         & gamma, smallr, smallc2, dt, dx, smax_cap, slope, slope_mag, riemann, riemann2d, &
+         & gamma, gamma_rad, smallr, smallc2, dt, dx, smax_cap, slope, slope_mag, riemann, riemann2d, &
          & switch_llf_dmin, switch_llf_pmin, induction, etamag, constant_gravity, smem, .false.)
   end subroutine hydro_integrator_kernel
 
   attributes(global) HYDRO_PAIR_LB subroutine hydro_integrator_pair_kernel(grid, uold, unew, bold, bnew, &
        & f, father, nbor, &
        & head_idx, num_subgrids, ngridmax, ilevel, levelmin, levelmax, &
-       & gamma, smallr, smallc2, dt, dx, smax_cap, slope, slope_mag, riemann, riemann2d, &
+       & gamma, gamma_rad, smallr, smallc2, dt, dx, smax_cap, slope, slope_mag, riemann, riemann2d, &
        & switch_llf_dmin, switch_llf_pmin, induction, etamag, constant_gravity)
     type(oct), device :: grid(*)
     integer, device :: father(*)
@@ -8938,6 +8979,7 @@ contains
     integer, intent(in), value :: ngridmax
     integer, intent(in), value :: ilevel, levelmin, levelmax
     real(kind=dp), intent(in), value :: gamma, smallr, smallc2
+    real(kind=dp), device :: gamma_rad(1:nener+1)
     real(kind=dp), intent(in), value :: dt
     real(kind=dp), intent(in), value :: dx, smax_cap
     integer, intent(in), value :: slope
@@ -8953,7 +8995,7 @@ contains
     call hydro_integrator(grid, uold, unew, bold, bnew, &
          & f, father, nbor, &
          & head_idx, num_subgrids, ngridmax, ilevel, levelmin, levelmax, &
-         & gamma, smallr, smallc2, dt, dx, smax_cap, slope, slope_mag, riemann, riemann2d, &
+         & gamma, gamma_rad, smallr, smallc2, dt, dx, smax_cap, slope, slope_mag, riemann, riemann2d, &
          & switch_llf_dmin, switch_llf_pmin, induction, etamag, constant_gravity, smem, .true.)
   end subroutine hydro_integrator_pair_kernel
 #endif
@@ -8965,7 +9007,7 @@ contains
 
   ! Solve and store the owned faces of the chunk and its real halo subgrids.
   attributes(global) UCT_FACE_LB subroutine uct_face_kernel(grid, uold, bold, f, nbor, products, &
-       & halo, gamma, smallr, smallc2, dt, dx, smax_cap, slope, slope_mag, &
+       & halo, gamma, gamma_rad, smallr, smallc2, dt, dx, smax_cap, slope, slope_mag, &
        & induction, constant_gravity)
     type(oct), device :: grid(*)
     integer, device :: nbor(1:subgridsize,*)
@@ -8976,6 +9018,7 @@ contains
     real(kind=dp), device :: products(1:twotondim,1:3*uct_product_fields,*)
     integer, device :: halo(*)
     real(kind=dp), intent(in), value :: gamma, smallr, smallc2, dt, dx, smax_cap
+    real(kind=dp), device :: gamma_rad(1:nener+1)
     integer, intent(in), value :: slope, slope_mag
     logical, intent(in), value :: induction
     type(uct_face_smem_t), shared :: smem(*)
@@ -9017,7 +9060,7 @@ contains
 #if NVAR>5+NENER
          & scalar_subgrid, &
 #endif
-         & bf, thread_idx, gamma, smallr, smallc2, dt, .false., local_subgrid, nbox=2*nsubgrid+3)
+         & bf, thread_idx, gamma, gamma_rad, smallr, smallc2, dt, .false., local_subgrid, nbox=2*nsubgrid+3)
 
     call trace_3d(local_subgrid, thread_idx, &
 #if NENER>0
@@ -9030,11 +9073,11 @@ contains
          & left_interfaces_x=left_interfaces_x, right_interfaces_x=right_interfaces_x, &
          & left_interfaces_y=left_interfaces_y, right_interfaces_y=right_interfaces_y, &
          & left_interfaces_z=left_interfaces_z, right_interfaces_z=right_interfaces_z, &
-         & gamma=gamma, smallr=smallr, smallc2=smallc2, dtdx=dtdx, slope=slope, owned_only=.true.)
+         & gamma=gamma, gamma_rad=gamma_rad, smallr=smallr, smallc2=smallc2, dtdx=dtdx, slope=slope, owned_only=.true.)
 
     call riemann_uct_owned(left_interfaces_x, right_interfaces_x, left_interfaces_y, right_interfaces_y, &
          & left_interfaces_z, right_interfaces_z, products, snbor, product_offset, &
-         & thread_idx, gamma, smallr, smallc2, smax_cap, induction)
+         & thread_idx, gamma, gamma_rad, smallr, smallc2, smax_cap, induction)
 
     end associate
   end subroutine uct_face_kernel
@@ -9042,7 +9085,7 @@ contains
   ! AMR level: the faces a listed subgrid reads whose owner is a ghost oct. Every subgrid next to
   ! the ghost oct solves them from the same cells, so the values stored are identical.
   attributes(global) UCT_GHOST_FACE_LB subroutine uct_ghost_face_kernel(grid, uold, bold, f, nbor, products, &
-       & ghost_list, slot, gamma, smallr, smallc2, dt, dx, smax_cap, slope, slope_mag, &
+       & ghost_list, slot, gamma, gamma_rad, smallr, smallc2, dt, dx, smax_cap, slope, slope_mag, &
        & induction, constant_gravity)
     type(oct), device :: grid(*)
     integer, device :: nbor(1:subgridsize,*)
@@ -9054,6 +9097,7 @@ contains
     integer(kind=4), device :: ghost_list(*)
     integer, device :: slot(*)
     real(kind=dp), intent(in), value :: gamma, smallr, smallc2, dt, dx, smax_cap
+    real(kind=dp), device :: gamma_rad(1:nener+1)
     integer, intent(in), value :: slope, slope_mag
     logical, intent(in), value :: induction
     type(uct_ghost_smem_t), shared :: smem(*)
@@ -9100,7 +9144,7 @@ contains
 #if NVAR>5+NENER
          & scalar_subgrid, &
 #endif
-         & bf, thread_idx, gamma, smallr, smallc2, dt, .false., local_subgrid)
+         & bf, thread_idx, gamma, gamma_rad, smallr, smallc2, dt, .false., local_subgrid)
 
     call trace_3d(local_subgrid, thread_idx, &
 #if NENER>0
@@ -9113,12 +9157,12 @@ contains
          & left_interfaces_x=left_interfaces_x, right_interfaces_x=right_interfaces_x, &
          & left_interfaces_y=left_interfaces_y, right_interfaces_y=right_interfaces_y, &
          & left_interfaces_z=left_interfaces_z, right_interfaces_z=right_interfaces_z, &
-         & gamma=gamma, smallr=smallr, smallc2=smallc2, dtdx=dtdx, slope=slope, &
+         & gamma=gamma, gamma_rad=gamma_rad, smallr=smallr, smallc2=smallc2, dtdx=dtdx, slope=slope, &
          & shell_left=smem(1)%shell_left, shell_right=smem(1)%shell_right)
 
     call solve_uct_ghost_faces(left_interfaces_x, right_interfaces_x, left_interfaces_y, right_interfaces_y, &
          & left_interfaces_z, right_interfaces_z, smem(1)%shell_left, smem(1)%shell_right, &
-         & products, pnbor, slist, scount, thread_idx, gamma, smallr, smallc2, smax_cap, induction)
+         & products, pnbor, slist, scount, thread_idx, gamma, gamma_rad, smallr, smallc2, smax_cap, induction)
 
     end associate
   end subroutine uct_ghost_face_kernel

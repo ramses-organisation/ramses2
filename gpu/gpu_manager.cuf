@@ -672,6 +672,7 @@ subroutine gpu_allocate_amr(sim)
   periodic=sim%r%periodic
   box_size=sim%r%box_size
   constant_gravity=real(sim%r%constant_gravity,kind=dp)
+  gamma_rad=real(sim%r%gamma_rad,kind=dp)
   box_ckey_min=sim%m%box_ckey_min
   box_ckey_max=sim%m%box_ckey_max
   if(sim%r%nbound>0)then
