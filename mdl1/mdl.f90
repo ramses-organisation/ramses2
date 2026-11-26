@@ -109,6 +109,8 @@ contains
 #ifndef WITHOUTMPI
     include 'mpif.h'
     integer::info
+    ! MPI_ABORT does not flush the error message of the caller
+    flush(6)
     ! Abort with error code 1
     call MPI_ABORT(MPI_COMM_WORLD,1,info)
 #else
@@ -320,8 +322,11 @@ contains
     integer::info
 #endif
 #ifdef _CUDA
-    integer::error_code
+    integer::node_rank
     type(cudaDeviceProp) :: prop
+#ifndef WITHOUTMPI
+    integer::node_comm
+#endif
 #endif
 #ifndef WITHOUTMPI
     call MPI_INIT(info)
@@ -337,18 +342,38 @@ contains
     mdl%myid=1
 #endif
 #ifdef _CUDA
-    err_code = cudaGetDeviceCount(mdl%ngpu) ! Get the number of GPUs available
-    mdl%mydev = mod(mdl%myid, mdl%ngpu) ! Determine which GPU this rank will use
-    err_code = cudaSetDevice(mdl%mydev) ! Set the device for this rank
-    if(mdl%myid==1)write(*,'(" Launching CUDA with ndevice/task = ",I0)')mdl%ngpu
-    err_code = cudaGetDeviceProperties(prop,0)
-    write(*,'(" Device Name: ",A)')trim(prop%name)
-    write(*,'(" Compute Capability: ",i0,".",i0)')prop%major,prop%minor
-    write(*,'(" Shared Memory per Block: ",i0)')prop%sharedMemPerBlock
-    write(*,'(" Maximum Shared Memory per Block: ",i0)')prop%sharedMemPerBlockOptIn
+    ! Each rank uses the GPU given by its rank among the ranks of its node
+    call check_cuda(cudaGetDeviceCount(mdl%ngpu),'cudaGetDeviceCount')
+    node_rank=0
+#ifndef WITHOUTMPI
+    call MPI_COMM_SPLIT_TYPE(MPI_COMM_WORLD,MPI_COMM_TYPE_SHARED,0,MPI_INFO_NULL,node_comm,info)
+    call MPI_COMM_RANK(node_comm,node_rank,info)
+    call MPI_COMM_FREE(node_comm,info)
+#endif
+    mdl%mydev=mod(node_rank,mdl%ngpu)
+    call check_cuda(cudaSetDevice(mdl%mydev),'cudaSetDevice')
+    call check_cuda(cudaGetDeviceProperties(prop,mdl%mydev),'cudaGetDeviceProperties')
+    write(*,'(" Rank ",I0," uses device ",I0,": ",A)')mdl%myid,mdl%mydev,trim(prop%name)
+    if(mdl%myid==1)then
+       write(*,'(" Launching CUDA with ndevice/task = ",I0)')mdl%ngpu
+       write(*,'(" Compute Capability: ",i0,".",i0)')prop%major,prop%minor
+       write(*,'(" Shared Memory per Block: ",i0)')prop%sharedMemPerBlock
+       write(*,'(" Maximum Shared Memory per Block: ",i0)')prop%sharedMemPerBlockOptIn
+    endif
 #endif
 #ifdef _METAL
     call mtl_init()
+#endif
+#ifdef _CUDA
+  contains
+    subroutine check_cuda(status,operation)
+      integer,intent(in)::status
+      character(len=*),intent(in)::operation
+      if(status/=cudaSuccess)then
+         write(*,*)'Error: ',operation,' failed on rank',mdl%myid,': ',trim(cudaGetErrorString(status))
+         call mdl_abort(mdl)
+      endif
+    end subroutine check_cuda
 #endif
   end subroutine mdl_initialize
   !##############################################################

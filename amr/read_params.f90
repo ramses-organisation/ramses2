@@ -72,6 +72,7 @@ subroutine m_read_params(pst)
   integer::ncontrol=1         ! Write control variables
   integer::nremap=10          ! Particle load balancing frequency (0: never)
   real(kind=8)::da_over_a_max=0.1d0 ! Maximum relative change of aexp per time step
+  logical::mpi_device_buffers=.true. ! GPU halo exchanges pass device buffers to MPI
 
   ! Maximum number of allocatable particles
   integer::npartmax=0
@@ -104,7 +105,7 @@ subroutine m_read_params(pst)
   integer::levelmin=1         ! Full refinement up to levelmin
   integer::nlevelmax=1        ! Maximum number of level
   integer::ngridmax=0         ! Maximum number of grids
-  integer::ncachemax=0        ! Maximum number of cache lines (0: no GPU ghost octs)
+  integer::ncachemax=0        ! Maximum number of cache lines (0: no interpolated GPU ghosts)
   real(kind=8)::boxlen=1.0D0      ! Cell sixe at level 0
 
   ! Output parameters
@@ -620,7 +621,7 @@ subroutine m_read_params(pst)
   namelist/run_params/cosmo,pic,poisson,hydro,rt,cr &
        & ,verbose,debug,nrestart,ncontrol,nstepmax,nsubcycle,nremap,da_over_a_max &
        & ,static_mesh,static_gas,geom,overload &
-       & ,clump_only
+       & ,clump_only,mpi_device_buffers
   ! Output parameters
   namelist/output_params/foutput,aout,tout,nlanding,output_mode &
        & ,tend,delta_tout,aend,delta_aout,gadget_output &
@@ -1529,6 +1530,31 @@ subroutine m_read_params(pst)
      write(*,*)'Error: a non-periodic box (periodic=.false. or nbound>0) is not supported on GPU'
      nml_ok=.false.
   endif
+  if(s%g%ncpu>1)then
+     if(.not.hydro.or.pic.or.poisson.or.rt.or.cr.or.star.or.sink.or.trac.or.dust.or.merger_tree &
+          & .or.clump_finder.or.clump_only.or.movie.or.lightcone.or.s%r%core)then
+        write(*,*)'Error: on several ranks, the GPU supports hydro and ideal MHD only'
+        nml_ok=.false.
+     endif
+     if((entropy.and.dual_energy>=0).or.sgs_turb.or.nener>0.or.neq_chem)then
+        write(*,*)'Error: dual energy, SGS, non-thermal energies and non-equilibrium chemistry need one rank on GPU'
+        nml_ok=.false.
+     endif
+     if(nlevelmax>levelmin.or.geom/=1.or.ndim/=3.or.nhilbert/=1)then
+        write(*,*)'Error: on several ranks, the GPU requires a uniform 3D Cartesian grid and NHILBERT=1'
+        nml_ok=.false.
+     endif
+#ifdef MHD
+     if(etamag/=0.0d0.or.eta_ohm/=0.0d0.or.eta_ad/=0.0d0)then
+        write(*,*)'Error: non-ideal MHD coefficients are supported on one MPI rank only on GPU'
+        nml_ok=.false.
+     endif
+#endif
+#ifdef PAPER
+     write(*,*)'Error: PAPER runs on one rank only on GPU'
+     nml_ok=.false.
+#endif
+  endif
   ! The CUDA UCT solvers need room for face products.
   if(riemann(1:4)=='uct-'.and.uct_chunk_octs<1)then
      write(*,*)'Error: uct_chunk_octs must be positive'
@@ -1695,6 +1721,7 @@ subroutine m_read_params(pst)
   s%r%nsubcycle=nsubcycle
   s%r%nremap=nremap
   s%r%da_over_a_max=da_over_a_max
+  s%r%mpi_device_buffers=mpi_device_buffers
   s%r%static_mesh=static_mesh
   s%r%static_gas=static_gas
   s%r%geom=geom

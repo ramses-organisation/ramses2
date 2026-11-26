@@ -182,23 +182,6 @@ module gpu_runner
   integer(kind=8), device, allocatable, dimension(:) :: hash_key_mg
   integer(kind=4), device, allocatable, dimension(:) :: hash_val_mg
 
-  !> The Fortran array of hydro variables of ghost and halo octs on the host and on the device
-  real(kind=dp), allocatable, dimension(:) :: uold_send_host, uold_recv_host
-  real(kind=dp), device, allocatable, dimension(:) :: uold_send_device, uold_recv_device
-
-  !> The Fortran array of oct index of ghost and halo octs on the host and the device
-  integer, allocatable, dimension(:) :: idx_send_host, idx_recv_host
-  integer, device, allocatable, dimension(:) :: idx_send_device, idx_recv_device
-
-  !> The Fortran array of the hash keys of ghost and halo octs on the host only
-  integer, allocatable, dimension(:) :: key_send_host, key_recv_host
-
-  !> The number of halo and ghost octs per cpu
-  integer, allocatable, dimension(:) :: n_send, n_recv
-
-  !> The total number of halo and ghost octs
-  integer(kind=4) :: num_send, num_recv
-
 contains
 
   include 'gpu_scan.cuf'
@@ -458,6 +441,7 @@ contains
     threadsX_per_block = 8
     threadsY_per_block = 16
     num_blocks = (num_octs + threadsY_per_block - 1) / threadsY_per_block
+    if (num_octs == 0) return
     call nvtxStartRange("GPU Set_uold", color=0)!green
     call set_uold_kernel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(uold, unew, bold, bnew, head_idx, num_octs)
     call GPU_Error_Check(__FILE__, __LINE__)
@@ -487,6 +471,7 @@ contains
     threadsX_per_block = 8
     threadsY_per_block = 16
     num_blocks = (num_octs + threadsY_per_block - 1) / threadsY_per_block
+    if (num_octs == 0) return
     call nvtxStartRange("GPU Set_unew", color=0)!green
     call set_unew_kernel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(uold, unew, bold, bnew, head_idx, num_octs)
     call GPU_Error_Check(__FILE__, __LINE__)
@@ -522,6 +507,7 @@ contains
     threadsX_per_block = 8
     threadsY_per_block = 16
     num_blocks = (num_octs + threadsY_per_block - 1) / threadsY_per_block
+    if (num_octs == 0) return
 
     call nvtxStartRange("GPU sync_hydro", color=0)!green
     call sync_hydro<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(uold, f, constant_gravity, &
@@ -770,6 +756,7 @@ contains
     threadsX_per_block = 8
     threadsY_per_block = 16
     num_blocks = (num_octs + threadsY_per_block - 1) / threadsY_per_block
+    if (num_octs == 0) return
 
     call nvtxStartRange("GPU grav_hydro", color=0)!green
     call grav_hydro<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(uold, unew, f, constant_gravity, &
@@ -941,8 +928,9 @@ contains
     num_subgrids = sim%m%noct(ilevel) / nsubgridtondim
     num_blocks = num_subgrids
 
-    ! Ghost octs must see the current coarse level variables
+    ! Stencil values must be current before any subgrid reads them.
     call gpu_refresh_cache(sim, ilevel)
+    if (num_subgrids == 0) return
 
     call nvtxStartRange("GPU Godunov", color=0)!green
 #ifdef PAPER
@@ -1273,7 +1261,7 @@ contains
   !> Range of the ghost octs of level ilevel in cache memory, and the launch size of one thread per oct.
   !>
   !> @detail
-  !> Ghost octs exist only above levelmin: num_octs is 0 at levelmin.
+  !> The base level has cache octs only when neighbours belong to other ranks.
   !>
   subroutine cache_oct_range(sim, ilevel, head_idx, num_octs, num_threads, num_blocks)
     use ramses_commons, only: ramses_t
@@ -1282,26 +1270,18 @@ contains
     integer(kind=4), intent(out) :: head_idx, num_octs
     integer, intent(out) :: num_threads, num_blocks
 
-    head_idx = sim%m%ngridmax + 1
-    num_octs = 0
-    if (ilevel > sim%r%levelmin) then
-       head_idx = sim%m%ngridmax + sim%m%head_cache(ilevel)
-       num_octs = sim%m%noct_cache(ilevel)
-    end if
+    head_idx = sim%m%ngridmax + sim%m%head_cache(ilevel)
+    num_octs = sim%m%noct_cache(ilevel)
     num_threads = 128
     num_blocks = (num_octs + num_threads - 1) / num_threads
 
   end subroutine cache_oct_range
 
   !> @brief
-  !> Refresh the ghost octs of level ilevel in cache memory from their parent cells.
-  !>
-  !> @detail
-  !> Ghost octs are created in gpu_refine, but the coarse level variables they are
-  !> computed from can change before they are used. Call before reading them.
-  !>
+  !> Refresh remote copies from their owners and interpolated octs from their parents.
   subroutine gpu_refresh_cache(sim, ilevel)
     use nvtx
+    use gpu_mpi, only: gpu_halo_update
     use refine_device, only: refresh_cache_octs_kernel
     use ramses_commons, only: ramses_t
     type(ramses_t), intent(inout) :: sim
@@ -1309,6 +1289,16 @@ contains
 
     integer(kind=4) :: head_idx, num_octs
     integer :: num_threads, num_blocks
+
+    if (sim%g%ncpu > 1 .and. ilevel == sim%r%levelmin) then
+#ifdef HYDRO
+       call gpu_halo_update(ilevel, uold, nvar)
+#ifdef MHD
+       call gpu_halo_update(ilevel, bold, 6)
+#endif
+#endif
+       return
+    endif
 
     call cache_oct_range(sim, ilevel, head_idx, num_octs, num_threads, num_blocks)
     if (num_octs <= 0) return
@@ -2664,19 +2654,18 @@ contains
     integer, intent(in) :: ilevel
     integer, intent(out) :: nmake, nkill
     !
-    integer(kind=4) :: head_idx, num_octs, num_subgrids
+    integer(kind=4) :: head_idx, num_octs
     integer(kind=4) :: head_cache, info
     integer(kind=4) :: num_blocks, num_threads, num_blocks_2
     integer(kind=4) :: threadsX_per_block, threadsY_per_block
     integer(kind=4) :: new_ifree, old_ifree, ins_head, new_head, new_tail, new_noct
-    integer(kind=4) :: ilev, ind, ibit, ibucket, skip_bit, noct_level
+    integer(kind=4) :: ilev, ibit, ibucket, skip_bit
     integer(kind=4) :: nskip
     ! Interpolation parameters for prolongation.
     integer(kind=4) :: interpol_var, interpol_type
     real(kind=dp) :: smallr_d
 
-    integer(kind=4), device :: ifree_d, ifree_cache_d, new_noct_d, cache_overflow_d
-    integer(kind=4) :: cache_overflow
+    integer(kind=4), device :: ifree_d, new_noct_d
 
     integer(kind=8), pointer, device, dimension(:) :: hkeys_in, hkeys_out
     integer(kind=8) :: noct_max, hkey_size
@@ -3045,90 +3034,116 @@ contains
 
     endif
 
-    ! Update nbor index array level by level
-    ! If nbor is absent, make a ghost oct in the cache and insert in hash table
-    ! (unless ncachemax=0: no ghost octs, the missing neighbor keeps nbor = 0)
-
-    ! Compute new cache head
-    new_head = sim%m%tail_cache(ilevel) + 1
-
     do ilev = ilevel + 1, sim%r%nlevelmax
+       call gpu_build_level_cache(sim, ilev)
+    end do
 
-       noct_level = sim%m%noct(ilev)
-       sim%m%head_cache(ilev) = new_head
+    if (ilevel == sim%r%levelmin) call gpu_reset_hash(sim)
 
-       if (noct_level > 0) then
+  end subroutine gpu_refine
 
-          ! Compute kernel size and offset
-          head_idx = (sim%m%head(ilev) - 1) / nsubgridtondim + 1
-          num_subgrids = noct_level / nsubgridtondim
-          num_threads = 128
-          num_blocks = (num_subgrids + num_threads - 1) / num_threads
+  !> Startup and gpu_refine share this per-level neighbour search and cache construction.
+  subroutine gpu_build_level_cache(sim, ilevel)
+    use nvtx
+    use refine_device
+    use gpu_mpi, only: gpu_halo_build
+    use mdl_module, only: mdl_abort
+    use ramses_commons, only: ramses_t
+    use cub_inclusive_scan_mod
+    use iso_c_binding, only: c_loc
+    type(ramses_t), intent(inout) :: sim
+    integer, intent(in) :: ilevel
+    integer :: ind, head_idx, num_subgrids, num_blocks, num_threads, head
+    integer :: interpol_var, interpol_type, cache_overflow
+    integer(kind=4), device :: ifree_cache_d, cache_overflow_d, new_noct_d
+    integer(kind=1) :: source
+    real(dp) :: smallr_d
+    character(len=64) :: descr
 
-          ifree_cache_d = sim%m%ifree_cache
-          cache_overflow_d = 0
+    head = sim%m%ifree_cache
+    sim%m%head_cache(ilevel) = head
+    head_idx = (sim%m%head(ilevel) - 1) / nsubgridtondim + 1
+    num_subgrids = sim%m%noct(ilevel) / nsubgridtondim
+    num_threads = 128
+    num_blocks = (num_subgrids + num_threads - 1) / num_threads
 
-          ! Loop over 27 neighbors
-          do ind = 1, subgridsize
+    ! A neighbour missing at levelmin is an oct of another rank; above, it is interpolated from its parent.
+    ! With source = 0 the level has no cache octs.
+    source = 0
+    if (ilevel == sim%r%levelmin) then
+       if (sim%g%ncpu > 1) source = cache_remote
+    else if (sim%r%ncachemax > 0) then
+       source = cache_interpolated
+    endif
 
-            write(descr,'(A,I0,A,I0)'),"nbor_refine_lev_",ilev,"ind_",ind
-            call nvtxStartRange(trim(descr), color=2)!yellow
+    if (num_subgrids > 0) then
+       interpol_var = sim%r%interpol_var
+       interpol_type = sim%r%interpol_type
+       smallr_d = sim%r%smallr
+       ifree_cache_d = sim%m%ifree_cache
+       cache_overflow_d = 0
 
-             ! Get nbor index from hash table
-             call update_nbor_array<<<num_blocks, num_threads>>>(nbor, grid, hash_key, hash_val, &
-                  & sim%m%hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
-                  & head_idx, num_subgrids, ind, prefix_sum = prefix_sum)
+       ! Insert each offset before looking up the next, since subgrids share neighbours.
+       do ind = 1, subgridsize
+
+          write(descr,'(A,I0,A,I0)'),"nbor_refine_lev_",ilevel,"ind_",ind
+          call nvtxStartRange(trim(descr), color=2)!yellow
+
+          ! Get nbor index from hash table
+          call update_nbor_array<<<num_blocks, num_threads>>>(nbor, grid, hash_key, hash_val, &
+               & sim%m%hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
+               & head_idx, num_subgrids, ind, prefix_sum)
+          call GPU_Error_Check(__FILE__, __LINE__)
+
+          ! Without cache octs, missing neighbors keep nbor = 0
+          if (source /= 0) then
+
+             ! Compute prefix sum
+#if defined(CUB_SCAN_REFINE)
+             call cub_inclusive_sum(c_loc(prefix_sum), head_idx, num_subgrids)
+#else
+             call gpu_scan(prefix_sum, head_idx, num_subgrids, new_noct_d)
+#endif
+             ! Compute cache swap table
+             ! Make new ghost octs in cache
+             ! Insert new octs in hash table
+             ! Increment ifree_cache on device
+#if defined(FUSE_CACHE)
+             call make_cache_insert_ghost_octs<<<num_blocks, num_threads>>>(grid, flag1, &
+                  & uold, bold, f, phi, phi_old, swap_local, prefix_sum, father, nbor, hash_key, &
+                  & hash_val, sim%m%hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, &
+                  & periodic, sim%m%ngridmax, sim%m%ncachemax, ifree_cache_d, cache_overflow_d, ind, &
+                  & head_idx, num_subgrids, interpol_var, interpol_type, smallr_d, source)
+             call GPU_Error_Check(__FILE__, __LINE__)
+#else
+#if defined(CUB_SCAN_REFINE)
+             call get_total_sum<<<1,1>>>(prefix_sum, head_idx, num_subgrids, new_noct_d)
+             call GPU_Error_Check(__FILE__, __LINE__)
+#endif
+             call compute_cache_swap_table<<<num_blocks, num_threads>>>(swap_local, prefix_sum, &
+                  & head_idx, num_subgrids)
              call GPU_Error_Check(__FILE__, __LINE__)
 
-             ! No ghost octs when ncachemax=0: missing neighbors keep nbor = 0
-             if (sim%r%ncachemax > 0) then
+             call make_cache_octs<<<num_blocks, num_threads>>>(grid, flag1, &
+                  & uold, bold, f, phi, phi_old, swap_local, father, nbor, &
+                  & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
+                  & sim%m%ngridmax, sim%m%ncachemax, ifree_cache_d, cache_overflow_d, new_noct_d, ind, &
+                  & interpol_var, interpol_type, smallr_d, source)
+             call GPU_Error_Check(__FILE__, __LINE__)
 
-                ! Compute prefix sum
-#if defined(CUB_SCAN_REFINE)
-                call cub_inclusive_sum(c_loc(prefix_sum), head_idx, num_subgrids)
-#else
-                call gpu_scan(prefix_sum, head_idx, num_subgrids, new_noct_d)
+             call insert_hash_cache<<<num_blocks, num_threads>>>(grid, hash_key, hash_val, sim%m%hash_size, &
+                  & ckey_max, key_off, sim%m%ngridmax, ifree_cache_d, cache_overflow_d, new_noct_d)
+             call GPU_Error_Check(__FILE__, __LINE__)
+
+             call advance_ifree_cache<<<1,1>>>(ifree_cache_d, new_noct_d, cache_overflow_d)
+             call GPU_Error_Check(__FILE__, __LINE__)
 #endif
-                ! Compute cache swap table
-                ! Make new ghost octs in cache
-                ! Insert new octs in hash table
-                ! Increment ifree_cache on device
-#if defined(FUSE_CACHE)
-                call make_cache_insert_ghost_octs<<<num_blocks, num_threads>>>(grid, flag1, &
-                     & uold, bold, f, phi, phi_old, swap_local, prefix_sum, father, nbor, hash_key, &
-                     & hash_val, sim%m%hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, &
-                     & periodic, sim%m%ngridmax, sim%m%ncachemax, ifree_cache_d, cache_overflow_d, ind, &
-                     & head_idx, num_subgrids, interpol_var, interpol_type, smallr_d)
-                call GPU_Error_Check(__FILE__, __LINE__)
-#else
-#if defined(CUB_SCAN_REFINE)
-                call get_total_sum<<<1,1>>>(prefix_sum, head_idx, num_subgrids, new_noct_d)
-                call GPU_Error_Check(__FILE__, __LINE__)
-#endif
-                call compute_cache_swap_table<<<num_blocks, num_threads>>>(swap_local, prefix_sum, &
-                     & head_idx, num_subgrids)
-                call GPU_Error_Check(__FILE__, __LINE__)
+          endif
+          call nvtxEndRange()
 
-                call make_cache_octs<<<num_blocks, num_threads>>>(grid, flag1, &
-                     & uold, bold, f, phi, phi_old, swap_local, father, nbor, &
-                     & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
-                     & sim%m%ngridmax, sim%m%ncachemax, ifree_cache_d, cache_overflow_d, new_noct_d, ind, &
-                     & interpol_var, interpol_type, smallr_d)
-                call GPU_Error_Check(__FILE__, __LINE__)
+       end do
 
-                call insert_hash_cache<<<num_blocks, num_threads>>>(grid, hash_key, hash_val, sim%m%hash_size, &
-                     & ckey_max, key_off, sim%m%ngridmax, ifree_cache_d, cache_overflow_d, new_noct_d)
-                call GPU_Error_Check(__FILE__, __LINE__)
-
-                call advance_ifree_cache<<<1,1>>>(ifree_cache_d, new_noct_d, cache_overflow_d)
-                call GPU_Error_Check(__FILE__, __LINE__)
-#endif
-             endif
-             call nvtxEndRange()
-
-          end do
-          ! End loop over 27 nbors
-
+       if (source /= 0) then
           sim%m%ifree_cache = ifree_cache_d
 
           ! Cache overflow is flagged on the device, report it here
@@ -3136,23 +3151,17 @@ contains
           if (cache_overflow /= 0) then
              write(*,*)'No more cache memory, increase ncachemax'
              write(*,*)'Cache octs:', sim%m%ifree_cache-1, ' ncachemax:', sim%m%ncachemax
-             stop
+             call mdl_abort(sim%mdl)
           endif
+       endif
+    endif
 
-       end if
+    ! Every rank takes part, also one without octs
+    if (source == cache_remote) call gpu_halo_build(sim, ilevel, grid, hash_key, hash_val, ckey_max, key_off)
 
-       ! Compute new cache tail and next cache head
-       new_tail = sim%m%ifree_cache - 1
-       sim%m%noct_cache(ilev) = new_tail - new_head + 1
-       sim%m%tail_cache(ilev) = new_tail
-       new_head = sim%m%ifree_cache
-
-    end do
-    ! End loop over levels
-
-    if (ilevel == sim%r%levelmin) call gpu_reset_hash(sim)
-
-  end subroutine gpu_refine
+    sim%m%tail_cache(ilevel) = sim%m%ifree_cache - 1
+    sim%m%noct_cache(ilevel) = sim%m%ifree_cache - head
+  end subroutine gpu_build_level_cache
 
   !> @brief
   !> Initial step for flagging cells for refinements
