@@ -122,13 +122,6 @@ subroutine m_update_time(pst,ilevel,done)
         else
            write(*,777)c_bold()//c_yellow(),g%nstep_coarse,c_reset(),mcons,econs,g%epot_tot,g%ekin_tot
         end if
-        if(r%star)write(*,'(" Total mass in stars=",1PE14.7)')g%mass_star_tot
-        if(r%sink.or.r%core)write(*,'(" Total mass in sinks=",1PE14.7)')g%mass_sink_tot
-        if(r%rt.and.r%rt_nsubcycle>1.and.g%rt_nsub_max>0)then
-           write(*,'(" RT subcycles min=",I0," max=",I0)')g%rt_nsub_min,g%rt_nsub_max
-           g%rt_nsub_min=huge(0)
-           g%rt_nsub_max=0
-        endif
 777     format(' ',a,'Main step= ',i0,a,' mcons=',1pe9.2,' econs=',1pe9.2,' epot=',1pe9.2,' ekin=',1pe9.2)
 778     format(' ',a,'Main step= ',i0,a,' mcons=',1pe9.2,' econs=',1pe9.2,' epot=',1pe9.2,' ekin=',1pe9.2,' eint=',1pe9.2)
 779     format(' ',a,'Main step= ',i0,a,' mcons=',1pe9.2,' econs=',1pe9.2,' epot=',1pe9.2,' ekin=',1pe9.2,' eint=',1pe9.2,' emag=',1pe9.2)
@@ -154,6 +147,13 @@ subroutine m_update_time(pst,ilevel,done)
 #endif
         endif
         write(*,'(a)')trim(line)
+        if(r%star)write(*,'(" Total mass in stars=",1PE14.7)')g%mass_star_tot
+        if(r%sink.or.r%core)write(*,'(" Total mass in sinks=",1PE14.7)')g%mass_sink_tot
+        if(r%rt.and.r%rt_nsubcycle>1.and.g%rt_nsub_max>0)then
+           write(*,'(" RT subcycles min=",I0," max=",I0)')g%rt_nsub_min,g%rt_nsub_max
+           g%rt_nsub_min=huge(0)
+           g%rt_nsub_max=0
+        endif
         itest=1
      end if
      g%output_done=.false.
