@@ -1,6 +1,6 @@
 module flag_device
   use amr_parameters, only: dp, ndim, twondim, twotondim, nhilbert
-  use hydro_parameters, only: nvar
+  use hydro_parameters, only: nvar, nener
   use oct_commons, only: oct
   use gpu_utils, only: nsubgrid, nsubgridsq, nsubgridtondim, nsubgridp2, nsubgridp2sq, subgridsize
   use cudafor
@@ -386,8 +386,8 @@ contains
     real(kind=dp), intent(in), value :: mass_sph, dx_loc
     real(kind=dp), intent(in), value :: m_refine, jeans_refine
 
-    integer :: cell_idx, oct_idx, block_idx, idim
-    real(kind=dp) :: vol_loc, d_scale, density, pressure, emag
+    integer :: cell_idx, oct_idx, block_idx, idim, irad
+    real(kind=dp) :: vol_loc, d_scale, density, pressure, emag, erad
     real(kind=dp) :: momentum_x, momentum_y, momentum_z
     real(kind=dp) :: energy, c_iso, t_ff, jeans_length
     logical :: ok
@@ -434,7 +434,11 @@ contains
           emag = emag + 0.125d0*(bold(cell_idx,idim,oct_idx)+bold(cell_idx,idim+3,oct_idx))**2
        end do
 #endif
-       pressure   = energy - 0.5d0*(momentum_x**2 + momentum_y**2 + momentum_z**2) / density - emag
+       erad       = 0.0_dp
+       do irad = 1, nener
+          erad = erad + uold(cell_idx, 5+irad, oct_idx)
+       end do
+       pressure   = energy - 0.5d0*(momentum_x**2 + momentum_y**2 + momentum_z**2) / density - emag - erad
        pressure   = max((gamma - 1.0_dp) * pressure, smallc2 * density)
 
        ! Compute Jeans length
