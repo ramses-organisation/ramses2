@@ -6755,7 +6755,10 @@ contains
     type(primitive_t) :: primitive
     type(conserved_t) :: conserved
     real(kind=dp) :: vol_loc, sound_speed
-    real(kind=dp) :: a2, b2sq, c2v, pp, rinv
+    real(kind=dp) :: a2, b2sq, c2v, pp, rinv, crad2
+#if NENER>0
+    integer :: irad
+#endif
 #ifdef MHD
     real(kind=dp) :: smallc
 #endif
@@ -6783,6 +6786,15 @@ contains
     mass_loc = conserved%density*vol_loc
     ekin_loc = conserved%energy *vol_loc
 
+    ! Remove the non-thermal energies, and add their pressures to the sound speed, as cmpdt does
+    crad2 = 0.0_dp
+#if NENER>0
+    do irad = 1, nener
+       conserved%energy = conserved%energy - uold(cell_idx, 5+irad, oct_idx)
+       crad2 = crad2 + gamma_rad_d(irad)*(gamma_rad_d(irad)-1.0_dp)*uold(cell_idx, 5+irad, oct_idx)
+    end do
+#endif
+
 #ifdef MHD
     smallc = sqrt(smallc2)
     conserved%Bx = 0.5_dp*(bold(cell_idx,1,oct_idx)+bold(cell_idx,4,oct_idx))
@@ -6794,7 +6806,7 @@ contains
     emag_loc = 0.5_dp*b2sq*vol_loc
     eint_loc = pp/(gamma-1_dp)*vol_loc
     rinv = 1_dp / primitive%density
-    a2   = gamma*pp*rinv
+    a2   = (gamma*pp + crad2)*rinv
     if (induction) then
        ctot = abs(primitive%velocity_x)+abs(primitive%velocity_y)+abs(primitive%velocity_z) + 3_dp*smallc
     else
@@ -6806,10 +6818,9 @@ contains
 #else
     primitive = conserved_2_primitive(conserved, gamma, smallr, smallc2)
     mass_loc = primitive%density*vol_loc
-    ekin_loc = conserved%energy *vol_loc
     eint_loc = primitive%pressure/(gamma-1_dp)*vol_loc
     emag_loc = 0_dp
-    sound_speed = sqrt(gamma*primitive%pressure/primitive%density)
+    sound_speed = sqrt((gamma*primitive%pressure + crad2)/primitive%density)
     ctot = abs(primitive%velocity_x)+abs(primitive%velocity_y)+abs(primitive%velocity_z)+3_dp*sound_speed
 #endif
 #ifdef GRAV

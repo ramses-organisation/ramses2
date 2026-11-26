@@ -213,6 +213,9 @@ contains
   subroutine gpu_cmpdt(sim, ilevel, mass, ekin, eint, emag, dt)
     use nvtx
     use hydro_device, only: cmpdt_kernel
+#if NENER>0
+    use hydro_device, only: gamma_rad_d
+#endif
     use ramses_commons, only: ramses_t
     type(ramses_t), intent(inout) :: sim
     integer(kind=4), intent(in) :: ilevel
@@ -237,6 +240,9 @@ contains
     turb_min_rho = sim%r%turb_min_rho
 #endif
     dt = courant_factor*dx/sim%r%smallc
+#if NENER>0
+    gamma_rad_d = real(sim%r%gamma_rad, kind=dp)
+#endif
 
     ! initialize device memory for reduction
     d_data(:) = 0d0
@@ -281,6 +287,9 @@ contains
     use, intrinsic :: iso_c_binding, only: c_f_pointer
     use nvtx
     use hydro_device, only: cmpdt_kernel_2, cmpdt_reduce_kernel
+#if NENER>0
+    use hydro_device, only: gamma_rad_d
+#endif
     use ramses_commons, only: ramses_t
     type(ramses_t), intent(inout) :: sim
     integer(kind=4), intent(in) :: ilevel
@@ -316,6 +325,9 @@ contains
     turb_min_rho = sim%r%turb_min_rho
 #endif
     dt = courant_factor*dx/sim%r%smallc
+#if NENER>0
+    gamma_rad_d = real(sim%r%gamma_rad, kind=dp)
+#endif
     mass = 0d0; ekin = 0d0; eint = 0d0; emag = 0d0
 
     head_idx = sim%m%head(ilevel)
