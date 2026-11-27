@@ -6597,6 +6597,31 @@ contains
   end subroutine xion_crit
   ! =========================================================================
 
+#if NENER>0
+  ! =========================================================================
+  !> Non-thermal energy gradient criteria of hydro_refine on three cells
+  attributes(device) subroutine prad_crit(e_lft, e_mid, e_rgt, ok, err_grad_prad, floor_prad)
+    real(kind=dp) :: e_lft(1:nener), e_mid(1:nener), e_rgt(1:nener)
+    logical :: ok
+    real(kind=dp), device :: err_grad_prad(1:nener), floor_prad(1:nener)
+
+    real(kind=dp) :: error
+    integer :: irad
+
+    ok = .false.
+    do irad = 1, nener
+       if (err_grad_prad(irad) >= 0.0_dp) then
+          error = 2.0_dp*max( &
+               & abs((e_rgt(irad)-e_mid(irad))/(e_rgt(irad)+e_mid(irad)+floor_prad(irad))), &
+               & abs((e_mid(irad)-e_lft(irad))/(e_mid(irad)+e_lft(irad)+floor_prad(irad))) )
+          if (error > err_grad_prad(irad)) ok = .true.
+       endif
+    end do
+
+  end subroutine prad_crit
+  ! =========================================================================
+#endif
+
 #ifdef MHD
   attributes(device) subroutine hydro_crit_mhd(bc_lft, bc_mid, bc_rgt, ok, &
        & err_grad_b2, floor_b2, err_grad_A, floor_A, err_grad_B, floor_B, err_grad_C, floor_C)
@@ -6667,7 +6692,11 @@ contains
        & err_grad_b2, floor_b2, err_grad_A, floor_A, err_grad_B, floor_B, err_grad_C, floor_C, &
 #endif
        & gamma, smallr, smallc2, err_grad_d, err_grad_p, floor_d, floor_p, &
-       & induction, do_u, err_grad_u, floor_u, do_xion, iIons, err_grad_xHII, floor_xHII, err_grad_xHI, floor_xHI)
+       & induction, do_u, err_grad_u, floor_u, do_xion, iIons, err_grad_xHII, floor_xHII, err_grad_xHI, floor_xHI &
+#if NENER>0
+       & , do_prad, err_grad_prad, floor_prad &
+#endif
+       & )
     type(oct), device :: grid(*)
     real(kind=dp), device :: uold(1:twotondim,1:nvar,*)
     real(kind=dp), device :: bold(1:twotondim,1:6,*)
@@ -6683,6 +6712,10 @@ contains
     integer(kind=4), intent(in), value :: iIons
     real(kind=dp), intent(in), value :: err_grad_xHII, floor_xHII
     real(kind=dp), intent(in), value :: err_grad_xHI, floor_xHI
+#if NENER>0
+    logical, intent(in), value :: do_prad
+    real(kind=dp), device :: err_grad_prad(1:nener), floor_prad(1:nener)
+#endif
 #ifdef MHD
     real(kind=dp), intent(in), value :: err_grad_b2, floor_b2
     real(kind=dp), intent(in), value :: err_grad_A, floor_A
@@ -6694,6 +6727,7 @@ contains
     integer :: icell, inbor, idim, ind_nbor
 #if NENER>0
     integer :: irad
+    real(kind=dp) :: e_lft(1:nener), e_mid(1:nener), e_rgt(1:nener)
 #endif
     type(primitive_t) :: prim_lft, prim_mid, prim_rgt
     type(conserved_t) :: cons_lft, cons_mid, cons_rgt
@@ -6738,6 +6772,7 @@ contains
     ! Remove the non-thermal energies, as hydro_refine does
     do irad = 1, nener
        cons_mid%energy = cons_mid%energy - uold(cell_idx, 5+irad, oct_idx)
+       if (do_prad) e_mid(irad) = uold(cell_idx, 5+irad, oct_idx)
     end do
 #endif
 #ifdef MHD
@@ -6788,6 +6823,7 @@ contains
 #if NENER>0
        do irad = 1, nener
           cons_lft%energy = cons_lft%energy - uold(icell, 5+irad, source_idx)
+          if (do_prad) e_lft(irad) = uold(icell, 5+irad, source_idx)
        end do
 #endif
 #ifdef MHD
@@ -6813,6 +6849,7 @@ contains
 #if NENER>0
        do irad = 1, nener
           cons_rgt%energy = cons_rgt%energy - uold(icell, 5+irad, source_idx)
+          if (do_prad) e_rgt(irad) = uold(icell, 5+irad, source_idx)
        end do
 #endif
 #ifdef MHD
@@ -6844,6 +6881,14 @@ contains
           call xion_crit(x_lft, x_mid, x_rgt, ok, err_grad_xHII, floor_xHII, err_grad_xHI, floor_xHI)
           if (ok) flag1(cell_idx, oct_idx) = 1
        endif
+
+#if NENER>0
+       ! Non-thermal energy criteria
+       if (do_prad) then
+          call prad_crit(e_lft, e_mid, e_rgt, ok, err_grad_prad, floor_prad)
+          if (ok) flag1(cell_idx, oct_idx) = 1
+       endif
+#endif
 
 #ifdef MHD
        ! MHD refinement on magnetic energy and B-component gradients.

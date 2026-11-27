@@ -18,6 +18,10 @@ module gpu_runner
   real(kind=8), device, dimension(1:3) :: box_size
   real(kind=dp), device, dimension(1:3) :: constant_gravity
   real(kind=dp), device, dimension(1:nener+1) :: gamma_rad
+#if NENER>0
+  !> Refinement thresholds and floors of the non-thermal energy gradients
+  real(kind=dp), device, dimension(1:nener) :: d_err_grad_prad, d_floor_prad
+#endif
   integer(kind=4), device, allocatable, dimension(:) :: ckey_max
   integer(kind=8), device, allocatable, dimension(:) :: key_off
   integer(kind=4), device, allocatable, dimension(:,:) :: box_ckey_min, box_ckey_max
@@ -3278,6 +3282,9 @@ contains
     real(kind=dp) :: err_grad_u, floor_u, err_grad_xHII, floor_xHII, err_grad_xHI, floor_xHI
     integer(kind=4) :: iIons
     logical :: do_u, do_xion
+#if NENER>0
+    logical :: do_prad
+#endif
 #ifdef MHD
     real(kind=dp) :: err_grad_b2, floor_b2, err_grad_A, floor_A
     real(kind=dp) :: err_grad_B, floor_B, err_grad_C, floor_C
@@ -3315,9 +3322,12 @@ contains
     endif
     floor_xHII = sim%r%floor_xHII
     floor_xHI = sim%r%floor_xHI
-    ! The velocity and ion fraction tests run only with thresholds >= 0
+    ! The velocity, ion fraction and non-thermal energy tests run only with thresholds >= 0
     do_u = err_grad_u >= 0.0_dp
     do_xion = err_grad_xHII >= 0.0_dp .or. err_grad_xHI >= 0.0_dp
+#if NENER>0
+    do_prad = any(sim%r%err_grad_prad(1:nener) >= 0.0d0)
+#endif
 #ifdef MHD
     err_grad_b2 = sim%r%err_grad_b2
     floor_b2 = sim%r%floor_b2
@@ -3369,7 +3379,11 @@ contains
                & err_grad_b2, floor_b2, err_grad_A, floor_A, err_grad_B, floor_B, err_grad_C, floor_C, &
 #endif
                & gamma, smallr, smallc2, err_grad_d, err_grad_p, floor_d, floor_p, &
-               & sim%r%induction, do_u, err_grad_u, floor_u, do_xion, iIons, err_grad_xHII, floor_xHII, err_grad_xHI, floor_xHI)
+               & sim%r%induction, do_u, err_grad_u, floor_u, do_xion, iIons, err_grad_xHII, floor_xHII, err_grad_xHI, floor_xHI &
+#if NENER>0
+               & , do_prad, d_err_grad_prad, d_floor_prad &
+#endif
+               & )
           call GPU_Error_Check(__FILE__, __LINE__)
           call nvtxEndRange()
        endif

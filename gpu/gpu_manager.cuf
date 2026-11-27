@@ -531,7 +531,7 @@ subroutine gpu_allocate_amr(sim)
   use amr_parameters, ONLY: ndim, twotondim
   use refine_device, only: cache_source
 #ifdef HYDRO
-  use hydro_parameters, ONLY: nvar
+  use hydro_parameters, ONLY: nvar, nener
 #endif
 #ifdef DO_RT
   use rt_parameters, ONLY: nrtvar, nrtgrp
@@ -669,6 +669,10 @@ subroutine gpu_allocate_amr(sim)
   box_size=sim%r%box_size
   constant_gravity=real(sim%r%constant_gravity,kind=dp)
   gamma_rad=real(sim%r%gamma_rad,kind=dp)
+#if NENER>0
+  d_err_grad_prad=real(sim%r%err_grad_prad(1:nener),kind=dp)
+  d_floor_prad=real(sim%r%floor_prad(1:nener),kind=dp)
+#endif
   box_ckey_min=sim%m%box_ckey_min
   box_ckey_max=sim%m%box_ckey_max
   if(sim%r%nbound>0)then
