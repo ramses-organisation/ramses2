@@ -2970,11 +2970,11 @@ contains
        ! Sort rtuold through unew, nvar variables at a time
        do iv = 0, nrtvar-1, nvar
           nv = min(nvar, nrtvar-iv)
-          call sort_gather_rt<<<num_blocks_2, dim3(threadsX_per_block,threadsY_per_block,1)>>>(unew, rtuold, &
-               & iv, nv, swap_global, head_idx, num_octs)
+          call sort_gather_vars<<<num_blocks_2, dim3(threadsX_per_block,threadsY_per_block,1)>>>(unew, rtuold, &
+               & nrtvar, iv, nv, swap_global, head_idx, num_octs)
           call GPU_Error_Check(__FILE__, __LINE__)
-          call sort_scatter_rt<<<num_blocks_2, dim3(threadsX_per_block,threadsY_per_block,1)>>>(rtuold, unew, &
-               & iv, nv, head_idx, num_octs)
+          call sort_scatter_vars<<<num_blocks_2, dim3(threadsX_per_block,threadsY_per_block,1)>>>(rtuold, nrtvar, &
+               & unew, iv, nv, head_idx, num_octs)
           call GPU_Error_Check(__FILE__, __LINE__)
        end do
 #endif

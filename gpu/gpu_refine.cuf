@@ -1643,10 +1643,11 @@ end subroutine nimhd_ghost_b_kernel
 
 #ifdef DO_RT
   ! =========================================================================
-  ! Gather RT variables ivar0+1..ivar0+nv into the scratch unew in sorted order.
-  attributes(global) subroutine sort_gather_rt(unew, rtuold, ivar0, nv, swap_global, head_idx, num_octs)
+  ! Gather variables ivar0+1..ivar0+nv of an array of nvt variables per cell into the scratch unew in sorted order.
+  attributes(global) subroutine sort_gather_vars(unew, var, nvt, ivar0, nv, swap_global, head_idx, num_octs)
     real(kind=dp), device :: unew(1:twotondim,1:nvar,*)
-    real(kind=dp), device :: rtuold(1:twotondim,1:nrtvar,*)
+    integer(kind=4), intent(in), value :: nvt
+    real(kind=dp), device :: var(1:twotondim,1:nvt,*)
     integer(kind=4), intent(in), value :: ivar0, nv
     integer(kind=4), device :: swap_global(*)
     integer(kind=4), intent(in), value :: head_idx
@@ -1667,16 +1668,17 @@ end subroutine nimhd_ghost_b_kernel
 
     old_oct_idx = swap_global(oct_idx)
     do ivar = 1, nv
-       unew(cell_idx, ivar, oct_idx) = rtuold(cell_idx, ivar0+ivar, old_oct_idx)
+       unew(cell_idx, ivar, oct_idx) = var(cell_idx, ivar0+ivar, old_oct_idx)
     end do
 
-  end subroutine sort_gather_rt
+  end subroutine sort_gather_vars
   ! =========================================================================
 
   ! =========================================================================
-  ! Copy the sorted RT variables ivar0+1..ivar0+nv back from unew.
-  attributes(global) subroutine sort_scatter_rt(rtuold, unew, ivar0, nv, head_idx, num_octs)
-    real(kind=dp), device :: rtuold(1:twotondim,1:nrtvar,*)
+  ! Copy the sorted variables ivar0+1..ivar0+nv back from unew.
+  attributes(global) subroutine sort_scatter_vars(var, nvt, unew, ivar0, nv, head_idx, num_octs)
+    integer(kind=4), intent(in), value :: nvt
+    real(kind=dp), device :: var(1:twotondim,1:nvt,*)
     real(kind=dp), device :: unew(1:twotondim,1:nvar,*)
     integer(kind=4), intent(in), value :: ivar0, nv
     integer(kind=4), intent(in), value :: head_idx
@@ -1696,10 +1698,10 @@ end subroutine nimhd_ghost_b_kernel
     cell_idx = threadIdx%x
 
     do ivar = 1, nv
-       rtuold(cell_idx, ivar0+ivar, oct_idx) = unew(cell_idx, ivar, oct_idx)
+       var(cell_idx, ivar0+ivar, oct_idx) = unew(cell_idx, ivar, oct_idx)
     end do
 
-  end subroutine sort_scatter_rt
+  end subroutine sort_scatter_vars
   ! =========================================================================
 #endif
 
