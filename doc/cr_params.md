@@ -1,4 +1,4 @@
-The namelist block `&CR_PARAMS` is used to specify parameters controlling the cosmic ray two-moment (M1) solver. Cosmic rays require the code to be compiled with `DO_CR=1`, which also turns on MHD, and activated at runtime with `cr=.true.` in `&RUN_PARAMS`.
+The namelist block `&CR_PARAMS` is used to specify parameters controlling the cosmic ray two-moment (M1) solver. Cosmic rays require the code to be compiled with `DO_CR=1`, which also turns on MHD, and activated at runtime with `cr=.true.` in `&RUN_PARAMS`. On GPU, cosmic rays run in 3D on a single MPI rank, without `cr_streaming_diffusion`, `cr_streaming_heating`, `cr_cooling` and `fecr`; these combinations stop the code when the namelist is read.
 
 | Variable name | Fortran type | Default value  | Description      |
 |:------------------- |:-------|:----- |:------------------------- |

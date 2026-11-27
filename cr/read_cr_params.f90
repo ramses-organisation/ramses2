@@ -112,6 +112,25 @@ subroutine m_read_cr_params(pst)
      write(*,*)'There are not enough NENER variables to contain cosmic ray groups ', ncrgrp, nener
      call mdl_abort(s%mdl)
   endif
+#ifdef _CUDA
+  ! The GPU CR step runs without streaming, CR cooling and CR feedback, in 3D
+  if(s%r%cr .and. (cr_streaming_diffusion .or. cr_streaming_heating))then
+     write(*,*)'Error: cr_streaming_diffusion and cr_streaming_heating are not supported on GPU'
+     call mdl_abort(s%mdl)
+  endif
+  if(s%r%cr .and. cr_cooling)then
+     write(*,*)'Error: cr_cooling is not supported on GPU'
+     call mdl_abort(s%mdl)
+  endif
+  if(s%r%cr .and. any(fecr/=0d0))then
+     write(*,*)'Error: fecr is not supported on GPU'
+     call mdl_abort(s%mdl)
+  endif
+  if(s%r%cr .and. ndim/=3)then
+     write(*,*)'Error: cr is supported in 3D only on GPU'
+     call mdl_abort(s%mdl)
+  endif
+#endif
 
   end associate
 #endif
