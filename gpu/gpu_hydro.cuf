@@ -8755,7 +8755,6 @@ contains
     integer, intent(in), value :: ilevel, levelmin, levelmax
     real(kind=dp), intent(in), value :: gamma, smallr, smallc2
     real(kind=dp), device :: gamma_rad(1:nener+1)
-    real(kind=dp), device :: gamma_rad(1:nener+1)
     real(kind=dp), intent(in), value :: dt
     real(kind=dp), intent(in), value :: dx, smax_cap
     integer, intent(in), value :: slope
