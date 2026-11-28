@@ -1,4 +1,7 @@
 module cr_upload_module
+#if defined(_CUDA) && defined(DO_CR)
+  use gpu_runner, only: gpu_cr_upload_fine
+#endif
 contains
 !#########################################################################
 !#########################################################################
@@ -42,6 +45,13 @@ recursive subroutine r_cr_upload_fine(pst,ilevel,input_size)
      call r_cr_upload_fine(pst%pLower,ilevel,input_size)
      call mdl_get_reply(pst%s%mdl,rID,0)
   else
+#if defined(_CUDA) && defined(DO_CR)
+     ! With the mesh on the device, the restriction runs there
+     if(pst%s%m%data_on_device)then
+        call gpu_cr_upload_fine(pst%s,ilevel)
+        return
+     endif
+#endif
      call cr_upload_fine(pst%s,ilevel)
   endif
 

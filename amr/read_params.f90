@@ -1518,13 +1518,6 @@ subroutine m_read_params(pst)
      nml_ok=.false.
   endif
 #endif
-#if NENER>0
-  ! The GPU does not flag cells on the non-thermal pressure gradients
-  if(any(err_grad_prad(1:nener)>=0.0d0))then
-     write(*,*)'Error: err_grad_prad is not supported on GPU'
-     nml_ok=.false.
-  endif
-#endif
   ! The GPU has no boundary regions for a non-periodic box
   if(any(.not.periodic(1:ndim)).or.nbound>0)then
      write(*,*)'Error: a non-periodic box (periodic=.false. or nbound>0) is not supported on GPU'

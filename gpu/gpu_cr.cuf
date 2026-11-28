@@ -1,0 +1,802 @@
+!> Cosmic-ray kernels on one rank: the CR step of cr_step (set_crunew, cr_godunov_fine, cr_source_terms,
+!> set_cruold, conserve_cr_flux), the CR fluxes of ghost octs and the restriction of the CR fluxes.
+module cr_device
+#ifdef DO_CR
+  use amr_parameters, only: dp, ndim, twotondim, twondim
+  use hydro_parameters, only: nvar, nener
+  use cr_parameters, only: ncrgrp, ncruvar, smallecr
+#ifdef DO_RT
+  ! nrtvar for interpol_rt_d of gpu_interpol.cuf
+  use rt_parameters, only: nrtvar
+#endif
+  use oct_commons, only: oct
+  use gpu_utils
+  use cudafor
+  implicit none
+
+  !> Faces between the cells of an oct and between them and their face neighbors
+  integer, parameter :: cr_nface = 12*ndim
+  !> CR variables of the faces: energy and flux of each group
+  integer, parameter :: ncrface = ncrgrp*(ndim+1)
+
+  !> Dynamic shared memory of cr_transport_kernel: stencil states, flux tensors and wave speeds of one group,
+  !> the fluxes of all groups, and the refined flags of the stencil cells
+  type, public :: cr_smem_t
+     real(kind=dp) :: uin(-1:4,-1:4,-1:4,1:ndim+1)
+     real(kind=dp) :: cflx(-1:4,-1:4,-1:4,1:ndim+1,1:ndim)
+     real(kind=dp) :: lmax(-1:4,-1:4,-1:4,1:ndim)
+     real(kind=dp) :: flux(1:3,1:3,1:3,1:ncrface,1:ndim)
+     logical :: okloc(-1:4,-1:4,-1:4)
+  end type cr_smem_t
+
+contains
+
+  include 'gpu_hash.cuf'
+  include 'gpu_cell.cuf'
+#include "gpu_interpol.cuf"
+
+  ! =========================================================================
+  !> Set the CR energies and the total energy of unew to those of uold in every cell of one level,
+  !> as set_crunew
+  attributes(global) subroutine cr_set_crunew_kernel(uold, unew, head_idx, num_octs, iecr)
+    implicit none
+    real(kind=dp), device :: uold(1:twotondim,1:nvar,*)
+    real(kind=dp), device :: unew(1:twotondim,1:nvar,*)
+    integer(kind=4), intent(in), value :: head_idx, num_octs, iecr
+
+    integer :: oct_idx, cell_idx, igrp
+
+    oct_idx = (blockIdx%x - 1) * blockDim%y + threadIdx%y - 1
+    if (oct_idx >= num_octs) return
+    oct_idx = head_idx + oct_idx
+    cell_idx = threadIdx%x
+
+    do igrp = 1, ncrgrp
+       unew(cell_idx,iecr+igrp-1,oct_idx) = uold(cell_idx,iecr+igrp-1,oct_idx)
+    end do
+    unew(cell_idx,5,oct_idx) = uold(cell_idx,5,oct_idx)
+
+  end subroutine cr_set_crunew_kernel
+  ! =========================================================================
+
+  ! =========================================================================
+  !> CR energy floor and reduced-flux limit of one cell for every group, as the CR conservation fix of
+  !> set_cruold and conserve_cr_flux
+  attributes(device) subroutine cr_flux_fix_d(u, cru, cell_idx, oct_idx, iecr, cr_c, isotropic)
+    implicit none
+    real(kind=dp), device :: u(1:twotondim,1:nvar,*)
+    real(kind=dp), device :: cru(1:twotondim,1:ncruvar,*)
+    integer, value :: cell_idx, oct_idx
+    integer(kind=4), value :: iecr
+    real(kind=dp), value :: cr_c
+    logical, value :: isotropic
+
+    integer :: igrp, iE, iFlx, idim
+    real(kind=dp) :: sqrt3, Ecrc, fsq, fred
+
+    sqrt3 = 1.0_dp
+    if (isotropic) sqrt3 = sqrt(3.0_dp)
+    do igrp = 1, ncrgrp
+       iE = iecr + igrp - 1
+       iFlx = 1 + (igrp-1)*ndim
+       ! No negative CR densities
+       u(cell_idx,iE,oct_idx) = max(u(cell_idx,iE,oct_idx), real(smallecr, kind=dp))
+       Ecrc = u(cell_idx,iE,oct_idx)*cr_c
+       ! Reduced flux, should always be .le. 1
+       fsq = 0.0_dp
+       do idim = 1, ndim
+          fsq = fsq + cru(cell_idx,iFlx+idim-1,oct_idx)**2
+       end do
+       fred = sqrt(fsq)/Ecrc*sqrt3
+       if (fred > 1.0_dp) then
+          do idim = 1, ndim
+             cru(cell_idx,iFlx+idim-1,oct_idx) = cru(cell_idx,iFlx+idim-1,oct_idx)/fred
+          end do
+       end if
+    end do
+
+  end subroutine cr_flux_fix_d
+  ! =========================================================================
+
+  ! =========================================================================
+  !> Set cruold to crunew, and the CR energies and the total energy of uold to those of unew, in every cell
+  !> of one level, after the CR conservation fix with reduced_flux_correction, as set_cruold
+  attributes(global) subroutine cr_set_cruold_kernel(uold, unew, cruold, crunew, head_idx, num_octs, iecr, &
+       & cr_c, isotropic, reduced_flux_correction)
+    implicit none
+    real(kind=dp), device :: uold(1:twotondim,1:nvar,*)
+    real(kind=dp), device :: unew(1:twotondim,1:nvar,*)
+    real(kind=dp), device :: cruold(1:twotondim,1:ncruvar,*)
+    real(kind=dp), device :: crunew(1:twotondim,1:ncruvar,*)
+    integer(kind=4), intent(in), value :: head_idx, num_octs, iecr
+    real(kind=dp), intent(in), value :: cr_c
+    logical, intent(in), value :: isotropic, reduced_flux_correction
+
+    integer :: oct_idx, cell_idx, ivar, igrp
+
+    oct_idx = (blockIdx%x - 1) * blockDim%y + threadIdx%y - 1
+    if (oct_idx >= num_octs) return
+    oct_idx = head_idx + oct_idx
+    cell_idx = threadIdx%x
+
+    if (reduced_flux_correction) call cr_flux_fix_d(unew, crunew, cell_idx, oct_idx, iecr, cr_c, isotropic)
+    do ivar = 1, ncruvar
+       cruold(cell_idx,ivar,oct_idx) = crunew(cell_idx,ivar,oct_idx)
+    end do
+    do igrp = 1, ncrgrp
+       uold(cell_idx,iecr+igrp-1,oct_idx) = unew(cell_idx,iecr+igrp-1,oct_idx)
+    end do
+    uold(cell_idx,5,oct_idx) = unew(cell_idx,5,oct_idx)
+
+  end subroutine cr_set_cruold_kernel
+  ! =========================================================================
+
+  ! =========================================================================
+  !> CR conservation fix of uold and cruold in every cell of one level, as conserve_cr_flux
+  attributes(global) subroutine cr_conserve_flux_kernel(uold, cruold, head_idx, num_octs, iecr, cr_c, isotropic)
+    implicit none
+    real(kind=dp), device :: uold(1:twotondim,1:nvar,*)
+    real(kind=dp), device :: cruold(1:twotondim,1:ncruvar,*)
+    integer(kind=4), intent(in), value :: head_idx, num_octs, iecr
+    real(kind=dp), intent(in), value :: cr_c
+    logical, intent(in), value :: isotropic
+
+    integer :: oct_idx, cell_idx
+
+    oct_idx = (blockIdx%x - 1) * blockDim%y + threadIdx%y - 1
+    if (oct_idx >= num_octs) return
+    oct_idx = head_idx + oct_idx
+    cell_idx = threadIdx%x
+
+    call cr_flux_fix_d(uold, cruold, cell_idx, oct_idx, iecr, cr_c, isotropic)
+
+  end subroutine cr_conserve_flux_kernel
+  ! =========================================================================
+
+  ! =========================================================================
+  !> Restriction of the CR fluxes of the octs of one level into their parent cells, as cr_upload_fine.
+  !> One thread per oct.
+  attributes(global) subroutine cr_upload_kernel(grid, father, cruold, head_idx, num_octs)
+    implicit none
+    type(oct), device :: grid(*)
+    integer(kind=4), device :: father(*)
+    real(kind=dp), device :: cruold(1:twotondim,1:ncruvar,*)
+    integer(kind=4), intent(in), value :: head_idx, num_octs
+
+    integer :: oct_idx, father_idx, cell_idx, ivar, ind
+    real(kind=dp) :: average
+
+    oct_idx = threadIdx%x - 1 + (blockIdx%x - 1) * blockDim%x
+    if (oct_idx >= num_octs) return
+    oct_idx = head_idx + oct_idx
+
+    father_idx = father(oct_idx)
+    cell_idx = parent_cell_idx(grid(oct_idx)%ckey, grid(father_idx)%ckey)
+
+    do ivar = 1, ncruvar
+       average = 0.0_dp
+       do ind = 1, twotondim
+          average = average + cruold(ind,ivar,oct_idx)
+       end do
+       cruold(cell_idx,ivar,father_idx) = average / real(twotondim, kind=dp)
+    end do
+
+  end subroutine cr_upload_kernel
+  ! =========================================================================
+
+  ! =========================================================================
+  !> Refresh the CR fluxes of the ghost octs of one level from the parent cells of the hydro stencil,
+  !> as cr_godfine1 fills missing octs. One thread per oct.
+  attributes(global) subroutine cr_refresh_cache_kernel(grid, uold, bold, cruold, father, &
+       & hash_key, hash_val, hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
+       & head_idx, num_octs, interpol_type)
+    implicit none
+    type(oct), device :: grid(*)
+    real(kind=dp), device :: uold(1:twotondim,1:nvar,*)
+    real(kind=dp), device :: bold(1:twotondim,1:6,*)
+    real(kind=dp), device :: cruold(1:twotondim,1:ncruvar,*)
+    integer(kind=4), device :: father(*)
+    integer(kind=8), device :: hash_key(*)
+    integer(kind=4), device :: hash_val(*)
+    integer(kind=4), intent(in), value :: hash_size
+    integer(kind=4), device :: ckey_max(*)
+    integer(kind=8), device :: key_off(*)
+    integer(kind=4), device :: box_ckey_min(1:ndim,*)
+    integer(kind=4), device :: box_ckey_max(1:ndim,*)
+    logical, device :: periodic(1:3)
+    integer(kind=4), intent(in), value :: head_idx, num_octs, interpol_type
+
+    integer :: cache_idx, parent_idx, cell_idx
+    integer, dimension(1:ndim) :: ckey
+    ! Parent stencil: the hydro values come with the indices and are not used
+    real(kind=dp) :: u1(0:twondim,1:nvar)
+    real(kind=dp) :: b1(0:twondim,1:6)
+    real(kind=dp) :: b3(1:twondim,1:twotondim,1:6)
+    logical :: refined(1:twondim)
+    integer :: igrid_nbor(0:twondim), ind_nbor(0:twondim)
+
+    cache_idx = threadIdx%x - 1 + (blockIdx%x - 1) * blockDim%x
+    if (cache_idx >= num_octs) return
+    cache_idx = head_idx + cache_idx
+
+    parent_idx = father(cache_idx)
+    ckey(1:ndim) = grid(cache_idx)%ckey(1:ndim)
+    cell_idx = parent_cell_idx(ckey, grid(parent_idx)%ckey)
+
+    call gather_twondim_parent_stencil(grid, uold, bold, hash_key, hash_val, hash_size, &
+         & ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, grid(cache_idx)%lev, ckey, &
+         & parent_idx, cell_idx, u1, igrid_nbor, ind_nbor, b1, b3, refined)
+    call interpol_cr_d(cruold, ncruvar, igrid_nbor, ind_nbor, interpol_type, cache_idx)
+
+  end subroutine cr_refresh_cache_kernel
+  ! =========================================================================
+
+  ! =========================================================================
+  !> Flux tensor of one cell for one CR group, as cmp_cr_flux_tensors: u holds the CR energy and flux,
+  !> b the cell-centred field, F(:,d) the flux along d; ierr is 1 for a negative CR energy
+  attributes(device) subroutine cmp_cr_flux_tensor_cell_d(u, b, F, cr_c, gamma_cr, isotropic, ierr)
+    implicit none
+    real(kind=dp) :: u(1:ndim+1), b(1:3)
+    real(kind=dp) :: F(1:ndim+1,1:ndim)
+    real(kind=dp), value :: cr_c, gamma_cr
+    logical, value :: isotropic
+    integer :: ierr
+
+    real(kind=dp) :: Ecr, cr_c2, Ecr2, b_norm2, Fcr_norm, mu1, mu2, chi, aniso_term
+    integer :: p, q
+
+    ierr = 0
+    Ecr = u(1)
+    if (Ecr < 0.0_dp) then
+       ierr = 1
+       return
+    end if
+    cr_c2 = cr_c**2
+    do q = 1, ndim
+       F(1,q) = u(1+q)                       ! First row is CR flux
+    end do
+    if (isotropic) then
+       do q = 1, ndim
+          do p = 2, ndim+1
+             F(p,q) = 0.0_dp
+          end do
+          F(q+1,q) = Ecr*cr_c2*(gamma_cr-1.0)
+       end do
+    else
+       ! M1 closure
+       Ecr2 = Ecr**2
+       b_norm2 = 0.0_dp
+       Fcr_norm = 0.0_dp
+       do q = 1, ndim
+          b_norm2 = b_norm2 + b(q)**2
+          Fcr_norm = Fcr_norm + u(1+q)**2
+       end do
+       mu1 = min(Fcr_norm/(cr_c2*Ecr2), 1.0_dp)
+       mu2 = (3.0_dp+4.0_dp*mu1)/(5.0_dp+2.0_dp*sqrt(4.0_dp-3.0_dp*mu1))
+       chi = 0.5_dp*(1.0_dp-mu2)
+       aniso_term = (1.0_dp-3.0_dp*chi)/b_norm2
+       do q = 1, ndim
+          do p = 1, ndim
+             F(p+1,q) = b(p)*b(q)*aniso_term
+          end do
+          F(q+1,q) = F(q+1,q) + chi
+       end do
+       do q = 1, ndim
+          do p = 2, ndim+1
+             F(p,q) = F(p,q)*Ecr*cr_c2
+          end do
+       end do
+    end if
+
+  end subroutine cmp_cr_flux_tensor_cell_d
+  ! =========================================================================
+
+  ! =========================================================================
+  !> Largest local wave speed along one axis, as cmp_cr_lmax
+  attributes(device) function cmp_cr_lmax_d(dx, dcoeff, gamma_cr, cr_c, dt, isotropic) result(lmax)
+    implicit none
+    real(kind=dp), value :: dx, dcoeff, gamma_cr, cr_c, dt
+    logical, value :: isotropic
+    real(kind=dp) :: lmax, tau, r_factor
+
+    tau = 0.5_dp * dx**2 / dcoeff / dt
+    if (tau < 1e-3) then
+       r_factor = sqrt((1.0 - 0.5*tau**2))
+    else
+       r_factor = sqrt((1.-exp(-min(tau,10.0_dp)**2))/min(tau,1.0e8_dp)**2) ! Capital R on p 6 in YP17
+    end if
+    if (isotropic) then
+       lmax = r_factor * cr_c * sqrt(gamma_cr-1.0)
+    else
+       lmax = r_factor * cr_c
+    end if
+
+  end function cmp_cr_lmax_d
+  ! =========================================================================
+
+  ! =========================================================================
+  !> Van Leer limited states on both sides of a face, from the values v1..v4 of the cells i-2..i+1:
+  !> vL in cell i-1 and vR in cell i, as cr_unsplit
+  attributes(device) subroutine cr_vanleer_face_d(v1, v2, v3, v4, dx, vL, vR)
+    implicit none
+    real(kind=dp), value :: v1, v2, v3, v4, dx
+    real(kind=dp) :: vL, vR
+    real(kind=dp) :: slopeLM, slopeRM, slopeLL, slopeM, slopeL, prod
+
+    slopeLM = (v3-v2)/dx
+    slopeRM = (v4-v3)/dx
+    prod = slopeLM*slopeRM
+    slopeM = 0.0_dp
+    if (prod > 0.0_dp) slopeM = 2.0_dp*prod/(slopeLM+slopeRM)
+    slopeLL = (v2-v1)/dx
+    prod = slopeLL*slopeLM
+    slopeL = 0.0_dp
+    if (prod > 0.0_dp) slopeL = 2.0_dp*prod/(slopeLL+slopeLM)
+    vL = v2+slopeL*0.5_dp*dx
+    vR = v3-slopeM*0.5_dp*dx
+
+  end subroutine cr_vanleer_face_d
+  ! =========================================================================
+
+  ! =========================================================================
+  !> CR transport of the octs of one level, as cr_godfine1 with cr_unsplit: one block of 64 threads per oct,
+  !> on the oct's cells and the two cells beyond each face. With do_deposit, the fluxes across the faces to
+  !> ghost octs are staged for cr_deposit_kernel.
+  attributes(global) subroutine cr_transport_kernel(grid, nbor, uold, bold, cruold, unew, crunew, &
+       & cr_dep_val, cr_dep_src, gamma_rad, cr_d_code, cr_d_perp_factors, &
+       & head_idx, num_octs, ngridmax, iecr, cr_c, dt, dx, isotropic, reset_at_refined, do_deposit, cr_fail)
+    implicit none
+    type(oct), device :: grid(*)
+    integer(kind=4), device :: nbor(1:subgridsize,*)
+    real(kind=dp), device :: uold(1:twotondim,1:nvar,*)
+    real(kind=dp), device :: bold(1:twotondim,1:6,*)
+    real(kind=dp), device :: cruold(1:twotondim,1:ncruvar,*)
+    real(kind=dp), device :: unew(1:twotondim,1:nvar,*)
+    real(kind=dp), device :: crunew(1:twotondim,1:ncruvar,*)
+    real(kind=dp), device :: cr_dep_val(1:twondim,1:4,1:ncrface,*)
+    integer(kind=4), device :: cr_dep_src(1:twondim,*)
+    real(kind=dp), device :: gamma_rad(1:nener+1)
+    real(kind=dp), device :: cr_d_code(1:ncrgrp), cr_d_perp_factors(1:ncrgrp)
+    integer(kind=4), intent(in), value :: head_idx, num_octs, ngridmax, iecr
+    real(kind=dp), intent(in), value :: cr_c, dt, dx
+    logical, intent(in), value :: isotropic, reset_at_refined, do_deposit
+    integer(kind=4), device :: cr_fail
+
+    type(cr_smem_t), shared :: smem(*)
+
+    real(kind=dp), parameter :: oneontwotondim = 1.0_dp / real(twotondim, kind=dp)
+    real(kind=dp) :: u(1:ndim+1), F(1:ndim+1,1:ndim), bcell(1:3), bhat(1:3), Dcr_ax(1:3)
+    real(kind=dp) :: norm, dpar, dperp, dtdx, gamma_cr, cap, val, d
+    real(kind=dp) :: fL, fR, uL, uR, meandiffv, a2, a3, lminus, lplus, llmax
+    integer :: t, nthr, slot, subgrid_idx, oct_idx, i, j, k, io, jo, ko, s, r, o, a, b, axis
+    integer :: ci, cj, ck, src, cell, ierr, igrp, ivar, idim, iface, i3, j3, k3, i0, j0, k0
+    integer :: c1, c2, c3, c4, ind_son, iv, q, n
+    integer :: ghost, fghost, gdim, gside, gn
+    integer, dimension(1:4), parameter :: outside = (/ -1, 0, 3, 4 /)
+    logical :: in_stencil
+
+    associate(uin => smem(1)%uin, cflx => smem(1)%cflx, lmax => smem(1)%lmax, flux => smem(1)%flux, &
+         & okloc => smem(1)%okloc)
+
+    ! One block per oct
+    if (blockIdx%x > num_octs) return
+    t = threadIdx%x
+    nthr = blockDim%x
+    dtdx = dt/dx
+
+    ! Compute subgrid idx
+    slot = head_idx + blockIdx%x - 1
+    subgrid_idx = (slot - 1) / nsubgridtondim + 1
+
+    ! Compute oct idx within subgrid
+    slot = (slot - 1) - (subgrid_idx - 1) * nsubgridtondim
+    k = slot / nsubgridsq
+    j = (slot - k * nsubgridsq) / nsubgrid
+    i = slot - j * nsubgrid - k * nsubgridsq
+    i = i + 1; j = j + 1; k = k + 1
+
+    ! Compute true oct idx
+    oct_idx = nbor(1 + i + nsubgridp2 * j + nsubgridp2sq * k, subgrid_idx)
+
+    ! Stencil cell of this thread: the 8 cells of the oct, then the 4 cells beyond them along each axis
+    in_stencil = t <= 8 + 16*ndim
+    if (in_stencil) then
+       if (t <= 8) then
+          ci = 1 + mod(t-1, 2)
+          cj = 1 + mod((t-1)/2, 2)
+          ck = 1 + (t-1)/4
+       else
+          s = t - 9
+          axis = s/16
+          r = mod(s, 16)
+          o = outside(1 + mod(r, 4))
+          a = 1 + mod(r/4, 2)
+          b = 1 + r/8
+          if (axis == 0) then
+             ci = o; cj = a; ck = b
+          else if (axis == 1) then
+             ci = a; cj = o; ck = b
+          else
+             ci = a; cj = b; ck = o
+          end if
+       end if
+       io = (ci+1)/2 - 1
+       jo = (cj+1)/2 - 1
+       ko = (ck+1)/2 - 1
+       cell = 1 + (ci-2*io-1) + 2*(cj-2*jo-1) + 4*(ck-2*ko-1)
+       src = nbor(1 + (i+io) + nsubgridp2 * (j+jo) + nsubgridp2sq * (k+ko), subgrid_idx)
+       ! A ghost oct stands for a missing oct: its cells are not refined at this level
+       okloc(ci,cj,ck) = .false.
+       if (src <= ngridmax) okloc(ci,cj,ck) = grid(src)%refined(cell)
+       ! Cell-centred field, and its direction for the diffusion along each axis
+       norm = 0.0_dp
+       do q = 1, 3
+          bcell(q) = 0.5*(bold(cell,q,src)+bold(cell,q+3,src))
+          norm = norm + bcell(q)**2
+       end do
+       norm = max(sqrt(norm), 1.0e-30_dp)
+       do q = 1, 3
+          bhat(q) = bcell(q)/norm
+       end do
+       if (norm <= 1e-10) bhat = (/ 1.0_dp, 0.0_dp, 0.0_dp /)
+    end if
+
+    do igrp = 1, ncrgrp
+       gamma_cr = gamma_rad(igrp)
+       cap = cr_c*sqrt(gamma_cr-1.0)
+
+       ! Gather the stencil cells, their flux tensors and their wave speeds along each axis
+       if (in_stencil) then
+          u(1) = uold(cell,iecr+igrp-1,src)
+          do q = 1, ndim
+             u(1+q) = cruold(cell,(igrp-1)*ndim+q,src)
+          end do
+          do ivar = 1, ndim+1
+             uin(ci,cj,ck,ivar) = u(ivar)
+          end do
+          call cmp_cr_flux_tensor_cell_d(u, bcell, F, cr_c, gamma_cr, isotropic, ierr)
+          if (ierr /= 0) cr_fail = 1
+          do idim = 1, ndim
+             do ivar = 1, ndim+1
+                cflx(ci,cj,ck,ivar,idim) = F(ivar,idim)
+             end do
+          end do
+          dpar = cr_d_code(igrp)
+          dperp = cr_d_code(igrp)*cr_d_perp_factors(igrp)
+          do idim = 1, ndim
+             Dcr_ax(idim) = dpar*bhat(idim)**2 + dperp*(1.0_dp-bhat(idim)**2)
+             lmax(ci,cj,ck,idim) = cmp_cr_lmax_d(dx, Dcr_ax(idim), gamma_cr, cr_c, dt, isotropic)
+          end do
+       end if
+       call syncthreads()
+
+       ! Fluxes across the faces of the oct's cells: van Leer states and the LLF flux
+       do iface = t, cr_nface, nthr
+          call face_cell_d(iface, idim, i3, j3, k3)
+          i0 = 0; j0 = 0; k0 = 0
+          if (idim == 1) i0 = 1
+          if (idim == 2) j0 = 1
+          if (idim == 3) k0 = 1
+          meandiffv = 0.5*(lmax(i3-i0,j3-j0,k3-k0,idim) + lmax(i3,j3,k3,idim))
+          a2 = min(-meandiffv, -lmax(i3-i0,j3-j0,k3-k0,idim))
+          a2 = max(a2, -cap)
+          a3 = max(meandiffv, lmax(i3,j3,k3,idim))
+          a3 = min(a3, cap)
+          lminus = min(a2, 0.0_dp)
+          lplus = max(a3, 0.0_dp)
+          llmax = max(abs(lplus), abs(lminus))
+          do ivar = 1, ndim+1
+             call cr_vanleer_face_d(cflx(i3-2*i0,j3-2*j0,k3-2*k0,ivar,idim), cflx(i3-i0,j3-j0,k3-k0,ivar,idim), &
+                  & cflx(i3,j3,k3,ivar,idim), cflx(i3+i0,j3+j0,k3+k0,ivar,idim), dx, fL, fR)
+             call cr_vanleer_face_d(uin(i3-2*i0,j3-2*j0,k3-2*k0,ivar), uin(i3-i0,j3-j0,k3-k0,ivar), &
+                  & uin(i3,j3,k3,ivar), uin(i3+i0,j3+j0,k3+k0,ivar), dx, uL, uR)
+             flux(i3,j3,k3,(igrp-1)*(ndim+1)+ivar,idim) = 0.5_dp*(fL + fR - llmax*(uR - uL))*dtdx
+          end do
+       end do
+
+       ! The next group overwrites the stencil arrays
+       call syncthreads()
+    end do
+
+    ! Reset fluxes at refined interfaces
+    if (reset_at_refined) then
+       do iface = t, cr_nface, nthr
+          call face_cell_d(iface, idim, i3, j3, k3)
+          i0 = 0; j0 = 0; k0 = 0
+          if (idim == 1) i0 = 1
+          if (idim == 2) j0 = 1
+          if (idim == 3) k0 = 1
+          if (okloc(i3-i0,j3-j0,k3-k0) .or. okloc(i3,j3,k3)) then
+             do ivar = 1, ncrface
+                flux(i3,j3,k3,ivar,idim) = 0.0_dp
+             end do
+          end if
+       end do
+       call syncthreads()
+    end if
+
+    ! Conservative update of the unrefined cells of the oct, one thread per cell, in the order of the CPU
+    if (t <= twotondim) then
+       ind_son = t
+       i3 = 1 + mod(ind_son-1, 2)
+       j3 = 1 + mod((ind_son-1)/2, 2)
+       k3 = 1 + (ind_son-1)/4
+       if (.not. okloc(i3,j3,k3)) then
+          do idim = 1, ndim
+             i0 = 0; j0 = 0; k0 = 0
+             if (idim == 1) i0 = 1
+             if (idim == 2) j0 = 1
+             if (idim == 3) k0 = 1
+             do igrp = 1, ncrgrp
+                iv = (igrp-1)*(ndim+1) + 1
+                d = flux(i3,j3,k3,iv,idim) - flux(i3+i0,j3+j0,k3+k0,iv,idim)
+                unew(ind_son,iecr+igrp-1,oct_idx) = unew(ind_son,iecr+igrp-1,oct_idx) + d
+                unew(ind_son,5,oct_idx) = unew(ind_son,5,oct_idx) + d
+                do q = 1, ndim
+                   crunew(ind_son,(igrp-1)*ndim+q,oct_idx) = crunew(ind_son,(igrp-1)*ndim+q,oct_idx) &
+                        & + (flux(i3,j3,k3,iv+q,idim) - flux(i3+i0,j3+j0,k3+k0,iv+q,idim))
+                end do
+             end do
+          end do
+       end if
+    end if
+
+    ! Coarse deposit: stage the fluxes across each face to a ghost oct, fine face by fine face in the order
+    ! of the coarse update of cr_godfine1, for the parent cell of the ghost oct
+    if (do_deposit .and. t > twotondim .and. t <= twotondim + twondim) then
+       iface = t - twotondim
+       gdim = (iface+1)/2
+       ! Lower face (gside 1) or upper face (gside -1), and its index along gdim in flux
+       gside = 2*mod(iface,2) - 1
+       gn = 2 - gside
+       io = 0; jo = 0; ko = 0
+       if (gdim == 1) io = -gside
+       if (gdim == 2) jo = -gside
+       if (gdim == 3) ko = -gside
+       ghost = nbor(1 + (i+io) + nsubgridp2 * (j+jo) + nsubgridp2sq * (k+ko), subgrid_idx)
+       if (ghost > ngridmax) then
+          ! The oct lies on the upper side of a ghost oct across its lower face, and conversely
+          fghost = 2*gdim - 1
+          if (gside == 1) fghost = 2*gdim
+          cr_dep_src(fghost,ghost-ngridmax) = oct_idx
+          do b = 1, 2
+             do a = 1, 2
+                n = a + 2*(b-1)
+                do ivar = 1, ncrface
+                   if (gdim == 1) val = flux(gn,a,b,ivar,1)
+                   if (gdim == 2) val = flux(a,gn,b,ivar,2)
+                   if (gdim == 3) val = flux(a,b,gn,ivar,3)
+                   cr_dep_val(fghost,n,ivar,ghost-ngridmax) = val * oneontwotondim
+                end do
+             end do
+          end do
+       end if
+    end if
+
+    end associate
+
+  end subroutine cr_transport_kernel
+  ! =========================================================================
+
+  ! =========================================================================
+  !> Coarse update of cr_godfine1 from the fluxes staged in the ghost octs of one level: one thread per
+  !> ghost oct, whose parent cell takes the fluxes of its writers in the order of the CPU
+  attributes(global) subroutine cr_deposit_kernel(grid, father, unew, crunew, cr_dep_val, cr_dep_src, &
+       & head_idx, num_octs, ngridmax, iecr, cr_fail)
+    implicit none
+    type(oct), device :: grid(*)
+    integer(kind=4), device :: father(*)
+    real(kind=dp), device :: unew(1:twotondim,1:nvar,*)
+    real(kind=dp), device :: crunew(1:twotondim,1:ncruvar,*)
+    real(kind=dp), device :: cr_dep_val(1:twondim,1:4,1:ncrface,*)
+    integer(kind=4), device :: cr_dep_src(1:twondim,*)
+    integer(kind=4), intent(in), value :: head_idx, num_octs, ngridmax, iecr
+    integer(kind=4), device :: cr_fail
+
+    integer :: cache_idx, islot, father_idx, cell_idx, iface, n, a, nf, igrp, iv, q
+    integer :: face(1:twondim), writer(1:twondim)
+    real(kind=dp) :: sgn, val
+
+    cache_idx = threadIdx%x - 1 + (blockIdx%x - 1) * blockDim%x
+    if (cache_idx >= num_octs) return
+    cache_idx = head_idx + cache_idx
+    islot = cache_idx - ngridmax
+
+    ! Staged faces in ascending writer order
+    call sort_face_writers_d(cr_dep_src, islot, face, writer, n)
+    if (n == 0) return
+
+    ! A ghost parent oct has no crunew: the parent cell is missing, as in cr_godfine1
+    father_idx = father(cache_idx)
+    if (father_idx > ngridmax) then
+       cr_fail = 2
+       return
+    end if
+    cell_idx = parent_cell_idx(grid(cache_idx)%ckey, grid(father_idx)%ckey)
+
+    do a = 1, n
+       iface = face(a)
+       ! The writer on the upper side gives its lower face, the writer on the lower side its upper face
+       sgn = 1.0_dp
+       if (mod(iface,2) == 0) sgn = -1.0_dp
+       do nf = 1, 4
+          do igrp = 1, ncrgrp
+             iv = (igrp-1)*(ndim+1) + 1
+             val = sgn*cr_dep_val(iface,nf,iv,islot)
+             unew(cell_idx,iecr+igrp-1,father_idx) = unew(cell_idx,iecr+igrp-1,father_idx) + val
+             unew(cell_idx,5,father_idx) = unew(cell_idx,5,father_idx) + val
+             do q = 1, ndim
+                crunew(cell_idx,(igrp-1)*ndim+q,father_idx) = crunew(cell_idx,(igrp-1)*ndim+q,father_idx) &
+                     & + sgn*cr_dep_val(iface,nf,iv+q,islot)
+             end do
+          end do
+       end do
+    end do
+
+  end subroutine cr_deposit_kernel
+  ! =========================================================================
+
+  ! =========================================================================
+  !> Rotate vector v by t=theta and p=phi into the field frame, as rotatevec
+  attributes(device) subroutine rotatevec_d(sint, cost, sinp, cosp, v1, v2, v3)
+    implicit none
+    real(kind=dp), value :: sint, cost, sinp, cosp
+    real(kind=dp) :: v1, v2, v3
+    real(kind=dp) :: newv1, newv3
+
+    newv1 =  cosp * v1 + sinp * v2
+    v2 = -sinp * v1 + cosp * v2
+    v1 =  sint * newv1 + cost * v3
+    newv3 = -cost * newv1 + sint * v3
+    v3 = newv3
+
+  end subroutine rotatevec_d
+  ! =========================================================================
+
+  ! =========================================================================
+  !> Rotate vector v back from the field frame, as invrotatevec
+  attributes(device) subroutine invrotatevec_d(sint, cost, sinp, cosp, v1, v2, v3)
+    implicit none
+    real(kind=dp), value :: sint, cost, sinp, cosp
+    real(kind=dp) :: v1, v2, v3
+    real(kind=dp) :: newv1, newv2
+
+    newv1 = sint * v1 - cost * v3
+    v3 = cost * v1 + sint * v3
+    v1 = cosp * newv1 - sinp * v2
+    newv2 = sinp * newv1 + cosp * v2
+    v2 = newv2
+
+  end subroutine invrotatevec_d
+  ! =========================================================================
+
+  ! =========================================================================
+  !> CR source terms of the leaf cells of one level, as cr_source_terms: the implicit decay of the CR flux
+  !> along and across the field
+  attributes(global) subroutine cr_source_kernel(grid, bold, unew, crunew, gamma_rad, cr_d_code, &
+       & cr_d_perp_factors, head_idx, num_octs, iecr, cr_c, dt, isotropic)
+    implicit none
+    type(oct), device :: grid(*)
+    real(kind=dp), device :: bold(1:twotondim,1:6,*)
+    real(kind=dp), device :: unew(1:twotondim,1:nvar,*)
+    real(kind=dp), device :: crunew(1:twotondim,1:ncruvar,*)
+    real(kind=dp), device :: gamma_rad(1:nener+1)
+    real(kind=dp), device :: cr_d_code(1:ncrgrp), cr_d_perp_factors(1:ncrgrp)
+    integer(kind=4), intent(in), value :: head_idx, num_octs, iecr
+    real(kind=dp), intent(in), value :: cr_c, dt
+    logical, intent(in), value :: isotropic
+
+    integer :: oct_idx, cell_idx, idim, igrp, iE
+    real(kind=dp) :: bloc(1:3), norm, bxby, sint, cost, sinp, cosp, sqrt3, cr_c_two
+    real(kind=dp) :: g_grp, three_gmone, Ecr, f1, f2, f3, fred, frotx, froty, frotz, v1, v2, v3
+    real(kind=dp) :: rhs2, rhs3, rhs4, sigma_x, sigma_y, sigma_z
+    real(kind=dp) :: coef_11, coef_12, coef_13, coef_14, coef_21, coef_22, coef_31, coef_33, coef_41, coef_44
+    real(kind=dp) :: e_coef, new_ec, old_ec
+
+    oct_idx = (blockIdx%x - 1) * blockDim%y + threadIdx%y - 1
+    if (oct_idx >= num_octs) return
+    oct_idx = head_idx + oct_idx
+    cell_idx = threadIdx%x
+
+    ! Leaf cells only
+    if (grid(oct_idx)%refined(cell_idx)) return
+
+    sqrt3 = 1.0_dp
+    if (isotropic) sqrt3 = sqrt(3.0_dp)
+    cr_c_two = cr_c**2
+
+    ! Field direction angles
+    norm = 0.0_dp
+    do idim = 1, 3
+       bloc(idim) = 0.5 * ( bold(cell_idx,idim,oct_idx) + bold(cell_idx,idim+3,oct_idx) )
+       norm = norm + bloc(idim)**2
+    end do
+    norm = max(sqrt(norm), 1.0e-30_dp)
+    bxby = sqrt(bloc(1)**2+bloc(2)**2)
+    if (norm > 1e-10) then
+       sint = bxby/norm
+       cost = bloc(3)/norm
+    else
+       sint = 1.0_dp
+       cost = 0.0_dp
+    end if
+    if (bxby > 1e-10) then
+       sinp = bloc(2)/bxby
+       cosp = bloc(1)/bxby
+    else
+       sinp = 0.0_dp
+       cosp = 1.0_dp
+    end if
+
+    do igrp = 1, ncrgrp
+       iE = iecr + igrp - 1
+       g_grp = gamma_rad(igrp)
+       three_gmone = 3.0_dp*(g_grp - 1.0_dp)
+
+       Ecr = max(unew(cell_idx,iE,oct_idx), real(smallecr, kind=dp))
+
+       ! Flux in the field frame, with |F|<=cE/sqrt3
+       f1 = crunew(cell_idx,1+(igrp-1)*ndim,oct_idx)
+       f2 = crunew(cell_idx,2+(igrp-1)*ndim,oct_idx)
+       f3 = crunew(cell_idx,3+(igrp-1)*ndim,oct_idx)
+       fred = sqrt(f1**2+f2**2+f3**2)/(cr_c*Ecr)*sqrt3
+       if (fred > 1.0_dp) then
+          f1 = f1/fred ; f2 = f2/fred ; f3 = f3/fred
+       end if
+       frotx = f1; froty = f2; frotz = f3
+       call rotatevec_d(sint, cost, sinp, cosp, frotx, froty, frotz)
+       ! No streaming: zero streaming velocity
+       v1 = 0.0_dp ; v2 = 0.0_dp ; v3 = 0.0_dp
+       call rotatevec_d(sint, cost, sinp, cosp, v1, v2, v3)
+
+       rhs2 = frotx ; rhs3 = froty ; rhs4 = frotz
+
+       sigma_x = 1./cr_d_code(igrp)
+       sigma_y = 1./(cr_d_code(igrp)*cr_d_perp_factors(igrp))
+       sigma_z = 1./(cr_d_code(igrp)*cr_d_perp_factors(igrp))
+
+       coef_11 = 1.0
+       coef_12 = dt * sigma_x * v1 *three_gmone
+       coef_13 = dt * sigma_y * v2 *three_gmone
+       coef_14 = dt * sigma_z * v3 *three_gmone
+
+       coef_21 = 0.0
+       coef_22 = 1.0 + dt * sigma_x * cr_c_two
+
+       coef_31 = 0.0
+       coef_33 = 1.0 + dt * sigma_y * cr_c_two
+
+       coef_41 = 0.0
+       coef_44 = 1.0 + dt * sigma_z * cr_c_two
+
+       e_coef = coef_11 - coef_12 * coef_21/coef_22 - coef_13 * coef_31/coef_33 &
+            & - coef_14 * coef_41/coef_44
+       new_ec = Ecr - coef_12 * rhs2/coef_22 - coef_13 * rhs3/coef_33 &
+            & - coef_14 * rhs4/coef_44
+       new_ec = new_ec / e_coef
+
+       old_ec = unew(cell_idx,iE,oct_idx)
+       unew(cell_idx,iE,oct_idx) = unew(cell_idx,iE,oct_idx) + (new_ec-old_ec)
+       ! Floor the CR energy (the total energy is left as it is, as on the CPU)
+       unew(cell_idx,iE,oct_idx) = max(unew(cell_idx,iE,oct_idx), real(smallecr, kind=dp))
+
+       frotx = (rhs2 - coef_21 * new_ec)/coef_22
+       froty = (rhs3 - coef_31 * new_ec)/coef_33
+       frotz = (rhs4 - coef_41 * new_ec)/coef_44
+
+       fred = sqrt(frotx**2+froty**2+frotz**2)/(cr_c*new_ec)*sqrt3
+       if (fred > 1.0_dp) then
+          frotx = frotx/fred ; froty = froty/fred ; frotz = frotz/fred
+       end if
+
+       ! Rotate the flux back to the simulation coordinate system
+       call invrotatevec_d(sint, cost, sinp, cosp, frotx, froty, frotz)
+       crunew(cell_idx,1+(igrp-1)*ndim,oct_idx) = frotx
+       crunew(cell_idx,2+(igrp-1)*ndim,oct_idx) = froty
+       crunew(cell_idx,3+(igrp-1)*ndim,oct_idx) = frotz
+    end do
+
+  end subroutine cr_source_kernel
+  ! =========================================================================
+#endif
+end module cr_device

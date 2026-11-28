@@ -21,9 +21,9 @@
 #define GPU_LAUNCH_TARGET 0
 #endif
 
-! Pure hydro without passive scalars traces pairs of cells at slope_type=3 in its own kernel, where
-! it is faster: NSUBGRID=4, and NSUBGRID=2 in single precision.
-#if !defined(MHD) && !(NVAR>5+NENER) && defined(NSUBGRID) && (NSUBGRID == 4 || (NSUBGRID == 2 && defined(NPRE) && NPRE == 4))
+! Pure hydro without non-thermal energies or passive scalars traces pairs of cells at slope_type=3 in
+! its own kernel, where it is faster: NSUBGRID=4, and NSUBGRID=2 in single precision.
+#if !defined(MHD) && !(NVAR>5) && defined(NSUBGRID) && (NSUBGRID == 4 || (NSUBGRID == 2 && defined(NPRE) && NPRE == 4))
 #define HYDRO_PAIR
 #endif
 

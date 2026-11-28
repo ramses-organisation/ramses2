@@ -1,6 +1,6 @@
 module cooling_device
   use amr_parameters, only: dp, ndim, twondim, twotondim, nhilbert
-  use hydro_parameters, only: nvar
+  use hydro_parameters, only: nvar, nener
   use oct_commons, only: oct
   use cudafor
   implicit none
@@ -280,8 +280,8 @@ contains
     integer(kind=4), value :: imetal
     real(kind=8), value :: z_ave, X_frac, T2max
 
-    integer :: cell_idx, oct_idx, block_idx, idim
-    real(kind=8) :: density, energy, kinetic, poverrho, temperature, nH, rho, emag
+    integer :: cell_idx, oct_idx, block_idx, idim, irad
+    real(kind=8) :: density, energy, kinetic, poverrho, temperature, nH, rho, emag, erad
     real(kind=8) :: velocity_x, velocity_y, velocity_z, T2min
     real(kind=8) :: Zsolar, boost, T2_therm, delta_T2
     real(kind=8)::factor1, factor2, factor3
@@ -314,7 +314,11 @@ contains
        emag = emag + 0.125d0*(bold(cell_idx,idim,oct_idx)+bold(cell_idx,idim+3,oct_idx))**2
     end do
 #endif
-    poverrho    = (gamma - 1.0_dp) * (energy - kinetic - emag/density)
+    erad        = 0.0d0
+    do irad = 1, nener
+       erad = erad + uold(cell_idx, 5+irad, oct_idx)
+    end do
+    poverrho    = (gamma - 1.0_dp) * (energy - kinetic - (emag + erad)/density)
     poverrho    = max(poverrho, real(smallc2 / gamma,kind=8))
     temperature = poverrho * scale_T2
     nH          = density * scale_nH
@@ -370,8 +374,8 @@ contains
 
     ! Convert back to conservative variables and update uold.
     ! When cooling=.false., T2_therm=delta_T2=0 so this reduces to the
-    ! original floor behaviour: energy = T2min/scale_T2/(gamma-1) + kinetic.
-    energy = (T2_therm + delta_T2 + T2min) / scale_T2 / (gamma - 1.0d0) + kinetic + emag/density
+    ! original floor behaviour: energy = T2min/scale_T2/(gamma-1) + kinetic + (emag + erad)/density.
+    energy = (T2_therm + delta_T2 + T2min) / scale_T2 / (gamma - 1.0d0) + kinetic + (emag + erad)/density
     uold(cell_idx, 5, oct_idx) = real(density * energy, kind=dp)
 
   end subroutine cooling_kernel

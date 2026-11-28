@@ -1,4 +1,7 @@
 module cr_godunov_fine_module
+#if defined(_CUDA) && defined(DO_CR)
+  use gpu_runner, only: gpu_cr_godunov, gpu_cr_set_crunew, gpu_cr_set_cruold, gpu_cr_conserve_flux
+#endif
 contains
 !###########################################################
 !###########################################################
@@ -20,7 +23,11 @@ recursive subroutine r_cr_godunov_fine(pst,ilevel,input_size)
      call r_cr_godunov_fine(pst%pLower,ilevel,input_size)
      call mdl_get_reply(pst%s%mdl,rID,0)
   else
+#if defined(_CUDA) && defined(DO_CR)
+     call gpu_cr_godunov(pst%s,ilevel)
+#else
      call cr_godunov_fine(pst%s,ilevel)
+#endif
   endif
 
 end subroutine r_cr_godunov_fine
@@ -86,7 +93,11 @@ recursive subroutine r_set_crunew(pst,ilevel,input_size)
      call r_set_crunew(pst%pLower,ilevel,input_size)
      call mdl_get_reply(pst%s%mdl,rID,0)
   else
+#if defined(_CUDA) && defined(DO_CR)
+     call gpu_cr_set_crunew(pst%s,ilevel)
+#else
      call set_crunew(pst%s%r, pst%s%m,ilevel)
+#endif
   endif
 
 end subroutine r_set_crunew
@@ -142,7 +153,11 @@ recursive subroutine r_set_cruold(pst,ilevel,input_size)
      call r_set_cruold(pst%pLower,ilevel,input_size)
      call mdl_get_reply(pst%s%mdl,rID,0)
   else
+#if defined(_CUDA) && defined(DO_CR)
+     call gpu_cr_set_cruold(pst%s,ilevel)
+#else
      call set_cruold(pst%s%r, pst%s%g, pst%s%m, ilevel)
+#endif
   endif
 
 end subroutine r_set_cruold
@@ -232,7 +247,11 @@ recursive subroutine r_conserve_cr_flux(pst,ilevel,input_size)
      call r_conserve_cr_flux(pst%pLower,ilevel,input_size)
      call mdl_get_reply(pst%s%mdl,rID,0)
   else
+#if defined(_CUDA) && defined(DO_CR)
+     call gpu_cr_conserve_flux(pst%s,ilevel)
+#else
      call conserve_cr_flux(pst%s%r, pst%s%g, pst%s%m, ilevel)
+#endif
   endif
 
 end subroutine r_conserve_cr_flux

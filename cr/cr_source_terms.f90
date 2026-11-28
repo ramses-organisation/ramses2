@@ -1,4 +1,7 @@
 module cr_source_terms_module
+#if defined(_CUDA) && defined(DO_CR)
+  use gpu_runner, only: gpu_cr_source_terms
+#endif
 contains
 !###########################################################
 !###########################################################
@@ -20,7 +23,11 @@ recursive subroutine r_cr_source_terms(pst,ilevel,input_size)
      call r_cr_source_terms(pst%pLower,ilevel,input_size)
      call mdl_get_reply(pst%s%mdl,rID,0)
   else
+#if defined(_CUDA) && defined(DO_CR)
+     call gpu_cr_source_terms(pst%s,ilevel)
+#else
      call cr_source_terms(pst%s,ilevel)
+#endif
   endif
 
 end subroutine r_cr_source_terms

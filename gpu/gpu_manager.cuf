@@ -40,6 +40,9 @@ recursive subroutine r_set_grid_device(pst)
 #ifdef DO_RT
      rtuold = pst%s%m%rtuold
 #endif
+#ifdef DO_CR
+     cruold = pst%s%m%cruold
+#endif
 #ifdef GRAV
      f = pst%s%m%f
      phi = pst%s%m%phi
@@ -187,6 +190,9 @@ recursive subroutine r_transfer_grid_host(pst)
 #endif
 #ifdef DO_RT
      pst%s%m%rtuold = rtuold
+#endif
+#ifdef DO_CR
+     pst%s%m%cruold = cruold
 #endif
 #ifdef GRAV
      pst%s%m%f = f
@@ -531,10 +537,13 @@ subroutine gpu_allocate_amr(sim)
   use amr_parameters, ONLY: ndim, twotondim
   use refine_device, only: cache_source
 #ifdef HYDRO
-  use hydro_parameters, ONLY: nvar
+  use hydro_parameters, ONLY: nvar, nener
 #endif
 #ifdef DO_RT
   use rt_parameters, ONLY: nrtvar, nrtgrp
+#endif
+#ifdef DO_CR
+  use cr_parameters, ONLY: ncrgrp, ncruvar
 #endif
 #ifdef TURB
   use turb_commons, ONLY: TURB_GS
@@ -617,6 +626,14 @@ subroutine gpu_allocate_amr(sim)
   endif
   allocate(emissivity(1:twotondim,1:nrtgrp,1:sim%m%ngridmax))
 #endif
+#ifdef DO_CR
+  allocate(cruold(1:twotondim,1:ncruvar,1:sim%m%ngridmax+sim%m%ncachemax))
+  allocate(crunew(1:twotondim,1:ncruvar,1:sim%m%ngridmax))
+  if(sim%r%cr .and. sim%r%cr_advect)then
+     allocate(cr_dep_val(1:2*ndim,1:4,1:ncrgrp*(ndim+1),1:sim%m%ncachemax))
+     allocate(cr_dep_src(1:2*ndim,1:sim%m%ncachemax))
+  endif
+#endif
 #ifdef TURB
   allocate(afield_d    (1:ndim,0:TURB_GS-1,0:TURB_GS-1,0:TURB_GS-1,1:2))
   allocate(afield_now_d(1:ndim,0:TURB_GS-1,0:TURB_GS-1,0:TURB_GS-1))
@@ -668,6 +685,14 @@ subroutine gpu_allocate_amr(sim)
   periodic=sim%r%periodic
   box_size=sim%r%box_size
   constant_gravity=real(sim%r%constant_gravity,kind=dp)
+  gamma_rad=real(sim%r%gamma_rad,kind=dp)
+#if NENER>0
+  d_err_grad_prad=real(sim%r%err_grad_prad(1:nener),kind=dp)
+  d_floor_prad=real(sim%r%floor_prad(1:nener),kind=dp)
+#endif
+#ifdef DO_CR
+  d_cr_d_perp_factors=real(sim%r%cr_d_perp_factors,kind=dp)
+#endif
   box_ckey_min=sim%m%box_ckey_min
   box_ckey_max=sim%m%box_ckey_max
   if(sim%r%nbound>0)then

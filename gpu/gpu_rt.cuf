@@ -186,31 +186,6 @@ contains
   ! =========================================================================
 
   ! =========================================================================
-  !> Cell (i,j,k) of face iface of the oct's cells and its direction idim:
-  !> the face is the lower one of the cell, i,j,k in 1:3 along idim and in 1:2 across
-  attributes(device) subroutine face_cell_d(iface, idim, i, j, k)
-    implicit none
-    integer, value :: iface
-    integer :: idim, i, j, k
-    integer :: m, n, a, b
-
-    idim = (iface-1)/12 + 1
-    m = mod(iface-1, 12)
-    n = 1 + mod(m, 3)
-    a = 1 + mod(m/3, 2)
-    b = 1 + m/6
-    if (idim == 1) then
-       i = n; j = a; k = b
-    else if (idim == 2) then
-       i = a; j = n; k = b
-    else
-       i = a; j = b; k = n
-    end if
-
-  end subroutine face_cell_d
-  ! =========================================================================
-
-  ! =========================================================================
   !> Fluxes across the faces of the oct's cells for one photon group, as rt_unsplit,
   !> the faces shared out over the threads of the block (tid, stride)
   attributes(device) subroutine rt_unsplit_faces_d(uin, cflx, flux, rt_c, dtdx, tid, stride)
@@ -432,7 +407,7 @@ contains
     integer(kind=4), intent(in), value :: head_idx, num_octs, ngridmax
     integer(kind=4), device :: rt_fail
 
-    integer :: cache_idx, islot, father_idx, cell_idx, ivar, iface, n, a, b, w, pos
+    integer :: cache_idx, islot, father_idx, cell_idx, ivar, iface, n, a
     integer :: face(1:twondim), writer(1:twondim)
 
     ! Compute cache oct idx
@@ -441,24 +416,8 @@ contains
     cache_idx = head_idx + cache_idx
     islot = cache_idx - ngridmax
 
-    ! Staged faces in ascending writer order (insertion sort)
-    n = 0
-    do iface = 1, twondim
-       w = rt_dep_src(iface,islot)
-       if (w > 0) then
-          pos = n + 1
-          do b = n, 1, -1
-             if (writer(b) > w) then
-                writer(b+1) = writer(b)
-                face(b+1) = face(b)
-                pos = b
-             end if
-          end do
-          writer(pos) = w
-          face(pos) = iface
-          n = n + 1
-       end if
-    end do
+    ! Staged faces in ascending writer order
+    call sort_face_writers_d(rt_dep_src, islot, face, writer, n)
     if (n == 0) return
 
     ! Get parent oct and parent cell idx
