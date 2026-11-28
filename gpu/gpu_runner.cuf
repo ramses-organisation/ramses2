@@ -2350,13 +2350,14 @@ contains
   subroutine gpu_cr_godunov(sim, ilevel)
     use nvtx
     use amr_parameters, only: twondim
-    use cr_device, only: cr_refresh_cache_kernel, cr_transport_kernel, cr_deposit_kernel
+    use cr_device, only: cr_refresh_cache_kernel, cr_transport_kernel, cr_deposit_kernel, cr_smem_t
     use ramses_commons, only: ramses_t
     type(ramses_t), intent(inout) :: sim
     integer, intent(in) :: ilevel
 
     integer(kind=4) :: head_idx, num_octs, head_cache, num_cache
-    integer :: num_threads, num_blocks, istat
+    integer :: num_threads, num_blocks, istat, shmem_bytes
+    type(cr_smem_t) :: smem_probe
     integer(kind=4), device :: cr_fail_d
     integer(kind=4) :: cr_fail
     real(kind=dp) :: cr_c, dt, dx
@@ -2395,7 +2396,14 @@ contains
        call GPU_Error_Check(__FILE__, __LINE__)
     end if
     cr_fail_d = 0
-    call cr_transport_kernel<<<num_octs, 64>>>(grid, nbor, uold, bold, cruold, unew, crunew, &
+    shmem_bytes = storage_size(smem_probe) / 8
+    istat = cudaFuncSetAttribute(cr_transport_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, shmem_bytes)
+    if (istat /= cudaSuccess) then
+       write(*,*)'gpu_cr_godunov: cudaFuncSetAttribute(MaxDynamicSharedMemorySize=',shmem_bytes, &
+            & ') failed: ',cudaGetErrorString(istat)
+       error stop
+    endif
+    call cr_transport_kernel<<<num_octs, 64, shmem_bytes>>>(grid, nbor, uold, bold, cruold, unew, crunew, &
          & cr_dep_val, cr_dep_src, gamma_rad, d_cr_d_code, d_cr_d_perp_factors, &
          & head_idx, num_octs, sim%m%ngridmax, int(sim%r%iecr,4), cr_c, dt, dx, &
          & sim%r%cr_isotropic_pressure, reset_at_refined, do_deposit, cr_fail_d)

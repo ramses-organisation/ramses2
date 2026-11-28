@@ -19,6 +19,16 @@ module cr_device
   !> CR variables of the faces: energy and flux of each group
   integer, parameter :: ncrface = ncrgrp*(ndim+1)
 
+  !> Dynamic shared memory of cr_transport_kernel: stencil states, flux tensors and wave speeds of one group,
+  !> the fluxes of all groups, and the refined flags of the stencil cells
+  type, public :: cr_smem_t
+     real(kind=dp) :: uin(-1:4,-1:4,-1:4,1:ndim+1)
+     real(kind=dp) :: cflx(-1:4,-1:4,-1:4,1:ndim+1,1:ndim)
+     real(kind=dp) :: lmax(-1:4,-1:4,-1:4,1:ndim)
+     real(kind=dp) :: flux(1:3,1:3,1:3,1:ncrface,1:ndim)
+     logical :: okloc(-1:4,-1:4,-1:4)
+  end type cr_smem_t
+
 contains
 
   include 'gpu_hash.cuf'
@@ -352,12 +362,7 @@ contains
     logical, intent(in), value :: isotropic, reset_at_refined, do_deposit
     integer(kind=4), device :: cr_fail
 
-    ! Stencil states, flux tensors and wave speeds of one group, and the fluxes of all groups
-    real(kind=dp), shared :: uin(-1:4,-1:4,-1:4,1:ndim+1)
-    real(kind=dp), shared :: cflx(-1:4,-1:4,-1:4,1:ndim+1,1:ndim)
-    real(kind=dp), shared :: lmax(-1:4,-1:4,-1:4,1:ndim)
-    real(kind=dp), shared :: flux(1:3,1:3,1:3,1:ncrface,1:ndim)
-    logical, shared :: okloc(-1:4,-1:4,-1:4)
+    type(cr_smem_t), shared :: smem(*)
 
     real(kind=dp), parameter :: oneontwotondim = 1.0_dp / real(twotondim, kind=dp)
     real(kind=dp) :: u(1:ndim+1), F(1:ndim+1,1:ndim), bcell(1:3), bhat(1:3), Dcr_ax(1:3)
@@ -369,6 +374,9 @@ contains
     integer :: ghost, fghost, gdim, gside, gn
     integer, dimension(1:4), parameter :: outside = (/ -1, 0, 3, 4 /)
     logical :: in_stencil
+
+    associate(uin => smem(1)%uin, cflx => smem(1)%cflx, lmax => smem(1)%lmax, flux => smem(1)%flux, &
+         & okloc => smem(1)%okloc)
 
     ! One block per oct
     if (blockIdx%x > num_octs) return
@@ -564,6 +572,8 @@ contains
           end do
        end if
     end if
+
+    end associate
 
   end subroutine cr_transport_kernel
   ! =========================================================================
