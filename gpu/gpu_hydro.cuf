@@ -4096,7 +4096,7 @@ contains
 
   end subroutine cmpcurrent_mhd
 
-  ! Map cache oct to parent coarse cell for coarse/fine corrections.
+  ! Map interpolated oct to parent coarse cell for coarse/fine corrections.
   attributes(device) subroutine get_cf_cell(nbor, grid, father, ngridmax, &
        & i, j, k, is_coarse, coct, ccell)
     integer(kind=4) :: nbor(1:subgridsize)
@@ -4109,7 +4109,7 @@ contains
 
     stencil_idx = 1 + i + nsubgridp2*j + nsubgridp2sq*k
     nbidx = nbor(stencil_idx)
-    is_coarse = (nbidx > ngridmax)
+    is_coarse = is_interpolated(nbidx, ngridmax)
     coct = 0; ccell = 1
     if (is_coarse) then
        fidx = father(nbidx)
@@ -5604,7 +5604,7 @@ contains
        end select
        ind_nbor = 1 + i_subgrid_idx + nsubgridp2*j_subgrid_idx + nsubgridp2sq*k_subgrid_idx
        source_idx = nbor(ind_nbor, head_idx + block_idx)
-       if (source_idx > ngridmax) then
+       if (is_interpolated(source_idx, ngridmax)) then
           father_idx = father(source_idx)
           cell_idx = parent_cell_idx(grid(source_idx)%ckey, grid(father_idx)%ckey)
           info = atomicadd(unew(cell_idx,5,father_idx), energy_flux)
@@ -6454,7 +6454,7 @@ contains
        endif
        ! If the neighbour cell does not exist, replace it by its father cell
        call get_parent_cell_d(hash_nbor, hash_key, hash_val, hash_size, ckey_max, key_off, igridp, icellp)
-       if (igridp > 0 .and. igridp <= ngridmax) then
+       if (igridp > 0 .and. .not. is_interpolated(igridp, ngridmax)) then
           igridn(i_nbor) = igridp
           icelln(i_nbor) = icellp
           dxn(i_nbor) = dx
@@ -7325,7 +7325,7 @@ contains
     neighbor_oct_idx = nbor(nbor_idx, subgrid_idx)
 
     if (neighbor_oct_idx <= 0) return
-    if (skip_refined_fluxes .and. neighbor_oct_idx <= ngridmax) then
+    if (skip_refined_fluxes .and. .not. is_interpolated(neighbor_oct_idx, ngridmax)) then
        if (grid(neighbor_oct_idx)%refined(neighbor_cell_idx)) return
     endif
 
@@ -7335,7 +7335,7 @@ contains
     end do
 
     if (.not. coarse_update) return
-    if (neighbor_oct_idx <= ngridmax) return
+    if (.not. is_interpolated(neighbor_oct_idx, ngridmax)) return
 
     father_oct_idx = father(neighbor_oct_idx)
     cell_idx = parent_cell_idx(grid(neighbor_oct_idx)%ckey, grid(father_oct_idx)%ckey)
