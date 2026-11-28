@@ -1313,6 +1313,9 @@ contains
     integer(kind=4) :: head_idx, num_octs
     integer :: num_threads, num_blocks
 
+    ! On several ranks the levelmin cache holds copies only
+    if (sim%g%ncpu > 1 .and. ilevel == sim%r%levelmin) return
+
     call cache_oct_range(sim, ilevel, head_idx, num_octs, num_threads, num_blocks)
     if (num_octs <= 0) return
 

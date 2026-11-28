@@ -199,6 +199,7 @@ feedback.o: gpu_runner.o
 flag_utils.o: gpu_runner.o
 force_fine.o: gpu_runner.o
 godunov_fine.o: gpu_runner.o
+gpu_cell.o: gpu_utils.o
 gpu_clump.o: amr_parameters.o constants.o gpu_part.o gpu_runner.o gpu_utils.o hydro_parameters.o oct_commons.o pm_commons.o ramses_commons.o
 gpu_cooling.o: amr_parameters.o cooling_module.o hydro_parameters.o oct_commons.o
 gpu_core.o: amr_parameters.o constants.o cub_module_radix_sort_f.o gpu_feedback.o gpu_runner.o gpu_sink.o gpu_utils.o hydro_parameters.o ramses_commons.o

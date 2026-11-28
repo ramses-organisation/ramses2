@@ -201,6 +201,7 @@ contains
     if (.not. allocated(npeer)) then
        allocate(requests(2*ncpu), npeer(levelmin:sim%r%nlevelmax), peers(1:ncpu,levelmin:sim%r%nlevelmax))
        allocate(soff(0:ncpu,levelmin:sim%r%nlevelmax), roff(0:ncpu,levelmin:sim%r%nlevelmax))
+       npeer = 0
        soff = 0
        roff = 0
     endif
