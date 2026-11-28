@@ -4,6 +4,9 @@ module refine_device
 #ifdef DO_RT
   use rt_parameters, only: nrtvar
 #endif
+#ifdef DO_CR
+  use cr_parameters, only: ncruvar
+#endif
   use oct_commons, only: oct
   use gpu_utils
   use cudafor
@@ -493,6 +496,9 @@ end subroutine nimhd_ghost_b_kernel
 #ifdef DO_RT
        & rtuold, rt_c, &
 #endif
+#ifdef DO_CR
+       & cruold, &
+#endif
        & interpol_var, interpol_type, smallr)
     use amr_parameters, only: ndim
     type(oct), device :: grid(*)
@@ -516,6 +522,9 @@ end subroutine nimhd_ghost_b_kernel
 #ifdef DO_RT
     real(kind=dp), device :: rtuold(1:twotondim,1:nrtvar,*)
     real(kind=dp), device :: rt_c(*)
+#endif
+#ifdef DO_CR
+    real(kind=dp), device :: cruold(1:twotondim,1:ncruvar,*)
 #endif
     integer(kind=4), value :: interpol_var, interpol_type
     real(kind=dp), value :: smallr
@@ -610,6 +619,10 @@ end subroutine nimhd_ghost_b_kernel
     ! RT prolongation from the parent cells of the hydro stencil
     call interpol_rt_d(rtuold, igrid_nbor, ind_nbor, interpol_type, rt_c, ilevel, child_idx)
 #endif
+#ifdef DO_CR
+    ! CR prolongation from the parent cells of the hydro stencil
+    call interpol_cr_d(cruold, ncruvar, igrid_nbor, ind_nbor, interpol_type, child_idx)
+#endif
 #endif
 
 #ifdef GRAV
@@ -631,6 +644,9 @@ end subroutine nimhd_ghost_b_kernel
        & hash_key, hash_val, hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
 #ifdef DO_RT
        & rtuold, rt_c, &
+#endif
+#ifdef DO_CR
+       & cruold, &
 #endif
        & interpol_var, interpol_type, smallr)
     type(oct), device :: grid(*)
@@ -656,6 +672,9 @@ end subroutine nimhd_ghost_b_kernel
 #ifdef DO_RT
     real(kind=dp), device :: rtuold(1:twotondim,1:nrtvar,*)
     real(kind=dp), device :: rt_c(*)
+#endif
+#ifdef DO_CR
+    real(kind=dp), device :: cruold(1:twotondim,1:ncruvar,*)
 #endif
     integer(kind=4), intent(in), value :: interpol_var, interpol_type
     real(kind=dp), intent(in), value :: smallr
@@ -683,6 +702,9 @@ end subroutine nimhd_ghost_b_kernel
             & hash_key, hash_val, hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
 #ifdef DO_RT
             & rtuold, rt_c, &
+#endif
+#ifdef DO_CR
+            & cruold, &
 #endif
             & interpol_var, interpol_type, smallr)
        grid(oct_idx)%refined(cell_idx) = .true.
@@ -1641,12 +1663,13 @@ end subroutine nimhd_ghost_b_kernel
   end subroutine sort_scatter_hydro_impl
   ! =========================================================================
 
-#ifdef DO_RT
+#if defined(DO_RT) || defined(DO_CR)
   ! =========================================================================
-  ! Gather RT variables ivar0+1..ivar0+nv into the scratch unew in sorted order.
-  attributes(global) subroutine sort_gather_rt(unew, rtuold, ivar0, nv, swap_global, head_idx, num_octs)
+  ! Gather variables ivar0+1..ivar0+nv of an array of nvt variables per cell into the scratch unew in sorted order.
+  attributes(global) subroutine sort_gather_vars(unew, var, nvt, ivar0, nv, swap_global, head_idx, num_octs)
     real(kind=dp), device :: unew(1:twotondim,1:nvar,*)
-    real(kind=dp), device :: rtuold(1:twotondim,1:nrtvar,*)
+    integer(kind=4), intent(in), value :: nvt
+    real(kind=dp), device :: var(1:twotondim,1:nvt,*)
     integer(kind=4), intent(in), value :: ivar0, nv
     integer(kind=4), device :: swap_global(*)
     integer(kind=4), intent(in), value :: head_idx
@@ -1667,16 +1690,17 @@ end subroutine nimhd_ghost_b_kernel
 
     old_oct_idx = swap_global(oct_idx)
     do ivar = 1, nv
-       unew(cell_idx, ivar, oct_idx) = rtuold(cell_idx, ivar0+ivar, old_oct_idx)
+       unew(cell_idx, ivar, oct_idx) = var(cell_idx, ivar0+ivar, old_oct_idx)
     end do
 
-  end subroutine sort_gather_rt
+  end subroutine sort_gather_vars
   ! =========================================================================
 
   ! =========================================================================
-  ! Copy the sorted RT variables ivar0+1..ivar0+nv back from unew.
-  attributes(global) subroutine sort_scatter_rt(rtuold, unew, ivar0, nv, head_idx, num_octs)
-    real(kind=dp), device :: rtuold(1:twotondim,1:nrtvar,*)
+  ! Copy the sorted variables ivar0+1..ivar0+nv back from unew.
+  attributes(global) subroutine sort_scatter_vars(var, nvt, unew, ivar0, nv, head_idx, num_octs)
+    integer(kind=4), intent(in), value :: nvt
+    real(kind=dp), device :: var(1:twotondim,1:nvt,*)
     real(kind=dp), device :: unew(1:twotondim,1:nvar,*)
     integer(kind=4), intent(in), value :: ivar0, nv
     integer(kind=4), intent(in), value :: head_idx
@@ -1696,10 +1720,10 @@ end subroutine nimhd_ghost_b_kernel
     cell_idx = threadIdx%x
 
     do ivar = 1, nv
-       rtuold(cell_idx, ivar0+ivar, oct_idx) = unew(cell_idx, ivar, oct_idx)
+       var(cell_idx, ivar0+ivar, oct_idx) = unew(cell_idx, ivar, oct_idx)
     end do
 
-  end subroutine sort_scatter_rt
+  end subroutine sort_scatter_vars
   ! =========================================================================
 #endif
 

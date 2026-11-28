@@ -4,6 +4,9 @@ module gpu_runner
   use amr_parameters, only: MAXLEVEL
   use rt_parameters, only: nrtgrp
 #endif
+#ifdef DO_CR
+  use cr_parameters, only: ncrgrp, ncruvar
+#endif
   use hydro_parameters, only: nvar, nener
   use oct_commons, only: oct
   use gpu_utils
@@ -18,6 +21,10 @@ module gpu_runner
   real(kind=8), device, dimension(1:3) :: box_size
   real(kind=dp), device, dimension(1:3) :: constant_gravity
   real(kind=dp), device, dimension(1:nener+1) :: gamma_rad
+#if NENER>0
+  !> Refinement thresholds and floors of the non-thermal energy gradients
+  real(kind=dp), device, dimension(1:nener) :: d_err_grad_prad, d_floor_prad
+#endif
   integer(kind=4), device, allocatable, dimension(:) :: ckey_max
   integer(kind=8), device, allocatable, dimension(:) :: key_off
   integer(kind=4), device, allocatable, dimension(:,:) :: box_ckey_min, box_ckey_max
@@ -57,6 +64,16 @@ module gpu_runner
   integer(kind=4), device, allocatable, target, dimension(:) :: rt_star_idx, rt_star_idx_sorted
   real(kind=8), device, allocatable, dimension(:,:) :: rt_star_lum
   real(kind=8), device, allocatable, dimension(:) :: rt_star_nph, rt_star_dtl
+#endif
+
+#ifdef DO_CR
+  !> Arrays to hold the CR fluxes on the device
+  real(kind=dp), device, allocatable, dimension(:,:,:) :: cruold, crunew
+  !> Coarse CR fluxes staged in the ghost octs by face and fine face, and the octs that wrote them
+  real(kind=dp), device, allocatable, dimension(:,:,:,:) :: cr_dep_val
+  integer(kind=4), device, allocatable, dimension(:,:) :: cr_dep_src
+  !> CR diffusion coefficient of each group, and its perpendicular factor
+  real(kind=dp), device, dimension(1:ncrgrp) :: d_cr_d_code, d_cr_d_perp_factors
 #endif
 
 #if defined(MHD) && !defined(PAPER)
@@ -2232,6 +2249,247 @@ contains
   end subroutine gpu_rt_upload_sed
 #endif
 
+#ifdef DO_CR
+  !> @brief
+  !> Set the CR variables of unew and crunew to those of uold and cruold on a GPU, as set_crunew
+  !>
+  !> @param[in] sim : The simulation object
+  !> @param[in] ilevel : The refinement level to update
+  !>
+  subroutine gpu_cr_set_crunew(sim, ilevel)
+    use nvtx
+    use cr_device, only: cr_set_crunew_kernel
+    use ramses_commons, only: ramses_t
+    type(ramses_t), intent(inout) :: sim
+    integer, intent(in) :: ilevel
+
+    integer(kind=4) :: head_idx, num_octs
+    integer :: info, num_blocks
+
+    head_idx = sim%m%head(ilevel)
+    num_octs = sim%m%noct(ilevel)
+    if (num_octs <= 0) return
+    num_blocks = (num_octs + 15) / 16
+    call nvtxStartRange("GPU CR set_crunew", color=0)!green
+    info = cudaMemcpy(crunew(1,1,head_idx), cruold(1,1,head_idx), twotondim*ncruvar*int(num_octs,8))
+    call GPU_Error_Check(__FILE__, __LINE__)
+    call cr_set_crunew_kernel<<<num_blocks, dim3(twotondim,16,1)>>>(uold, unew, head_idx, num_octs, &
+         & int(sim%r%iecr,4))
+    call GPU_Error_Check(__FILE__, __LINE__)
+    call nvtxEndRange()
+
+  end subroutine gpu_cr_set_crunew
+
+  !> @brief
+  !> Set cruold and the CR variables of uold to crunew and unew on a GPU, as set_cruold
+  !>
+  !> @param[in] sim : The simulation object
+  !> @param[in] ilevel : The refinement level to update
+  !>
+  subroutine gpu_cr_set_cruold(sim, ilevel)
+    use nvtx
+    use cr_device, only: cr_set_cruold_kernel
+    use ramses_commons, only: ramses_t
+    type(ramses_t), intent(inout) :: sim
+    integer, intent(in) :: ilevel
+
+    integer(kind=4) :: head_idx, num_octs
+    integer :: num_blocks
+
+    head_idx = sim%m%head(ilevel)
+    num_octs = sim%m%noct(ilevel)
+    if (num_octs <= 0) return
+    num_blocks = (num_octs + 15) / 16
+    call nvtxStartRange("GPU CR set_cruold", color=0)!green
+    call cr_set_cruold_kernel<<<num_blocks, dim3(twotondim,16,1)>>>(uold, unew, cruold, crunew, &
+         & head_idx, num_octs, int(sim%r%iecr,4), real(sim%g%cr_c(ilevel),kind=dp), &
+         & sim%r%cr_isotropic_pressure, sim%r%cr_reduced_flux_correction)
+    call GPU_Error_Check(__FILE__, __LINE__)
+    call nvtxEndRange()
+
+  end subroutine gpu_cr_set_cruold
+
+  !> @brief
+  !> CR conservation fix of uold and cruold on a GPU, as conserve_cr_flux
+  !>
+  !> @param[in] sim : The simulation object
+  !> @param[in] ilevel : The refinement level to update
+  !>
+  subroutine gpu_cr_conserve_flux(sim, ilevel)
+    use nvtx
+    use cr_device, only: cr_conserve_flux_kernel
+    use ramses_commons, only: ramses_t
+    type(ramses_t), intent(inout) :: sim
+    integer, intent(in) :: ilevel
+
+    integer(kind=4) :: head_idx, num_octs
+    integer :: num_blocks
+
+    head_idx = sim%m%head(ilevel)
+    num_octs = sim%m%noct(ilevel)
+    if (num_octs <= 0) return
+    num_blocks = (num_octs + 15) / 16
+    call nvtxStartRange("GPU CR conserve flux", color=0)!green
+    call cr_conserve_flux_kernel<<<num_blocks, dim3(twotondim,16,1)>>>(uold, cruold, head_idx, num_octs, &
+         & int(sim%r%iecr,4), real(sim%g%cr_c(ilevel),kind=dp), sim%r%cr_isotropic_pressure)
+    call GPU_Error_Check(__FILE__, __LINE__)
+    call nvtxEndRange()
+
+  end subroutine gpu_cr_conserve_flux
+
+  !> @brief
+  !> CR transport of one level on a GPU, as cr_godunov_fine
+  !>
+  !> @detail
+  !> The hydro and CR variables of the ghost octs are refreshed first. Without subcycles, the fluxes at
+  !> refined faces are reset and the coarse-fine fluxes deposited into the coarser level.
+  !>
+  !> @param[in] sim : The simulation object
+  !> @param[in] ilevel : The refinement level to update
+  !>
+  subroutine gpu_cr_godunov(sim, ilevel)
+    use nvtx
+    use amr_parameters, only: twondim
+    use cr_device, only: cr_refresh_cache_kernel, cr_transport_kernel, cr_deposit_kernel, cr_smem_t
+    use ramses_commons, only: ramses_t
+    type(ramses_t), intent(inout) :: sim
+    integer, intent(in) :: ilevel
+
+    integer(kind=4) :: head_idx, num_octs, head_cache, num_cache
+    integer :: num_threads, num_blocks, istat, shmem_bytes
+    type(cr_smem_t) :: smem_probe
+    integer(kind=4), device :: cr_fail_d
+    integer(kind=4) :: cr_fail
+    real(kind=dp) :: cr_c, dt, dx
+    logical :: reset_at_refined, do_deposit
+
+    head_idx = sim%m%head(ilevel)
+    num_octs = sim%m%noct(ilevel)
+    if (num_octs <= 0) return
+
+    cr_c = sim%g%cr_c(ilevel)
+    dt = sim%g%dtnew(ilevel)
+    dx = sim%r%boxlen/2**ilevel
+    ! Diffusion coefficients of the current step
+    d_cr_d_code = real(sim%r%cr_d_code, kind=dp)
+
+    ! Without subcycles, fluxes at refined faces are reset and coarse-fine fluxes deposited
+    reset_at_refined = (sim%r%cr_nsubcycle == 1)
+    do_deposit = reset_at_refined .and. ilevel > sim%r%levelmin
+
+    ! Ghost octs of the level, from the current variables of the coarser level
+    call gpu_refresh_cache(sim, ilevel)
+    call cache_oct_range(sim, ilevel, head_cache, num_cache, num_threads, num_blocks)
+    if (num_cache > 0) then
+       call nvtxStartRange("GPU CR refresh cache", color=2)!yellow
+       call cr_refresh_cache_kernel<<<num_blocks, num_threads>>>(grid, uold, bold, cruold, father, &
+            & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
+            & head_cache, num_cache, sim%r%interpol_type)
+       call GPU_Error_Check(__FILE__, __LINE__)
+       call nvtxEndRange()
+    end if
+
+    call nvtxStartRange("GPU CR transport", color=0)!green
+    ! No coarse flux staged yet in the ghost octs of the level
+    if (do_deposit .and. num_cache > 0) then
+       istat = cudaMemset(cr_dep_src(1,head_cache-sim%m%ngridmax), 0, twondim*int(num_cache,8))
+       call GPU_Error_Check(__FILE__, __LINE__)
+    end if
+    cr_fail_d = 0
+    shmem_bytes = storage_size(smem_probe) / 8
+    istat = cudaFuncSetAttribute(cr_transport_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, shmem_bytes)
+    if (istat /= cudaSuccess) then
+       write(*,*)'gpu_cr_godunov: cudaFuncSetAttribute(MaxDynamicSharedMemorySize=',shmem_bytes, &
+            & ') failed: ',cudaGetErrorString(istat)
+       error stop
+    endif
+    call cr_transport_kernel<<<num_octs, 64, shmem_bytes>>>(grid, nbor, uold, bold, cruold, unew, crunew, &
+         & cr_dep_val, cr_dep_src, gamma_rad, d_cr_d_code, d_cr_d_perp_factors, &
+         & head_idx, num_octs, sim%m%ngridmax, int(sim%r%iecr,4), cr_c, dt, dx, &
+         & sim%r%cr_isotropic_pressure, reset_at_refined, do_deposit, cr_fail_d)
+    call GPU_Error_Check(__FILE__, __LINE__)
+    call nvtxEndRange()
+
+    if (do_deposit .and. num_cache > 0) then
+       call nvtxStartRange("GPU CR coarse deposit", color=0)!green
+       call cr_deposit_kernel<<<num_blocks, num_threads>>>(grid, father, unew, crunew, cr_dep_val, cr_dep_src, &
+            & head_cache, num_cache, sim%m%ngridmax, int(sim%r%iecr,4), cr_fail_d)
+       call GPU_Error_Check(__FILE__, __LINE__)
+       call nvtxEndRange()
+    end if
+
+    ! A negative CR energy or a missing parent cell is flagged on the device, report it here
+    cr_fail = cr_fail_d
+    if (cr_fail == 1) then
+       write(*,*)'Error: negative CR energy in the GPU CR transport'
+       error stop
+    endif
+    if (cr_fail == 2) then
+       write(*,*)'Error: missing parent cell in the GPU CR transport'
+       error stop
+    endif
+
+  end subroutine gpu_cr_godunov
+
+  !> @brief
+  !> CR source terms of one level on a GPU, as cr_source_terms
+  !>
+  !> @param[in] sim : The simulation object
+  !> @param[in] ilevel : The refinement level to update
+  !>
+  subroutine gpu_cr_source_terms(sim, ilevel)
+    use nvtx
+    use cr_device, only: cr_source_kernel
+    use ramses_commons, only: ramses_t
+    type(ramses_t), intent(inout) :: sim
+    integer, intent(in) :: ilevel
+
+    integer(kind=4) :: head_idx, num_octs
+    integer :: num_blocks
+
+    head_idx = sim%m%head(ilevel)
+    num_octs = sim%m%noct(ilevel)
+    if (num_octs <= 0) return
+    num_blocks = (num_octs + 15) / 16
+    d_cr_d_code = real(sim%r%cr_d_code, kind=dp)
+    call nvtxStartRange("GPU CR source terms", color=0)!green
+    call cr_source_kernel<<<num_blocks, dim3(twotondim,16,1)>>>(grid, bold, unew, crunew, gamma_rad, &
+         & d_cr_d_code, d_cr_d_perp_factors, head_idx, num_octs, int(sim%r%iecr,4), &
+         & real(sim%g%cr_c(ilevel),kind=dp), real(sim%g%dtnew(ilevel),kind=dp), sim%r%cr_isotropic_pressure)
+    call GPU_Error_Check(__FILE__, __LINE__)
+    call nvtxEndRange()
+
+  end subroutine gpu_cr_source_terms
+
+  !> @brief
+  !> Restriction of the CR fluxes of level ilevel+1 into level ilevel on a GPU, as cr_upload_fine
+  !>
+  !> @param[in] sim : The simulation object
+  !> @param[in] ilevel : The refinement level to update
+  !>
+  subroutine gpu_cr_upload_fine(sim, ilevel)
+    use nvtx
+    use cr_device, only: cr_upload_kernel
+    use ramses_commons, only: ramses_t
+    type(ramses_t), intent(inout) :: sim
+    integer, intent(in) :: ilevel
+
+    integer(kind=4) :: head_idx, num_octs
+    integer(kind=4) :: num_threads, num_blocks
+
+    head_idx = sim%m%head(ilevel+1)
+    num_octs = sim%m%noct(ilevel+1)
+    if (num_octs <= 0) return
+    num_threads = 256
+    num_blocks = (num_octs + num_threads - 1) / num_threads
+    call nvtxStartRange("GPU CR upload", color=0)!green
+    call cr_upload_kernel<<<num_blocks, num_threads>>>(grid, father, cruold, head_idx, num_octs)
+    call GPU_Error_Check(__FILE__, __LINE__)
+    call nvtxEndRange()
+
+  end subroutine gpu_cr_upload_fine
+#endif
+
   !> @brief
   !> Cooling and polytrope routine
   !>
@@ -2666,7 +2924,7 @@ contains
     integer(kind=8), pointer, device, dimension(:) :: hkeys_in, hkeys_out
     integer(kind=8) :: noct_max, hkey_size
     integer(kind=4) :: nrnd, nthr, nblk
-#ifdef DO_RT
+#if defined(DO_RT) || defined(DO_CR)
     integer(kind=4) :: iv, nv
 #endif
 
@@ -2729,6 +2987,9 @@ contains
                & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
 #ifdef DO_RT
                & rtuold, d_rt_c, &
+#endif
+#ifdef DO_CR
+               & cruold, &
 #endif
                & interpol_var, interpol_type, smallr_d)
           call GPU_Error_Check(__FILE__, __LINE__)
@@ -2970,11 +3231,23 @@ contains
        ! Sort rtuold through unew, nvar variables at a time
        do iv = 0, nrtvar-1, nvar
           nv = min(nvar, nrtvar-iv)
-          call sort_gather_rt<<<num_blocks_2, dim3(threadsX_per_block,threadsY_per_block,1)>>>(unew, rtuold, &
-               & iv, nv, swap_global, head_idx, num_octs)
+          call sort_gather_vars<<<num_blocks_2, dim3(threadsX_per_block,threadsY_per_block,1)>>>(unew, rtuold, &
+               & nrtvar, iv, nv, swap_global, head_idx, num_octs)
           call GPU_Error_Check(__FILE__, __LINE__)
-          call sort_scatter_rt<<<num_blocks_2, dim3(threadsX_per_block,threadsY_per_block,1)>>>(rtuold, unew, &
-               & iv, nv, head_idx, num_octs)
+          call sort_scatter_vars<<<num_blocks_2, dim3(threadsX_per_block,threadsY_per_block,1)>>>(rtuold, nrtvar, &
+               & unew, iv, nv, head_idx, num_octs)
+          call GPU_Error_Check(__FILE__, __LINE__)
+       end do
+#endif
+#ifdef DO_CR
+       ! Sort cruold through unew, nvar variables at a time
+       do iv = 0, ncruvar-1, nvar
+          nv = min(nvar, ncruvar-iv)
+          call sort_gather_vars<<<num_blocks_2, dim3(threadsX_per_block,threadsY_per_block,1)>>>(unew, cruold, &
+               & ncruvar, iv, nv, swap_global, head_idx, num_octs)
+          call GPU_Error_Check(__FILE__, __LINE__)
+          call sort_scatter_vars<<<num_blocks_2, dim3(threadsX_per_block,threadsY_per_block,1)>>>(cruold, ncruvar, &
+               & unew, iv, nv, head_idx, num_octs)
           call GPU_Error_Check(__FILE__, __LINE__)
        end do
 #endif
@@ -3278,6 +3551,9 @@ contains
     real(kind=dp) :: err_grad_u, floor_u, err_grad_xHII, floor_xHII, err_grad_xHI, floor_xHI
     integer(kind=4) :: iIons
     logical :: do_u, do_xion
+#if NENER>0
+    logical :: do_prad
+#endif
 #ifdef MHD
     real(kind=dp) :: err_grad_b2, floor_b2, err_grad_A, floor_A
     real(kind=dp) :: err_grad_B, floor_B, err_grad_C, floor_C
@@ -3315,9 +3591,12 @@ contains
     endif
     floor_xHII = sim%r%floor_xHII
     floor_xHI = sim%r%floor_xHI
-    ! The velocity and ion fraction tests run only with thresholds >= 0
+    ! The velocity, ion fraction and non-thermal energy tests run only with thresholds >= 0
     do_u = err_grad_u >= 0.0_dp
     do_xion = err_grad_xHII >= 0.0_dp .or. err_grad_xHI >= 0.0_dp
+#if NENER>0
+    do_prad = any(sim%r%err_grad_prad(1:nener) >= 0.0d0)
+#endif
 #ifdef MHD
     err_grad_b2 = sim%r%err_grad_b2
     floor_b2 = sim%r%floor_b2
@@ -3369,7 +3648,11 @@ contains
                & err_grad_b2, floor_b2, err_grad_A, floor_A, err_grad_B, floor_B, err_grad_C, floor_C, &
 #endif
                & gamma, smallr, smallc2, err_grad_d, err_grad_p, floor_d, floor_p, &
-               & sim%r%induction, do_u, err_grad_u, floor_u, do_xion, iIons, err_grad_xHII, floor_xHII, err_grad_xHI, floor_xHI)
+               & sim%r%induction, do_u, err_grad_u, floor_u, do_xion, iIons, err_grad_xHII, floor_xHII, err_grad_xHI, floor_xHI &
+#if NENER>0
+               & , do_prad, d_err_grad_prad, d_floor_prad &
+#endif
+               & )
           call GPU_Error_Check(__FILE__, __LINE__)
           call nvtxEndRange()
        endif

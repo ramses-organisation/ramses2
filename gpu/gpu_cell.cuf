@@ -33,3 +33,59 @@ attributes(device) function subgrid_pos(ckey) result(pos)
 
 end function subgrid_pos
 ! =========================================================================
+
+! =========================================================================
+!> Cell (i,j,k) of face iface of the oct's cells and its direction idim:
+!> the face is the lower one of the cell, i,j,k in 1:3 along idim and in 1:2 across
+attributes(device) subroutine face_cell_d(iface, idim, i, j, k)
+  implicit none
+  integer, value :: iface
+  integer :: idim, i, j, k
+  integer :: m, n, a, b
+
+  idim = (iface-1)/12 + 1
+  m = mod(iface-1, 12)
+  n = 1 + mod(m, 3)
+  a = 1 + mod(m/3, 2)
+  b = 1 + m/6
+  if (idim == 1) then
+     i = n; j = a; k = b
+  else if (idim == 2) then
+     i = a; j = n; k = b
+  else
+     i = a; j = b; k = n
+  end if
+
+end subroutine face_cell_d
+! =========================================================================
+
+! =========================================================================
+!> Faces of ghost oct islot that received a staged coarse flux, in ascending order of the octs that wrote
+!> them: src holds the writer of each face (0 for none), n is the number of staged faces
+attributes(device) subroutine sort_face_writers_d(src, islot, face, writer, n)
+  implicit none
+  integer(kind=4), device :: src(1:2*ndim,*)
+  integer, value :: islot
+  integer :: face(1:2*ndim), writer(1:2*ndim), n
+  integer :: iface, w, pos, b
+
+  n = 0
+  do iface = 1, 2*ndim
+     w = src(iface,islot)
+     if (w > 0) then
+        pos = n + 1
+        do b = n, 1, -1
+           if (writer(b) > w) then
+              writer(b+1) = writer(b)
+              face(b+1) = face(b)
+              pos = b
+           end if
+        end do
+        writer(pos) = w
+        face(pos) = iface
+        n = n + 1
+     end if
+  end do
+
+end subroutine sort_face_writers_d
+! =========================================================================
