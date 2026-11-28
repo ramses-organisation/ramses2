@@ -717,7 +717,7 @@ contains
   ! =========================================================================
 
   ! =========================================================================
-  !> Photon density stencil cell of a neighbor: a cache oct gives its parent cell,
+  !> Photon density stencil cell of a neighbor: an interpolated oct gives its parent cell,
   !> read at the light speed of the coarser level, as rt_flag does
   attributes(device) subroutine rt_stencil_cell(grid, father, ngridmax, source_idx, icell, &
        & rt_c_lev, rt_c_coarse, rt_oct, rt_cell, rt_c_nbor)
@@ -730,7 +730,7 @@ contains
     integer :: rt_oct, rt_cell
     real(kind=dp) :: rt_c_nbor
 
-    if (source_idx > ngridmax) then
+    if (is_interpolated(source_idx, ngridmax)) then
        rt_oct = father(source_idx)
        rt_cell = parent_cell_idx(grid(source_idx)%ckey, grid(rt_oct)%ckey)
        rt_c_nbor = rt_c_coarse
