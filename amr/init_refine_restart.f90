@@ -244,7 +244,7 @@ subroutine init_refine_restart(s,ilevel,ncpu_file,levelmin_file,nlevelmax_file,n
   use ramses_commons, only: ramses_t
   use hash
   use hilbert
-  use init_refine_basegrid_module, only: check_subgrid
+  use init_refine_basegrid_module, only: check_subgrid, noct_below
   implicit none
   type(ramses_t)::s
   integer::ilevel,ncpu_file
@@ -326,6 +326,21 @@ subroutine init_refine_restart(s,ilevel,ncpu_file,levelmin_file,nlevelmax_file,n
      noct_cum(icpu)=noct_cum(icpu-1)+noct_file(icpu)
   end do
 
+  ! Restart filename
+  call title(r%nrestart,nchar)
+
+#ifdef _CUDA
+  !------------------------------------------
+  ! On GPU, read the octs within the domain
+  ! bounds of this level set by init_amr
+  !------------------------------------------
+  nleft=0
+  nright=noct_cum(ncpu_file)
+  if(g%myid>1)nleft=noct_below('backup_'//TRIM(nchar),ilevel,ncpu_file, &
+       & levelmin_file,nlevelmax_file,noct_file,nskip_file,m%domain(ilevel)%b(1:nhilbert,g%myid-1))
+  if(g%myid<g%ncpu)nright=noct_below('backup_'//TRIM(nchar),ilevel,ncpu_file, &
+       & levelmin_file,nlevelmax_file,noct_file,nskip_file,m%domain(ilevel)%b(1:nhilbert,g%myid))
+#else
   !------------------------------------------
   ! New cumulative numbers of octs per cpu,
   ! in whole blocks of nsubgrid**ndim octs
@@ -341,6 +356,7 @@ subroutine init_refine_restart(s,ilevel,ncpu_file,levelmin_file,nlevelmax_file,n
      nleft=0
   endif
   nright=ntarget_cum(g%myid)
+#endif
 
   !-----------------------------------------------------
   ! Compute interval of file to open for current process
@@ -367,9 +383,6 @@ subroutine init_refine_restart(s,ilevel,ncpu_file,levelmin_file,nlevelmax_file,n
   !----------------------------
   ! Read octs data in files
   !----------------------------
-  ! Restart filename
-  call title(r%nrestart,nchar)
-
   ! Loop over relevant files (if any)
   do icpu=ileft,iright
      if(icpu>1)then
@@ -533,6 +546,10 @@ subroutine init_refine_restart(s,ilevel,ncpu_file,levelmin_file,nlevelmax_file,n
         close(13)
      endif
   end do
+#ifdef _CUDA
+  ! Keep the domain bounds of this level
+  bound_key_target(1:nhilbert,g%myid)=m%domain(ilevel)%b(1:nhilbert,g%myid)
+#endif
   m%ifree=m%noct_used+1
 
   ! Check that the level is made of complete blocks

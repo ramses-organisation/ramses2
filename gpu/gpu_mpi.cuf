@@ -1,6 +1,6 @@
-! MPI halos for the uniform periodic GPU mesh.
+! MPI halos for the periodic GPU mesh, level by level.
 module gpu_mpi
-  use amr_parameters, only: ndim, twotondim, dp
+  use amr_parameters, only: ndim, twotondim, dp, nsubgrid
   use oct_commons, only: oct
   use ramses_commons, only: ramses_t
   use mdl_module, only: mdl_abort
@@ -10,7 +10,8 @@ module gpu_mpi
 #endif
   implicit none
   private
-  public :: gpu_halo_build, gpu_halo_update
+  public :: gpu_halo_build, gpu_halo_update, gpu_halo_flush, gpu_halo_zero, gpu_halo_refined, gpu_halo_flag
+  public :: gpu_halo_check, gpu_halo_check_blocks
 
 #ifndef WITHOUTMPI
 #if defined(NPRE) && NPRE == 4
@@ -23,8 +24,10 @@ module gpu_mpi
   integer :: ncpu = 1, levelmin = 0
   logical :: device_buffers
 
-  ! One send and receive range per rank, in rank order.
-  integer, allocatable :: peers(:), soff(:), roff(:), requests(:)
+  ! For each level, one send and receive range per rank, in rank order.
+  ! The lists of all levels follow each other, from levelmin up.
+  integer, allocatable :: npeer(:), peers(:,:), soff(:,:), roff(:,:), requests(:)
+  integer, allocatable :: hsend(:), hrecv(:)
   integer, device, allocatable :: isend(:), irecv(:)
   real(dp), device, allocatable :: sbuf(:), rbuf(:)
   real(dp), pinned, allocatable :: sbuf_h(:), rbuf_h(:)
@@ -34,6 +37,16 @@ contains
 
 #ifndef WITHOUTMPI
   include 'gpu_hash.cuf'
+
+  attributes(device) integer(kind=8) function oct_key(ckey, ilevel, ckey_max, key_off)
+    integer, intent(in) :: ckey(1:ndim), ilevel
+    integer, device :: ckey_max(*)
+    integer(kind=8), device :: key_off(*)
+    integer(kind=8) :: nx
+
+    nx = int(ckey_max(ilevel),8)
+    oct_key = key_off(ilevel) + int(ckey(1),8) + int(ckey(2),8)*nx + int(ckey(3),8)*nx*nx
+  end function oct_key
 
   ! Owner rank of each remote oct, from its Hilbert key and the cuts of the level, and its Cartesian key.
   attributes(global) subroutine owner_kernel(grid, first, n, cuts, ncuts, owner, keys)
@@ -81,29 +94,119 @@ contains
     if (o <= 0 .or. o > ngridmax) return
     if (grid(o)%lev == ilevel .and. all(grid(o)%ckey == ckey)) idx(k) = o
   end subroutine probe_kernel
+
+  ! Count the octs whose parent is not in the hash table (an owned oct, a copy or an interpolated oct).
+  attributes(global) subroutine parent_kernel(grid, hash_key, hash_val, hash_size, ckey_max, key_off, &
+       & ilevel, slots, n, norphan)
+    type(oct), device :: grid(*)
+    integer(kind=8), device :: hash_key(*), key_off(*)
+    integer, device :: hash_val(*), ckey_max(*), slots(*), norphan
+    integer, value :: hash_size, ilevel, n
+    integer :: k, old, ckey(1:ndim)
+
+    k = (blockIdx%x-1)*blockDim%x + threadIdx%x
+    if (k > n) return
+    ckey = grid(slots(k))%ckey/2
+    if (hash_get(hash_key, hash_val, hash_size, oct_key(ckey, ilevel-1, ckey_max, key_off)) > 0) return
+    old = atomicadd(norphan, 1)
+  end subroutine parent_kernel
+
+  ! Count the octs found on no rank whose block holds a copy made in this round (cache slots first on).
+  attributes(global) subroutine mixed_kernel(grid, hash_key, hash_val, hash_size, ckey_max, key_off, &
+       & ilevel, first, ncache, found, slots, n, nmixed)
+    type(oct), device :: grid(*)
+    integer(kind=8), device :: hash_key(*), key_off(*)
+    integer, device :: hash_val(*), ckey_max(*), found(*), slots(*), nmixed
+    integer, value :: hash_size, ilevel, first, ncache, n
+    integer :: k, o, m, d, old, ckey(1:ndim)
+
+    k = (blockIdx%x-1)*blockDim%x + threadIdx%x
+    if (k > n) return
+    do m = 0, nsubgrid**ndim-1
+       do d = 1, ndim
+          ckey(d) = (grid(slots(k))%ckey(d)/nsubgrid)*nsubgrid + mod(m/nsubgrid**(d-1), nsubgrid)
+       end do
+       o = hash_get(hash_key, hash_val, hash_size, oct_key(ckey, ilevel, ckey_max, key_off))
+       if (o < first .or. o >= first+ncache) cycle
+       if (found(o-first+1) /= 0) then
+          old = atomicadd(nmixed, 1)
+          return
+       endif
+    end do
+  end subroutine mixed_kernel
+
+  ! Count the octs that are not in the block of the first oct of their group of nsubgrid**ndim.
+  attributes(global) subroutine split_kernel(grid, head, n, nsplit)
+    type(oct), device :: grid(*)
+    integer, device :: nsplit
+    integer, value :: head, n
+    integer :: k, o, d, old
+    logical :: split
+
+    k = (blockIdx%x-1)*blockDim%x + threadIdx%x
+    if (k > n) return
+    o = head + ((k-1)/nsubgrid**ndim)*nsubgrid**ndim
+    split = o + nsubgrid**ndim > head + n
+    do d = 1, ndim
+       split = split .or. grid(head+k-1)%ckey(d)/nsubgrid /= grid(o)%ckey(d)/nsubgrid
+    end do
+    if (split) old = atomicadd(nsplit, 1)
+  end subroutine split_kernel
+
+  ! Store a level's list after the lists of the coarser levels.
+  subroutine store_list(h, n0, n, vals)
+    integer, allocatable, intent(inout) :: h(:)
+    integer, intent(in) :: n0, n, vals(*)
+    integer, allocatable :: tmp(:)
+
+    if (.not. allocated(h)) allocate(h(1:max(n0+n,1024)))
+    if (size(h) < n0+n) then
+       allocate(tmp(1:2*(n0+n)))
+       tmp(1:n0) = h(1:n0)
+       call move_alloc(tmp, h)
+    endif
+    h(n0+1:n0+n) = vals(1:n)
+  end subroutine store_list
 #endif
 
   ! The remote octs of the level are the cache octs made by gpu_build_level_cache. Each rank sorts
   ! them by owner and sends their keys to the owners, which look them up: this gives the octs to
-  ! receive from and to send to each rank at every gpu_halo_update.
-  subroutine gpu_halo_build(sim, ilevel, grid, hash_key, hash_val, ckey_max, key_off)
+  ! receive from and to send to each rank at every gpu_halo_update. Above levelmin an oct can exist
+  ! on no rank: the keys this rank owns are not sent, the owners answer the others, and miss returns
+  ! the cache slots of the octs found nowhere. With ghosts, these become interpolated octs, whose
+  ! parents are checked first.
+  subroutine gpu_halo_build(sim, ilevel, grid, hash_key, hash_val, ckey_max, key_off, ghosts, miss)
     type(ramses_t), intent(in) :: sim
     integer, intent(in) :: ilevel
     type(oct), device :: grid(*)
     integer(kind=8), device :: hash_key(*), key_off(*)
     integer, device :: hash_val(*), ckey_max(*)
+    logical, intent(in) :: ghosts
+    integer, allocatable, intent(out) :: miss(:)
 #ifndef WITHOUTMPI
     integer(kind=8) :: cuts(0:sim%g%ncpu)
     integer(kind=8), device, allocatable :: cuts_d(:)
-    integer, device, allocatable :: owner_d(:), keys_d(:,:), idx_d(:)
-    integer, allocatable :: owner(:), keys(:,:), keys_out(:,:), keys_in(:,:), list(:), idx(:)
-    integer :: nreq(sim%g%ncpu), nin(sim%g%ncpu), next(sim%g%ncpu)
-    integer :: first, n, nkeys, k, r, info
+    integer, device, allocatable :: owner_d(:), keys_d(:,:), idx_d(:), found_d(:), miss_d(:)
+    integer, device :: ndefect_d
+    integer, allocatable :: owner(:), keys(:,:), keys_out(:,:), keys_in(:,:), list(:), idx(:), reply(:), found(:)
+    integer, allocatable :: lsend(:), lrecv(:)
+    integer :: nreq(sim%g%ncpu), nin(sim%g%ncpu), next(sim%g%ncpu), nsend(sim%g%ncpu), nrecv(sim%g%ncpu)
+    integer :: qoff(0:sim%g%ncpu), ioff(0:sim%g%ncpu)
+    integer :: first, n, nkeys, nmiss, ndefect, ns, nr, k, r, info
+    character(len=64) :: what
 
     ncpu = sim%g%ncpu
-    levelmin = ilevel
+    levelmin = sim%r%levelmin
     device_buffers = sim%r%mpi_device_buffers
-    if (.not. allocated(soff)) allocate(soff(0:ncpu), roff(0:ncpu), requests(2*ncpu))
+    if (.not. allocated(npeer)) then
+       allocate(requests(2*ncpu), npeer(levelmin:sim%r%nlevelmax), peers(1:ncpu,levelmin:sim%r%nlevelmax))
+       allocate(soff(0:ncpu,levelmin:sim%r%nlevelmax), roff(0:ncpu,levelmin:sim%r%nlevelmax))
+       npeer = 0
+       soff = 0
+       roff = 0
+    endif
+    ! The lists of this level and the finer ones are rebuilt
+    npeer(ilevel:) = 0
     first = sim%m%ngridmax + sim%m%head_cache(ilevel)
     n = sim%m%ifree_cache - sim%m%head_cache(ilevel)
 
@@ -119,32 +222,40 @@ contains
        deallocate(cuts_d, owner_d, keys_d)
     endif
 
+    ! Keys this rank owns exist nowhere above levelmin
+    if (ilevel > levelmin) then
+       do k = 1, n
+          if (owner(k) == sim%g%myid) owner(k) = 0
+       end do
+    endif
+
     ! Sort the remote octs by owner, keeping their order in the cache
     nreq = 0
     do k = 1, n
-       nreq(owner(k)) = nreq(owner(k)) + 1
+       if (owner(k) > 0) nreq(owner(k)) = nreq(owner(k)) + 1
     end do
-    roff(0) = 0
+    qoff(0) = 0
     do r = 1, ncpu
-       roff(r) = roff(r-1) + nreq(r)
+       qoff(r) = qoff(r-1) + nreq(r)
     end do
-    next = roff(0:ncpu-1)
+    next = qoff(0:ncpu-1)
     do k = 1, n
        r = owner(k)
+       if (r == 0) cycle
        next(r) = next(r) + 1
-       list(next(r)) = first + k - 1
+       list(next(r)) = k
        keys_out(:,next(r)) = keys(:,k)
     end do
 
     call MPI_ALLTOALL(nreq, 1, MPI_INTEGER, nin, 1, MPI_INTEGER, MPI_COMM_WORLD, info)
-    soff(0) = 0
+    ioff(0) = 0
     do r = 1, ncpu
-       soff(r) = soff(r-1) + nin(r)
+       ioff(r) = ioff(r-1) + nin(r)
     end do
-    nkeys = soff(ncpu)
+    nkeys = ioff(ncpu)
     allocate(keys_in(1:ndim,1:max(nkeys,1)), idx(1:max(nkeys,1)))
-    call MPI_ALLTOALLV(keys_out, ndim*nreq, ndim*roff(0:ncpu-1), MPI_INTEGER, &
-         & keys_in, ndim*nin, ndim*soff(0:ncpu-1), MPI_INTEGER, MPI_COMM_WORLD, info)
+    call MPI_ALLTOALLV(keys_out, ndim*nreq, ndim*qoff(0:ncpu-1), MPI_INTEGER, &
+         & keys_in, ndim*nin, ndim*ioff(0:ncpu-1), MPI_INTEGER, MPI_COMM_WORLD, info)
 
     ! The owner looks up the requested octs
     if (nkeys > 0) then
@@ -155,32 +266,167 @@ contains
        call check_cuda(cudaGetLastError())
        idx(1:nkeys) = idx_d
        deallocate(keys_d, idx_d)
-       do k = 1, nkeys
-          if (idx(k) == 0) then
-             do r = 1, ncpu
-                if (k <= soff(r)) exit
-             end do
-             write(*,'(a,i0,a,3(i0,1x),a,i0)') ' gpu_halo_build: rank ', sim%g%myid, ' does not own the oct ', &
-                  & keys_in(:,k), 'requested by rank ', r
-             call mdl_abort(sim%mdl)
-          endif
-       end do
+       if (ilevel == levelmin) then
+          do k = 1, nkeys
+             if (idx(k) == 0) then
+                do r = 1, ncpu
+                   if (k <= ioff(r)) exit
+                end do
+                write(*,'(a,i0,a,3(i0,1x),a,i0)') ' gpu_halo_build: rank ', sim%g%myid, ' does not own the oct ', &
+                     & keys_in(:,k), 'requested by rank ', r
+                call mdl_abort(sim%mdl)
+             endif
+          end do
+       endif
     endif
 
+    ! Each key is answered with the owner's index, zero if it has no such oct
+    allocate(reply(1:max(qoff(ncpu),1)))
+    if (ilevel == levelmin) then
+       reply = 1
+    else
+       call MPI_ALLTOALLV(idx, nin, ioff(0:ncpu-1), MPI_INTEGER, &
+            & reply, nreq, qoff(0:ncpu-1), MPI_INTEGER, MPI_COMM_WORLD, info)
+    endif
+
+    ! The octs found on other ranks become copies; the others exist nowhere
+    allocate(found(1:max(n,1)), lrecv(1:max(n,1)))
+    found = 0
+    nr = 0
+    do r = 1, ncpu
+       nrecv(r) = 0
+       do k = qoff(r-1)+1, qoff(r)
+          if (reply(k) == 0) cycle
+          found(list(k)) = 1
+          nr = nr + 1
+          lrecv(nr) = first + list(k) - 1
+          nrecv(r) = nrecv(r) + 1
+       end do
+    end do
+    nmiss = n - nr
+    allocate(miss(1:nmiss))
+    if (nmiss > 0) miss = pack([(first+k-1, k=1,n)], found(1:n) == 0)
+
+    if (ilevel > levelmin .and. ghosts) then
+       if (nmiss > 0) then
+          allocate(miss_d(1:nmiss))
+          miss_d = miss
+       endif
+       ! Every interpolated oct reads its parent
+       ndefect = 0
+       if (nmiss > 0) then
+          ndefect_d = 0
+          call parent_kernel<<<(nmiss+127)/128,128>>>(grid, hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, &
+               & ilevel, miss_d, nmiss, ndefect_d)
+          call check_cuda(cudaGetLastError())
+          ndefect = ndefect_d
+       endif
+       write(what,'(a,i0,a)') 'interpolated octs at level ', ilevel, ' without a parent oct'
+       call gpu_halo_check(sim, ndefect, trim(what))
+
+       ! At NSUBGRID>1, stop if a block is found in part
+       if (nsubgrid > 1) then
+          ndefect = 0
+          if (nmiss > 0 .and. nr > 0) then
+             allocate(found_d(1:n))
+             found_d = found(1:n)
+             ndefect_d = 0
+             call mixed_kernel<<<(nmiss+127)/128,128>>>(grid, hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, &
+                  & ilevel, first, n, found_d, miss_d, nmiss, ndefect_d)
+             call check_cuda(cudaGetLastError())
+             ndefect = ndefect_d
+             deallocate(found_d)
+          endif
+          write(what,'(a,i0)') 'mixed block replies at level ', ilevel
+          call gpu_halo_check(sim, ndefect, trim(what))
+       endif
+       if (allocated(miss_d)) deallocate(miss_d)
+    endif
+
+    ! The owner sends the octs it found, in the order of the requests
+    allocate(lsend(1:max(nkeys,1)))
+    ns = 0
+    do r = 1, ncpu
+       nsend(r) = 0
+       do k = ioff(r-1)+1, ioff(r)
+          if (idx(k) == 0) cycle
+          ns = ns + 1
+          lsend(ns) = idx(k)
+          nsend(r) = nsend(r) + 1
+       end do
+    end do
+
+    ! The lists of this level follow those of the coarser levels
+    if (ilevel > levelmin) then
+       soff(0,ilevel) = soff(ncpu,ilevel-1)
+       roff(0,ilevel) = roff(ncpu,ilevel-1)
+    else
+       soff(0,ilevel) = 0
+       roff(0,ilevel) = 0
+    endif
+    call store_list(hsend, soff(0,ilevel), ns, lsend)
+    call store_list(hrecv, roff(0,ilevel), nr, lrecv)
+    do r = 1, ncpu
+       soff(r,ilevel) = soff(r-1,ilevel) + nsend(r)
+       roff(r,ilevel) = roff(r-1,ilevel) + nrecv(r)
+    end do
     if (allocated(isend)) deallocate(isend, irecv)
-    allocate(isend(1:max(nkeys,1)), irecv(1:max(n,1)))
-    if (nkeys > 0) isend(1:nkeys) = idx(1:nkeys)
-    if (n > 0) irecv(1:n) = list(1:n)
-    if (allocated(peers)) deallocate(peers)
-    allocate(peers(count(nreq+nin > 0)))
-    peers(:) = pack([(r, r=1,ncpu)], nreq+nin > 0)
+    allocate(isend(1:max(soff(ncpu,ilevel),1)), irecv(1:max(roff(ncpu,ilevel),1)))
+    if (soff(ncpu,ilevel) > 0) isend(1:soff(ncpu,ilevel)) = hsend(1:soff(ncpu,ilevel))
+    if (roff(ncpu,ilevel) > 0) irecv(1:roff(ncpu,ilevel)) = hrecv(1:roff(ncpu,ilevel))
+    npeer(ilevel) = count(nsend+nrecv > 0)
+    peers(1:npeer(ilevel),ilevel) = pack([(r, r=1,ncpu)], nsend+nrecv > 0)
+#else
+    allocate(miss(0))
 #endif
   end subroutine gpu_halo_build
 
+  ! Stop every rank when one of them counts a defect. The rank with the most reports it.
+  subroutine gpu_halo_check(sim, ndefect, what)
+    type(ramses_t), intent(in) :: sim
+    integer, intent(in) :: ndefect
+    character(len=*), intent(in) :: what
+#ifndef WITHOUTMPI
+    integer :: local(2), largest(2), info
+
+    if (sim%g%ncpu <= 1) return
+    local = [ndefect, sim%g%myid]
+    call MPI_ALLREDUCE(local, largest, 1, MPI_2INTEGER, MPI_MAXLOC, MPI_COMM_WORLD, info)
+    if (largest(1) == 0) return
+    if (sim%g%myid == largest(2)) write(*,'(a,i0,a,i0,1x,a)') 'gpu_mpi: rank ', sim%g%myid, ' has ', ndefect, what
+    call MPI_BARRIER(MPI_COMM_WORLD, info)
+    call mdl_abort(sim%mdl)
+#endif
+  end subroutine gpu_halo_check
+
+  ! At NSUBGRID>1, stop every rank when the octs of one level, from head on, do not form whole blocks.
+  subroutine gpu_halo_check_blocks(sim, grid, ilevel, head, n)
+    type(ramses_t), intent(in) :: sim
+    type(oct), device :: grid(*)
+    integer, intent(in) :: ilevel, head, n
+#ifndef WITHOUTMPI
+    integer, device :: nsplit_d
+    integer :: nsplit
+    character(len=64) :: what
+
+    if (sim%g%ncpu <= 1 .or. nsubgrid == 1) return
+    nsplit = 0
+    if (mod(head-1, nsubgrid**ndim) /= 0) nsplit = n
+    if (nsplit == 0 .and. n > 0) then
+       nsplit_d = 0
+       call split_kernel<<<(n+127)/128,128>>>(grid, head, n, nsplit_d)
+       call check_cuda(cudaGetLastError())
+       nsplit = nsplit_d
+    endif
+    write(what,'(a,i0)') 'octs outside a whole block at level ', ilevel
+    call gpu_halo_check(sim, nsplit, trim(what))
+#endif
+  end subroutine gpu_halo_check_blocks
+
 #ifndef WITHOUTMPI
   ! One buffer record per oct: the twotondim*nc values of the field.
-  attributes(global) subroutine gather_kernel(a, nc, idx, n, buf)
-    integer, value :: nc, n
+  attributes(global) subroutine gather_kernel(a, nc, idx, i0, n, buf)
+    integer, value :: nc, i0, n
     real(dp), device :: a(1:twotondim*nc,*), buf(*)
     integer, device :: idx(*)
     integer :: t, k, i
@@ -189,11 +435,11 @@ contains
     if (t >= n*twotondim*nc) return
     k = t/(twotondim*nc)
     i = t-k*twotondim*nc+1
-    buf(k*twotondim*nc+i) = a(i,idx(k+1))
+    buf(k*twotondim*nc+i) = a(i,idx(i0+k+1))
   end subroutine gather_kernel
 
-  attributes(global) subroutine scatter_kernel(a, nc, idx, n, buf)
-    integer, value :: nc, n
+  attributes(global) subroutine scatter_kernel(a, nc, idx, i0, n, buf)
+    integer, value :: nc, i0, n
     real(dp), device :: a(1:twotondim*nc,*), buf(*)
     integer, device :: idx(*)
     integer :: t, k, i
@@ -202,8 +448,91 @@ contains
     if (t >= n*twotondim*nc) return
     k = t/(twotondim*nc)
     i = t-k*twotondim*nc+1
-    a(i,idx(k+1)) = buf(k*twotondim*nc+i)
+    a(i,idx(i0+k+1)) = buf(k*twotondim*nc+i)
   end subroutine scatter_kernel
+
+  attributes(global) subroutine add_kernel(a, nc, idx, i0, n, buf, off)
+    integer, value :: nc, i0, n, off
+    real(dp), device :: a(1:twotondim*nc,*), buf(*)
+    integer, device :: idx(*)
+    integer :: t, k, i
+
+    t = (blockIdx%x-1)*blockDim%x + threadIdx%x-1
+    if (t >= n*twotondim*nc) return
+    k = t/(twotondim*nc)
+    i = t-k*twotondim*nc+1
+    a(i,idx(i0+k+1)) = a(i,idx(i0+k+1)) + buf(off+k*twotondim*nc+i)
+  end subroutine add_kernel
+
+  attributes(global) subroutine fill_kernel(a, nc, idx, i0, n, val)
+    integer, value :: nc, i0, n
+    real(dp), value :: val
+    real(dp), device :: a(1:twotondim*nc,*)
+    integer, device :: idx(*)
+    integer :: t, k, i
+
+    t = (blockIdx%x-1)*blockDim%x + threadIdx%x-1
+    if (t >= n*twotondim*nc) return
+    k = t/(twotondim*nc)
+    i = t-k*twotondim*nc+1
+    a(i,idx(i0+k+1)) = val
+  end subroutine fill_kernel
+
+  ! Refined cells travel as 0 or 1 in the real(dp) buffers.
+  attributes(global) subroutine gather_refined_kernel(grid, idx, i0, n, buf)
+    type(oct), device :: grid(*)
+    integer, value :: i0, n
+    integer, device :: idx(*)
+    real(dp), device :: buf(*)
+    integer :: t, k, i
+
+    t = (blockIdx%x-1)*blockDim%x + threadIdx%x-1
+    if (t >= n*twotondim) return
+    k = t/twotondim
+    i = t-k*twotondim+1
+    buf(k*twotondim+i) = merge(1.0_dp, 0.0_dp, grid(idx(i0+k+1))%refined(i))
+  end subroutine gather_refined_kernel
+
+  attributes(global) subroutine scatter_refined_kernel(grid, idx, i0, n, buf)
+    type(oct), device :: grid(*)
+    integer, value :: i0, n
+    integer, device :: idx(*)
+    real(dp), device :: buf(*)
+    integer :: t, k, i
+
+    t = (blockIdx%x-1)*blockDim%x + threadIdx%x-1
+    if (t >= n*twotondim) return
+    k = t/twotondim
+    i = t-k*twotondim+1
+    grid(idx(i0+k+1))%refined(i) = buf(k*twotondim+i) /= 0.0_dp
+  end subroutine scatter_refined_kernel
+
+  ! Integers travel in the real(dp) buffers.
+  attributes(global) subroutine gather_int_kernel(a, idx, i0, n, buf)
+    integer, value :: i0, n
+    integer, device :: a(1:twotondim,*), idx(*)
+    real(dp), device :: buf(*)
+    integer :: t, k, i
+
+    t = (blockIdx%x-1)*blockDim%x + threadIdx%x-1
+    if (t >= n*twotondim) return
+    k = t/twotondim
+    i = t-k*twotondim+1
+    buf(k*twotondim+i) = real(a(i,idx(i0+k+1)), dp)
+  end subroutine gather_int_kernel
+
+  attributes(global) subroutine scatter_int_kernel(a, idx, i0, n, buf)
+    integer, value :: i0, n
+    integer, device :: a(1:twotondim,*), idx(*)
+    real(dp), device :: buf(*)
+    integer :: t, k, i
+
+    t = (blockIdx%x-1)*blockDim%x + threadIdx%x-1
+    if (t >= n*twotondim) return
+    k = t/twotondim
+    i = t-k*twotondim+1
+    a(i,idx(i0+k+1)) = nint(buf(k*twotondim+i))
+  end subroutine scatter_int_kernel
 
   subroutine grow_buffers(n)
     integer, intent(in) :: n
@@ -219,6 +548,54 @@ contains
     if (.not. allocated(sbuf_h)) allocate(sbuf_h(1:size(sbuf)), rbuf_h(1:size(rbuf)))
   end subroutine grow_buffers
 
+  ! One message per peer of the level: the records of sbuf in the ranges so go out, those of rbuf in ri come in.
+  subroutine exchange(ilevel, so, ri, stride)
+    integer, intent(in) :: ilevel, so(0:ncpu), ri(0:ncpu), stride
+    integer :: ns, nr, off, n, nmsg, k, r, info
+
+    ns = so(ncpu)-so(0)
+    nr = ri(ncpu)-ri(0)
+    call check_cuda(cudaStreamSynchronize(default_stream))
+    if (.not. device_buffers .and. ns > 0) call check_cuda(cudaMemcpy(sbuf_h, sbuf, ns*stride))
+
+    nmsg = 0
+    do k = 1, npeer(ilevel)
+       r = peers(k,ilevel)
+       n = (ri(r)-ri(r-1))*stride
+       if (n == 0) cycle
+       off = (ri(r-1)-ri(0))*stride
+       nmsg = nmsg + 1
+       if (device_buffers) then
+          call MPI_IRECV(rbuf(off+1), n, mpi_real_dp, r-1, halo_tag, MPI_COMM_WORLD, requests(nmsg), info)
+       else
+          call MPI_IRECV(rbuf_h(off+1), n, mpi_real_dp, r-1, halo_tag, MPI_COMM_WORLD, requests(nmsg), info)
+       endif
+    end do
+    do k = 1, npeer(ilevel)
+       r = peers(k,ilevel)
+       n = (so(r)-so(r-1))*stride
+       if (n == 0) cycle
+       off = (so(r-1)-so(0))*stride
+       nmsg = nmsg + 1
+       if (device_buffers) then
+          call MPI_ISEND(sbuf(off+1), n, mpi_real_dp, r-1, halo_tag, MPI_COMM_WORLD, requests(nmsg), info)
+       else
+          call MPI_ISEND(sbuf_h(off+1), n, mpi_real_dp, r-1, halo_tag, MPI_COMM_WORLD, requests(nmsg), info)
+       endif
+    end do
+    call MPI_WAITALL(nmsg, requests, MPI_STATUSES_IGNORE, info)
+    if (.not. device_buffers .and. nr > 0) call check_cuda(cudaMemcpy(rbuf, rbuf_h, nr*stride))
+  end subroutine exchange
+
+  logical function has_halo(ilevel)
+    integer, intent(in) :: ilevel
+
+    has_halo = .false.
+    if (.not. allocated(npeer)) return
+    if (ilevel < lbound(npeer,1) .or. ilevel > ubound(npeer,1)) return
+    has_halo = npeer(ilevel) > 0
+  end function has_halo
+
   subroutine check_cuda(info)
     integer, intent(in) :: info
     integer :: ierr
@@ -230,61 +607,126 @@ contains
   end subroutine check_cuda
 #endif
 
-  ! Copy the owners' values of a field into the remote octs of the level, from device buffers or
+  ! Copy the owners' values of a field into the copies of the level, from device buffers or
   ! through pinned host buffers.
   subroutine gpu_halo_update(ilevel, a, nc)
     integer, intent(in) :: ilevel, nc
     real(dp), device :: a(*)
 #ifndef WITHOUTMPI
-    integer :: stride, ns, nr, off, n, nmsg, k, r, info
+    integer :: stride, ns, nr
 
-    if (ilevel /= levelmin .or. .not. allocated(peers)) return
-    if (size(peers) == 0) return
+    if (.not. has_halo(ilevel)) return
     stride = twotondim*nc
-    ns = soff(ncpu)
-    nr = roff(ncpu)
+    ns = soff(ncpu,ilevel)-soff(0,ilevel)
+    nr = roff(ncpu,ilevel)-roff(0,ilevel)
     call grow_buffers(max(ns,nr)*stride)
     if (ns > 0) then
-       call gather_kernel<<<(ns*stride+255)/256,256>>>(a, nc, isend, ns, sbuf)
+       call gather_kernel<<<(ns*stride+255)/256,256>>>(a, nc, isend, soff(0,ilevel), ns, sbuf)
        call check_cuda(cudaGetLastError())
     endif
-    call check_cuda(cudaStreamSynchronize(default_stream))
-    if (.not. device_buffers .and. ns > 0) call check_cuda(cudaMemcpy(sbuf_h, sbuf, ns*stride))
-
-    nmsg = 0
-    do k = 1, size(peers)
-       r = peers(k)
-       n = (roff(r)-roff(r-1))*stride
-       if (n == 0) cycle
-       off = roff(r-1)*stride
-       nmsg = nmsg + 1
-       if (device_buffers) then
-          call MPI_IRECV(rbuf(off+1), n, mpi_real_dp, r-1, halo_tag, MPI_COMM_WORLD, requests(nmsg), info)
-       else
-          call MPI_IRECV(rbuf_h(off+1), n, mpi_real_dp, r-1, halo_tag, MPI_COMM_WORLD, requests(nmsg), info)
-       endif
-    end do
-    do k = 1, size(peers)
-       r = peers(k)
-       n = (soff(r)-soff(r-1))*stride
-       if (n == 0) cycle
-       off = soff(r-1)*stride
-       nmsg = nmsg + 1
-       if (device_buffers) then
-          call MPI_ISEND(sbuf(off+1), n, mpi_real_dp, r-1, halo_tag, MPI_COMM_WORLD, requests(nmsg), info)
-       else
-          call MPI_ISEND(sbuf_h(off+1), n, mpi_real_dp, r-1, halo_tag, MPI_COMM_WORLD, requests(nmsg), info)
-       endif
-    end do
-    call MPI_WAITALL(nmsg, requests, MPI_STATUSES_IGNORE, info)
-
+    call exchange(ilevel, soff(:,ilevel), roff(:,ilevel), stride)
     if (nr > 0) then
-       if (.not. device_buffers) call check_cuda(cudaMemcpy(rbuf, rbuf_h, nr*stride))
-       call scatter_kernel<<<(nr*stride+255)/256,256>>>(a, nc, irecv, nr, rbuf)
+       call scatter_kernel<<<(nr*stride+255)/256,256>>>(a, nc, irecv, roff(0,ilevel), nr, rbuf)
        call check_cuda(cudaGetLastError())
        call check_cuda(cudaStreamSynchronize(default_stream))
     endif
 #endif
   end subroutine gpu_halo_update
+
+  ! Return the values the copies collected to their owners, which add them in rank order; the copies restart at -0.
+  subroutine gpu_halo_flush(ilevel, a, nc)
+    integer, intent(in) :: ilevel, nc
+    real(dp), device :: a(*)
+#ifndef WITHOUTMPI
+    integer :: stride, ns, nr, n, k, r
+
+    if (.not. has_halo(ilevel)) return
+    stride = twotondim*nc
+    ns = roff(ncpu,ilevel)-roff(0,ilevel)
+    nr = soff(ncpu,ilevel)-soff(0,ilevel)
+    call grow_buffers(max(ns,nr)*stride)
+    if (ns > 0) then
+       call gather_kernel<<<(ns*stride+255)/256,256>>>(a, nc, irecv, roff(0,ilevel), ns, sbuf)
+       call check_cuda(cudaGetLastError())
+       call fill_kernel<<<(ns*stride+255)/256,256>>>(a, nc, irecv, roff(0,ilevel), ns, -0.0_dp)
+       call check_cuda(cudaGetLastError())
+    endif
+    call exchange(ilevel, roff(:,ilevel), soff(:,ilevel), stride)
+    if (nr > 0) then
+       do k = 1, npeer(ilevel)
+          r = peers(k,ilevel)
+          n = soff(r,ilevel)-soff(r-1,ilevel)
+          if (n == 0) cycle
+          call add_kernel<<<(n*stride+255)/256,256>>>(a, nc, isend, soff(r-1,ilevel), n, rbuf, &
+               & (soff(r-1,ilevel)-soff(0,ilevel))*stride)
+          call check_cuda(cudaGetLastError())
+       end do
+       call check_cuda(cudaStreamSynchronize(default_stream))
+    endif
+#endif
+  end subroutine gpu_halo_flush
+
+  ! Set one field of the level's copies to -0, which adds to any value without changing it.
+  subroutine gpu_halo_zero(ilevel, a, nc)
+    integer, intent(in) :: ilevel, nc
+    real(dp), device :: a(*)
+#ifndef WITHOUTMPI
+    integer :: nr
+
+    if (.not. has_halo(ilevel)) return
+    nr = roff(ncpu,ilevel)-roff(0,ilevel)
+    if (nr == 0) return
+    call fill_kernel<<<(nr*twotondim*nc+255)/256,256>>>(a, nc, irecv, roff(0,ilevel), nr, -0.0_dp)
+    call check_cuda(cudaGetLastError())
+#endif
+  end subroutine gpu_halo_zero
+
+  ! Copy the refined cells of the level's octs from the owners to their copies.
+  subroutine gpu_halo_refined(ilevel, grid)
+    integer, intent(in) :: ilevel
+    type(oct), device :: grid(*)
+#ifndef WITHOUTMPI
+    integer :: ns, nr
+
+    if (.not. has_halo(ilevel)) return
+    ns = soff(ncpu,ilevel)-soff(0,ilevel)
+    nr = roff(ncpu,ilevel)-roff(0,ilevel)
+    call grow_buffers(max(ns,nr)*twotondim)
+    if (ns > 0) then
+       call gather_refined_kernel<<<(ns*twotondim+255)/256,256>>>(grid, isend, soff(0,ilevel), ns, sbuf)
+       call check_cuda(cudaGetLastError())
+    endif
+    call exchange(ilevel, soff(:,ilevel), roff(:,ilevel), twotondim)
+    if (nr > 0) then
+       call scatter_refined_kernel<<<(nr*twotondim+255)/256,256>>>(grid, irecv, roff(0,ilevel), nr, rbuf)
+       call check_cuda(cudaGetLastError())
+       call check_cuda(cudaStreamSynchronize(default_stream))
+    endif
+#endif
+  end subroutine gpu_halo_refined
+
+  ! Copy one integer per cell of the level's octs, such as flag1, from the owners to their copies.
+  subroutine gpu_halo_flag(ilevel, a)
+    integer, intent(in) :: ilevel
+    integer, device :: a(1:twotondim,*)
+#ifndef WITHOUTMPI
+    integer :: ns, nr
+
+    if (.not. has_halo(ilevel)) return
+    ns = soff(ncpu,ilevel)-soff(0,ilevel)
+    nr = roff(ncpu,ilevel)-roff(0,ilevel)
+    call grow_buffers(max(ns,nr)*twotondim)
+    if (ns > 0) then
+       call gather_int_kernel<<<(ns*twotondim+255)/256,256>>>(a, isend, soff(0,ilevel), ns, sbuf)
+       call check_cuda(cudaGetLastError())
+    endif
+    call exchange(ilevel, soff(:,ilevel), roff(:,ilevel), twotondim)
+    if (nr > 0) then
+       call scatter_int_kernel<<<(nr*twotondim+255)/256,256>>>(a, irecv, roff(0,ilevel), nr, rbuf)
+       call check_cuda(cudaGetLastError())
+       call check_cuda(cudaStreamSynchronize(default_stream))
+    endif
+#endif
+  end subroutine gpu_halo_flag
 
 end module gpu_mpi

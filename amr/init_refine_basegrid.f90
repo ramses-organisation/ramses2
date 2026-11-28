@@ -439,4 +439,83 @@ end subroutine check_subgrid
 !################################################################
 !################################################################
 !################################################################
+function noct_below(dirname,ilevel,ncpu_file,levelmin_file,nlevelmax_file,noct_file,nskip_file,key)
+  use amr_parameters, only: ndim, nhilbert
+  use hilbert
+  implicit none
+  character(LEN=*)::dirname
+  integer::ilevel,ncpu_file,levelmin_file,nlevelmax_file
+  integer,dimension(1:ncpu_file)::noct_file
+  integer(kind=8),dimension(1:ncpu_file)::nskip_file
+  integer(kind=8),dimension(1:nhilbert)::key
+  integer(kind=8)::noct_below
+  !--------------------------------------------------------------
+  ! Count the octs of this level in the AMR files, taken in file
+  ! order, whose Hilbert key is lower than key: find by bisection
+  ! the first file whose last oct has a key not lower than key,
+  ! then count by bisection inside that file.
+  !--------------------------------------------------------------
+  integer::icpu,nfile,ilo,ihi,imid
+  integer,dimension(1:ncpu_file)::ifile
+  integer(kind=8)::ipos
+  integer,dimension(1:ndim)::ckey
+  integer(kind=8),dimension(1:ndim)::ix
+  character(LEN=5)::ncharcpu
+
+  ! Files with octs at this level
+  nfile=0
+  do icpu=1,ncpu_file
+     if(noct_file(icpu)>0)then
+        nfile=nfile+1
+        ifile(nfile)=icpu
+     endif
+  end do
+
+  ! First of these files whose last oct has a key not lower than key
+  ilo=1
+  ihi=nfile+1
+  do while(ilo<ihi)
+     imid=(ilo+ihi)/2
+     icpu=ifile(imid)
+     call title(icpu,ncharcpu)
+     open(unit=10,file=TRIM(dirname)//'/amr.'//TRIM(ncharcpu),access="stream",action="read",form='unformatted')
+     ipos=13+4*(nlevelmax_file-levelmin_file+1)+(4*ndim+4)*(nskip_file(icpu)+noct_file(icpu)-1)
+     read(10,POS=ipos)ckey
+     close(10)
+     ix(1:ndim)=ckey(1:ndim)
+     if(gt_keys(key,hilbert_key(ix,ilevel-1)))then
+        ilo=imid+1
+     else
+        ihi=imid
+     endif
+  end do
+
+  ! Every oct has a lower key, or count the octs of that file below key
+  noct_below=sum(int(noct_file,kind=8))
+  if(ilo<=nfile)then
+     icpu=ifile(ilo)
+     call title(icpu,ncharcpu)
+     open(unit=10,file=TRIM(dirname)//'/amr.'//TRIM(ncharcpu),access="stream",action="read",form='unformatted')
+     ilo=0
+     ihi=noct_file(icpu)-1
+     do while(ilo<ihi)
+        imid=(ilo+ihi)/2
+        ipos=13+4*(nlevelmax_file-levelmin_file+1)+(4*ndim+4)*(nskip_file(icpu)+imid)
+        read(10,POS=ipos)ckey
+        ix(1:ndim)=ckey(1:ndim)
+        if(gt_keys(key,hilbert_key(ix,ilevel-1)))then
+           ilo=imid+1
+        else
+           ihi=imid
+        endif
+     end do
+     close(10)
+     noct_below=sum(int(noct_file(1:icpu-1),kind=8))+ilo
+  endif
+
+end function noct_below
+!################################################################
+!################################################################
+!################################################################
+!################################################################
 end module init_refine_basegrid_module

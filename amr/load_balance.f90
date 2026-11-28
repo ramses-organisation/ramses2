@@ -27,6 +27,10 @@ subroutine m_load_balance(pst,ilevel)
 
   if(g%ncpu==1)return
   if(ilevel==r%nlevelmax)return
+#ifdef _CUDA
+  ! On GPU, every oct stays on the rank of its levelmin ancestor
+  return
+#endif
 
   if(r%verbose)write(*,111)ilevel
 111 format(' Load balancing for all levels greater than ',I2)

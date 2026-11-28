@@ -210,8 +210,8 @@ contains
        end if
        ind = 1 + (i + in) + nsubgridp2 * (j + jn)  + nsubgridp2sq * (k + kn)
        source_idx = nbor(ind, subgrid_idx)
-       ! Cache (ghost) octs are never flagged
-       if (source_idx > 0 .and. source_idx <= ngridmax) then
+       ! Interpolated octs are never flagged
+       if (source_idx > 0 .and. .not. is_interpolated(source_idx, ngridmax)) then
           number_nbors = number_nbors + flag1(icell, source_idx)
        end if
     end do
@@ -340,14 +340,14 @@ contains
     gj = (group_idx - gk * ngroup**2) / ngroup
     gi = group_idx - gj * ngroup - gk * ngroup**2
 
-    ! Check if one neighboring grid of one oct of the group is missing or in the cache
+    ! Check if one neighboring grid of one oct of the group is missing or interpolated
     ok = .false.
     do k = gk * gsize, gk * gsize + gsize + 1
        do j = gj * gsize, gj * gsize + gsize + 1
           do i = gi * gsize, gi * gsize + gsize + 1
              ind = 1 + i + nsubgridp2 * j  + nsubgridp2sq * k
              ok = ok .or. (nbor(ind, subgrid_idx) == 0)
-             ok = ok .or. (nbor(ind, subgrid_idx) > ngridmax)
+             ok = ok .or. is_interpolated(nbor(ind, subgrid_idx), ngridmax)
           end do
        end do
     end do

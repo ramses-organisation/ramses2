@@ -151,7 +151,7 @@ recursive subroutine r_set_grid_device(pst)
      call nvtxEndRange()
 
      call nvtxStartRange("Compute nbor array", color=5)!red
-     call gpu_build_level_cache(pst%s, pst%s%r%levelmin)
+     call gpu_build_level_cache(pst%s, pst%s%r%levelmin, .true.)
      call GPU_Error_Check(__FILE__, __LINE__)
      call nvtxEndRange()
 

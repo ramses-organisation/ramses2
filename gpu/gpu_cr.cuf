@@ -427,7 +427,7 @@ contains
        src = nbor(1 + (i+io) + nsubgridp2 * (j+jo) + nsubgridp2sq * (k+ko), subgrid_idx)
        ! A ghost oct stands for a missing oct: its cells are not refined at this level
        okloc(ci,cj,ck) = .false.
-       if (src <= ngridmax) okloc(ci,cj,ck) = grid(src)%refined(cell)
+       if (.not. is_interpolated(src, ngridmax)) okloc(ci,cj,ck) = grid(src)%refined(cell)
        ! Cell-centred field, and its direction for the diffusion along each axis
        norm = 0.0_dp
        do q = 1, 3
@@ -554,7 +554,7 @@ contains
        if (gdim == 2) jo = -gside
        if (gdim == 3) ko = -gside
        ghost = nbor(1 + (i+io) + nsubgridp2 * (j+jo) + nsubgridp2sq * (k+ko), subgrid_idx)
-       if (ghost > ngridmax) then
+       if (is_interpolated(ghost, ngridmax)) then
           ! The oct lies on the upper side of a ghost oct across its lower face, and conversely
           fghost = 2*gdim - 1
           if (gside == 1) fghost = 2*gdim

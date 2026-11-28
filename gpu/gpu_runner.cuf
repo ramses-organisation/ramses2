@@ -447,6 +447,7 @@ contains
   subroutine gpu_set_uold(sim, ilevel)
     use nvtx
     use hydro_device, only: set_uold_kernel
+    use gpu_mpi, only: gpu_halo_flush
     use ramses_commons, only: ramses_t
     type(ramses_t), intent(inout)::sim
     integer, intent(in)::ilevel
@@ -459,6 +460,10 @@ contains
     threadsX_per_block = 8
     threadsY_per_block = 16
     num_blocks = (num_octs + threadsY_per_block - 1) / threadsY_per_block
+#ifdef HYDRO
+    ! The coarse corrections this level put into copies go to their owners
+    if (sim%g%ncpu > 1 .and. ilevel > sim%r%levelmin) call gpu_halo_flush(ilevel-1, unew, nvar)
+#endif
     if (num_octs == 0) return
     call nvtxStartRange("GPU Set_uold", color=0)!green
     call set_uold_kernel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(uold, unew, bold, bnew, head_idx, num_octs)
@@ -489,6 +494,8 @@ contains
     threadsX_per_block = 8
     threadsY_per_block = 16
     num_blocks = (num_octs + threadsY_per_block - 1) / threadsY_per_block
+    ! Copies take their owners' values for the level step
+    call gpu_update_copies(sim, ilevel)
     if (num_octs == 0) return
     call nvtxStartRange("GPU Set_unew", color=0)!green
     call set_unew_kernel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(uold, unew, bold, bnew, head_idx, num_octs)
@@ -496,6 +503,23 @@ contains
     call nvtxEndRange()
 
   end subroutine gpu_set_unew
+
+  !> @brief
+  !> On several ranks, the copies of other ranks' octs at one level take their owners' values.
+  subroutine gpu_update_copies(sim, ilevel)
+    use gpu_mpi, only: gpu_halo_update
+    use ramses_commons, only: ramses_t
+    type(ramses_t), intent(in) :: sim
+    integer, intent(in) :: ilevel
+
+    if (sim%g%ncpu <= 1) return
+#ifdef HYDRO
+    call gpu_halo_update(ilevel, uold, nvar)
+#ifdef MHD
+    call gpu_halo_update(ilevel, bold, 6)
+#endif
+#endif
+  end subroutine gpu_update_copies
 
   !> @brief
   !> Synchronization (corrector) step of old hydro variables (uold) due to gravity
@@ -1291,10 +1315,9 @@ contains
   end subroutine cache_oct_range
 
   !> @brief
-  !> Refresh remote copies from their owners and interpolated octs from their parents.
+  !> Refresh interpolated octs from their parents. Copies of other ranks' octs are updated in gpu_set_unew.
   subroutine gpu_refresh_cache(sim, ilevel)
     use nvtx
-    use gpu_mpi, only: gpu_halo_update
     use refine_device, only: refresh_cache_octs_kernel
     use ramses_commons, only: ramses_t
     type(ramses_t), intent(inout) :: sim
@@ -1303,15 +1326,8 @@ contains
     integer(kind=4) :: head_idx, num_octs
     integer :: num_threads, num_blocks
 
-    if (sim%g%ncpu > 1 .and. ilevel == sim%r%levelmin) then
-#ifdef HYDRO
-       call gpu_halo_update(ilevel, uold, nvar)
-#ifdef MHD
-       call gpu_halo_update(ilevel, bold, 6)
-#endif
-#endif
-       return
-    endif
+    ! On several ranks the levelmin cache holds copies only
+    if (sim%g%ncpu > 1 .and. ilevel == sim%r%levelmin) return
 
     call cache_oct_range(sim, ilevel, head_idx, num_octs, num_threads, num_blocks)
     if (num_octs <= 0) return
@@ -2900,6 +2916,7 @@ contains
     use cub_inclusive_scan_mod
     use cub_module, only: radix_sort
     use iso_fortran_env
+    use gpu_mpi, only: gpu_halo_check, gpu_halo_check_blocks, gpu_halo_refined
 #ifdef DO_RT
     use rt_parameters, only: nrtvar
 #endif
@@ -2935,7 +2952,7 @@ contains
     smallr_d      = sim%r%smallr
 
     ! Wipe clean cache memory for all higher levels
-    head_cache = sim%m%head_cache(ilevel+1)
+    head_cache = sim%m%tail_cache(ilevel) + 1
     head_idx = head_cache + sim%r%ngridmax
     num_octs = sim%m%ifree_cache - head_cache
     num_threads = 128
@@ -2960,12 +2977,20 @@ contains
     d_rt_c = sim%g%rt_c
 #endif
     nskip = max(nsubgrid/2,1)**ndim
+    ! On several ranks, the copies of level ilevel take their owners' values for the parent stencils
+    if (interpol_type > 0) call gpu_update_copies(sim, ilevel)
     do ilev = ilevel, sim%r%nlevelmax - 1
 
        ! Finer level flags may rely on coarser buffer cells cancelled by
        ! ensure_ref_rules (adaptive time steps): check them now that the
        ! octs of level ilev created in this pass exist
        if (ilev > ilevel) then
+          ! On several ranks, copies of the octs other ranks own next to the octs of this level,
+          ! with their values for the parent stencils
+          if (sim%g%ncpu > 1) then
+             call gpu_build_level_cache(sim, ilev, .false.)
+             if (interpol_type > 0) call gpu_update_copies(sim, ilev)
+          endif
           head_idx = sim%m%head(ilev)
           num_octs = sim%m%noct(ilev) / nskip
           num_threads = 128
@@ -2993,21 +3018,36 @@ contains
 #endif
                & interpol_var, interpol_type, smallr_d)
           call GPU_Error_Check(__FILE__, __LINE__)
-
-          ! Insert the octs just created in the hash table, unless main memory is full
-          new_ifree = ifree_d
-          if (new_ifree - 1 > sim%r%ngridmax) exit
-          num_octs = new_ifree - ins_head
-          num_threads = 128
-          num_blocks = (num_octs + num_threads - 1) / num_threads
-          if (num_octs > 0) then
-             call insert_hash_kernel<<<num_blocks, num_threads>>>(grid, hash_key, hash_val, sim%m%hash_size, &
-                  & ckey_max, key_off, ins_head, num_octs)
-             call GPU_Error_Check(__FILE__, __LINE__)
-          end if
-          ins_head = new_ifree
        endif
+
+       ! On several ranks, every rank stops if one of them runs out of main memory
+       new_ifree = ifree_d
+       if (sim%g%ncpu > 1) call gpu_halo_check(sim, max(new_ifree-1-sim%r%ngridmax, 0), &
+            & 'new octs beyond ngridmax. Increase ngridmax')
+
+       ! Insert the octs just created in the hash table, unless main memory is full
+       if (new_ifree - 1 > sim%r%ngridmax) exit
+       num_octs = new_ifree - ins_head
+       num_threads = 128
+       num_blocks = (num_octs + num_threads - 1) / num_threads
+       if (num_octs > 0) then
+          call insert_hash_kernel<<<num_blocks, num_threads>>>(grid, hash_key, hash_val, sim%m%hash_size, &
+               & ckey_max, key_off, ins_head, num_octs)
+          call GPU_Error_Check(__FILE__, __LINE__)
+       end if
+       ins_head = new_ifree
     end do
+
+    ! The copies made for the finer levels leave the cache
+    num_octs = sim%m%ifree_cache - head_cache
+    num_threads = 128
+    num_blocks = (num_octs + num_threads - 1) / num_threads
+    if (num_octs > 0) then
+       call free_hash_kernel<<<num_blocks, num_threads>>>(grid, hash_key, hash_val, sim%m%hash_size, &
+            & ckey_max, key_off, head_cache + sim%r%ngridmax, num_octs)
+       call GPU_Error_Check(__FILE__, __LINE__)
+    endif
+    sim%m%ifree_cache = head_cache
 
     ! Copy back to host new free memory pointer ifree
     sim%m%ifree = ifree_d
@@ -3122,6 +3162,9 @@ contains
     ! New pointer to free memory
     sim%m%ifree = new_head
     nkill = new_ifree - sim%m%ifree
+
+    ! On several ranks, a static mesh keeps the octs the host made
+    if (sim%g%ncpu > 1 .and. sim%r%static_mesh) call gpu_halo_check(sim, nmake+nkill, 'octs made or removed in a static mesh')
 
     ! Sort Hilbert key within each level using LSD radix sort.
     do ilev = ilevel + 1, sim%r%nlevelmax
@@ -3303,8 +3346,17 @@ contains
 
     endif
 
+    if (sim%g%ncpu > 1) then
+       ! The copies of level ilevel take the refined cells of their owners
+       call gpu_halo_refined(ilevel, grid)
+       ! The finer levels must consist of whole blocks
+       do ilev = ilevel + 1, sim%r%nlevelmax
+          call gpu_halo_check_blocks(sim, grid, ilev, sim%m%head(ilev), sim%m%noct(ilev))
+       end do
+    endif
+
     do ilev = ilevel + 1, sim%r%nlevelmax
-       call gpu_build_level_cache(sim, ilev)
+       call gpu_build_level_cache(sim, ilev, .true.)
     end do
 
     if (ilevel == sim%r%levelmin) call gpu_reset_hash(sim)
@@ -3312,20 +3364,24 @@ contains
   end subroutine gpu_refine
 
   !> Startup and gpu_refine share this per-level neighbour search and cache construction.
-  subroutine gpu_build_level_cache(sim, ilevel)
+  !> With ghosts=.false. (the refinement on several ranks), the octs found on no rank leave the hash table.
+  subroutine gpu_build_level_cache(sim, ilevel, ghosts)
     use nvtx
     use refine_device
-    use gpu_mpi, only: gpu_halo_build
+    use gpu_mpi, only: gpu_halo_build, gpu_halo_refined, gpu_halo_zero
     use mdl_module, only: mdl_abort
     use ramses_commons, only: ramses_t
     use cub_inclusive_scan_mod
     use iso_c_binding, only: c_loc
     type(ramses_t), intent(inout) :: sim
     integer, intent(in) :: ilevel
-    integer :: ind, head_idx, num_subgrids, num_blocks, num_threads, head
+    logical, intent(in) :: ghosts
+    integer :: ind, head_idx, num_subgrids, num_blocks, num_threads, head, nmiss
     integer :: interpol_var, interpol_type, cache_overflow
     integer(kind=4), device :: ifree_cache_d, cache_overflow_d, new_noct_d
     integer(kind=1) :: source
+    integer, allocatable :: miss(:)
+    integer, device, allocatable :: miss_d(:)
     real(dp) :: smallr_d
     character(len=64) :: descr
 
@@ -3337,11 +3393,12 @@ contains
     num_blocks = (num_subgrids + num_threads - 1) / num_threads
 
     ! A neighbour missing at levelmin is an oct of another rank; above, it is interpolated from its parent.
+    ! On several ranks every neighbour missing above levelmin is first made as an oct of another rank.
     ! With source = 0 the level has no cache octs.
     source = 0
-    if (ilevel == sim%r%levelmin) then
-       if (sim%g%ncpu > 1) source = cache_remote
-    else if (sim%r%ncachemax > 0) then
+    if (sim%g%ncpu > 1) then
+       source = cache_remote
+    else if (ilevel > sim%r%levelmin .and. sim%r%ncachemax > 0) then
        source = cache_interpolated
     endif
 
@@ -3426,7 +3483,35 @@ contains
     endif
 
     ! Every rank takes part, also one without octs
-    if (source == cache_remote) call gpu_halo_build(sim, ilevel, grid, hash_key, hash_val, ckey_max, key_off)
+    if (source == cache_remote) then
+       call gpu_halo_build(sim, ilevel, grid, hash_key, hash_val, ckey_max, key_off, ghosts, miss)
+       nmiss = size(miss)
+       if (nmiss > 0) then
+          allocate(miss_d(1:nmiss))
+          miss_d = miss
+          num_blocks = (nmiss + num_threads - 1) / num_threads
+          if (ghosts) then
+             ! The octs found on no rank are interpolated from their parents
+             call make_ghost_octs<<<num_blocks, num_threads>>>(grid, flag1, uold, bold, f, phi, phi_old, father, &
+                  & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
+                  & miss_d, nmiss, sim%r%interpol_var, sim%r%interpol_type, real(sim%r%smallr, kind=dp))
+          else
+             ! The octs found on no rank are missing, as on one rank
+             call free_hash_slots<<<num_blocks, num_threads>>>(grid, hash_key, hash_val, sim%m%hash_size, &
+                  & ckey_max, key_off, miss_d, nmiss)
+          endif
+          call GPU_Error_Check(__FILE__, __LINE__)
+          deallocate(miss_d)
+       endif
+       if (ghosts) then
+          ! Copies take their owners' refined cells and values, and collect coarse corrections from -0
+          call gpu_halo_refined(ilevel, grid)
+          call gpu_update_copies(sim, ilevel)
+#ifdef HYDRO
+          call gpu_halo_zero(ilevel, unew, nvar)
+#endif
+       endif
+    endif
 
     sim%m%tail_cache(ilevel) = sim%m%ifree_cache - 1
     sim%m%noct_cache(ilevel) = sim%m%ifree_cache - head
@@ -3617,6 +3702,9 @@ contains
     threadsY_per_block = 16
     num_blocks = (num_octs + threadsY_per_block - 1) / threadsY_per_block
 
+    ! Copies take their owners' current values
+    call gpu_update_copies(sim, ilevel)
+
     ! Refinement rules for the gravity solver
     if(sim%r%poisson .and. num_octs > 0)then
        call nvtxStartRange("GPU user_flag", color=2)!yellow
@@ -3732,6 +3820,7 @@ contains
   subroutine gpu_smooth_flag(sim, ilevel, nflag)
     use nvtx
     use flag_device, only: count_neighbors, flag_count_kernel, count_flag1_kernel
+    use gpu_mpi, only: gpu_halo_flag
     use ramses_commons, only: ramses_t
     type(ramses_t), intent(inout)::sim
     integer, intent(in) :: ilevel
@@ -3748,8 +3837,10 @@ contains
     threadsY_per_block = 16
     num_blocks = (num_octs + threadsY_per_block - 1) / threadsY_per_block
 
-    if(num_octs > 0)then
-       do idim = 1, ndim ! Loop over steps
+    do idim = 1, ndim ! Loop over steps
+       ! On several ranks, copies take their owners' flag1 at each step
+       if (sim%g%ncpu > 1) call gpu_halo_flag(ilevel, flag1)
+       if(num_octs > 0)then
           call nvtxStartRange("GPU smooth_flag", color=2)!yellow
           call count_neighbors<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(flag2, flag1, nbor, &
                & head_idx, num_octs, sim%m%ngridmax)
@@ -3758,8 +3849,8 @@ contains
                & head_idx, num_octs, n_nbor(idim))
           call GPU_Error_Check(__FILE__, __LINE__)
           call nvtxEndRange()
-       end do
-    endif
+       endif
+    end do
 
     nflag_d = 0
 
